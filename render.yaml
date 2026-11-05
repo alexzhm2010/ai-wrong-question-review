@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: ai-wrong-question-review
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: singapore
+    numInstances: 1
+    autoDeploy: true
+    healthCheckPath: /api/version
+    envVars:
+      # Supabase 连接串（Render 控制台手动填写，sync: false 表示不写入仓库）
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      # 会话密钥，首次部署时由 Render 自动生成
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: AUTH_TRUST_HOST
+        value: "true"
+      # AI：通义千问 VL（OpenAI 兼容协议）
+      - key: AI_PROVIDER
+        value: "openai"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_BASE_URL
+        value: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      - key: OPENAI_MODEL
+        value: "qwen3-vl-plus"

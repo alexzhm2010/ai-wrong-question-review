@@ -84,7 +84,18 @@
 >
 > **注意**：Vercel Hobby 计划的函数最长执行 60 秒，复杂题目的 AI 识别可能超时。如需更长耗时，请升级 Vercel Pro（300 秒）或改用下方 Docker 部署。
 
-### 方式二：使用 Docker 部署
+### 方式二：Render 部署（无需手机号）
+
+仓库已内置 [`render.yaml`](render.yaml)，在 Render 上用 GitHub 账号登录后：
+
+1. 打开 https://dashboard.render.com/blueprints → **New Blueprint Instance**
+2. 选择本仓库，Render 会自动读取 `render.yaml` 创建 Web Service
+3. 在环境变量页填写 `DATABASE_URL`、`DIRECT_URL`、`OPENAI_API_KEY`，点击 **Apply**
+4. 首次部署会自动执行 `prisma migrate deploy` 创建数据表
+
+> 免费实例闲置 15 分钟后会休眠，首次访问需等待约 30–60 秒冷启动；需要常驻可升级到 Starter（$7/月）。
+
+### 方式三：使用 Docker 部署
 
 #### 1. 启动服务
 
@@ -127,7 +138,7 @@ docker run -d --name ai-wrong-review \
     docker-compose down
     ```
 
-### 方式三：本地源码运行
+### 方式四：本地源码运行
 
 #### 1. 克隆仓库
 
