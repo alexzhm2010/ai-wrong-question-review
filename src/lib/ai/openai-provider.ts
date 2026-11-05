@@ -162,7 +162,7 @@ export class OpenAIProvider implements AIService {
     }
 
     async analyzeImage(imageBase64: string, mimeType: string = "image/jpeg", language: 'zh' | 'en' = 'zh', grade?: 7 | 8 | 9 | 10 | 11 | 12 | null, subject?: string | null, gradeSemester?: string | null): Promise<ParsedQuestion> {
-        const config = getAppConfig();
+        const config = await getAppConfig();
 
         // 从数据库获取各学科标签
         // 如果指定了学科，只获取该学科；否则获取所有学科标签供 AI 判断
@@ -312,7 +312,7 @@ export class OpenAIProvider implements AIService {
     }
 
     async generateSimilarQuestion(originalQuestion: string, knowledgePoints: string[], language: 'zh' | 'en' = 'zh', difficulty: DifficultyLevel = 'medium', gradeSemester?: string | null): Promise<ParsedQuestion> {
-        const config = getAppConfig();
+        const config = await getAppConfig();
         const systemPrompt = generateSimilarQuestionPrompt(language, originalQuestion, knowledgePoints, difficulty, {
             customTemplate: config.prompts?.similar
         }, gradeSemester);

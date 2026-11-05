@@ -10,13 +10,13 @@ import { createLogger } from "../logger";
 
 const logger = createLogger('ai');
 
-export function getAIService(): AIService {
+export async function getAIService(): Promise<AIService> {
     // Always get fresh config
-    const config = getAppConfig();
+    const config = await getAppConfig();
     const provider = config.aiProvider;
 
     if (provider === "openai") {
-        const activeConfig = getActiveOpenAIConfig();
+        const activeConfig = await getActiveOpenAIConfig();
         logger.info({ activeInstance: activeConfig?.name }, 'Using OpenAI Provider');
         return new OpenAIProvider(activeConfig);
     } else if (provider === "azure") {

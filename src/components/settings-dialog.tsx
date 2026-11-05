@@ -30,6 +30,7 @@ import { frontendLogger } from "@/lib/frontend-logger";
 import { AppConfig, UserProfile, UpdateUserProfileRequest, OpenAIInstance } from "@/types/api";
 import { ModelSelector } from "@/components/ui/model-selector";
 import { PromptSettings } from "@/components/settings/prompt-settings";
+import { PROVIDER_PRESETS, findPresetByBaseUrl } from "@/lib/ai/presets";
 
 import { MessageSquareText, Info, ExternalLink, Github, ScrollText } from "lucide-react";
 const MAX_OPENAI_INSTANCES = 10;
@@ -511,6 +512,18 @@ export function SettingsDialog() {
         }));
     };
 
+    // 应用供应商预设（自动填充 Base URL 与模型）
+    const applyProviderPreset = (presetId: string) => {
+        const preset = PROVIDER_PRESETS.find(p => p.id === presetId);
+        if (!preset) return;
+        updateOpenAIInstance('baseUrl', preset.baseUrl);
+        updateOpenAIInstance('model', preset.model);
+        const current = getSelectedInstance();
+        if (!current?.name || /^Instance \d+$/.test(current.name)) {
+            updateOpenAIInstance('name', preset.label);
+        }
+    };
+
     // 添加新的 OpenAI 实例
     const addOpenAIInstance = () => {
         const instances = config.openai?.instances || [];
@@ -988,6 +1001,29 @@ export function SettingsDialog() {
                                         {/* 实例配置表单 */}
                                         {getSelectedInstance() && (
                                             <div className="space-y-3 p-3 border rounded-md bg-background">
+                                                <div className="space-y-2">
+                                                    <Label>快速选择供应商预设</Label>
+                                                    <Select
+                                                        value={findPresetByBaseUrl(getSelectedInstance()?.baseUrl)?.id || ''}
+                                                        onValueChange={applyProviderPreset}
+                                                    >
+                                                        <SelectTrigger>
+                                                            <SelectValue placeholder="选择预设自动填充 Base URL 与模型" />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            {PROVIDER_PRESETS.map((preset) => (
+                                                                <SelectItem key={preset.id} value={preset.id}>
+                                                                    {preset.label}{preset.vision ? '' : '（不支持图片）'}
+                                                                </SelectItem>
+                                                            ))}
+                                                        </SelectContent>
+                                                    </Select>
+                                                    {findPresetByBaseUrl(getSelectedInstance()?.baseUrl)?.note && (
+                                                        <p className="text-xs text-muted-foreground">
+                                                            {findPresetByBaseUrl(getSelectedInstance()?.baseUrl)?.note}
+                                                        </p>
+                                                    )}
+                                                </div>
                                                 <div className="space-y-2">
                                                     <Label>{t.settings?.ai?.instanceName || "Instance Name"} <span className="text-destructive">*</span></Label>
                                                     <Input

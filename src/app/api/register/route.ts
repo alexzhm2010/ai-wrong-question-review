@@ -16,7 +16,7 @@ const userSchema = z.object({
 export async function POST(req: Request) {
     try {
         // 检查是否允许注册
-        const config = getAppConfig();
+        const config = await getAppConfig();
         if (config.allowRegistration === false) {
             return NextResponse.json(
                 { user: null, message: "Registration is currently disabled" },
@@ -25,7 +25,9 @@ export async function POST(req: Request) {
         }
 
         const body = await req.json()
-        const { email, password, name, educationStage, enrollmentYear } = userSchema.parse(body)
+        const { email: rawEmail, password, name, educationStage, enrollmentYear } = userSchema.parse(body)
+        // PostgreSQL 的 email 唯一索引区分大小写，统一转小写避免重复账号
+        const email = rawEmail.trim().toLowerCase()
 
         const existingUser = await prisma.user.findUnique({
             where: { email }

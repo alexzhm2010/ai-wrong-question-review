@@ -10,6 +10,9 @@ import { createLogger } from "@/lib/logger";
 
 const logger = createLogger('api:analyze');
 
+// Vercel 函数最大执行时长（Hobby 上限 60s；Docker 部署不受此限制）
+export const maxDuration = 60;
+
 export async function POST(req: Request) {
     logger.info('Analyze API called');
 
@@ -102,7 +105,7 @@ export async function POST(req: Request) {
         const subjectChinese = subjectName ? subjectNameMapping[subjectName] : null;
 
         logger.info({ userGrade, userGradeSemester, subject: subjectChinese }, 'Calling AI service for image analysis');
-        const aiService = getAIService();
+        const aiService = await getAIService();
         const analysisResult = await aiService.analyzeImage(imageBase64, mimeType, language, userGrade, subjectChinese, userGradeSemester);
 
         logger.debug({

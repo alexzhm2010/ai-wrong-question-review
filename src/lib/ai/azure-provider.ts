@@ -147,7 +147,7 @@ export class AzureOpenAIProvider implements AIService {
         subject?: string | null,
         gradeSemester?: string | null
     ): Promise<ParsedQuestion> {
-        const config = getAppConfig();
+        const config = await getAppConfig();
 
         // 从数据库获取各学科标签（参考 openai-provider.ts）
         // 如果指定了学科，只获取该学科；否则获取所有学科标签供 AI 判断
@@ -237,7 +237,7 @@ export class AzureOpenAIProvider implements AIService {
         difficulty: DifficultyLevel = 'medium',
         gradeSemester?: string | null
     ): Promise<ParsedQuestion> {
-        const config = getAppConfig();
+        const config = await getAppConfig();
         const systemPrompt = generateSimilarQuestionPrompt(language, originalQuestion, knowledgePoints, difficulty, {
             customTemplate: config.prompts?.similar
         }, gradeSemester);

@@ -7,7 +7,8 @@
 ## ✨ 主要功能
 
 - **🤖 AI 智能分析**：自动识别题目内容，生成解析、知识点标签和同类练习题。
-- **⚙️ 灵活的 AI 配置**：支持 **Google Gemini** 和 **OpenAI** (及兼容接口) 两种 AI 提供商，可直接在网页设置中动态切换和配置。
+- **⚙️ 灵活的 AI 配置**：支持 **OpenAI 兼容接口**（通义千问 VL、智谱 GLM-4V、豆包、硅基流动、Kimi、OpenAI 等，可在设置页一键选择预设）、**Google Gemini** 和 **Azure OpenAI**，可直接在网页设置中动态切换和配置。
+- **📱 跨平台使用**：响应式界面 + PWA，手机、平板、PC 浏览器均可使用，可添加到主屏幕。
 - **📚 多错题本管理**：支持按科目（如数学、物理、英语）创建和管理多个错题本。
 - **🏷️ 智能标签系统**：自动提取知识点标签，支持自定义标签管理。
 - **🔍 多维度筛选**：支持按掌握状态、时间范围、知识点标签、年级学期、试卷等级等多种条件筛选错题。
@@ -40,14 +41,50 @@
 
 - **框架**: [Next.js 16](https://nextjs.org/) (App Router)
 - **UI 库**: [React 19](https://react.dev/)
-- **数据库**: [SQLite](https://www.sqlite.org/) (via [Prisma](https://www.prisma.io/))
+- **数据库**: [Supabase](https://supabase.com/) / PostgreSQL (via [Prisma](https://www.prisma.io/))
 - **样式**: [Tailwind CSS v4](https://tailwindcss.com/) + [Shadcn UI](https://ui.shadcn.com/)
-- **AI**: Google Gemini API / OpenAI API / Azure OpenAI
+- **AI**: 通义千问 VL / 智谱 GLM-4V / 豆包 / 硅基流动 / Kimi / OpenAI / Google Gemini / Azure OpenAI
+- **部署**: Vercel（推荐）或 Docker
 - **认证**: [NextAuth.js](https://next-auth.js.org/)
 
 ## 🚀 快速开始
 
-### 方式一：使用 Docker 部署
+### 方式一：Vercel + Supabase 部署（推荐）
+
+应用需要 Node 服务端运行环境，**无法托管在 GitHub Pages**（GitHub Pages 仅支持静态文件）。GitHub Pages 仅用于展示 [docs/index.html](docs/index.html) 介绍页。
+
+1. **创建 Supabase 项目**，在 Project Settings → Database 复制两个连接串：
+   - `DATABASE_URL`：连接池地址（端口 **6543**），追加 `?pgbouncer=true&connection_limit=1`
+   - `DIRECT_URL`：直连地址（端口 **5432**），仅用于数据库迁移
+
+2. **在 Vercel 导入本仓库**（或点击 [一键部署](https://vercel.com/new/clone?repository-url=https://github.com/alexzhm2010/ai-wrong-question-review)）
+
+3. **配置环境变量**
+
+   | 变量 | 说明 |
+   |---|---|
+   | `DATABASE_URL` | Supabase 连接池连接串（6543） |
+   | `DIRECT_URL` | Supabase 直连串（5432），用于迁移 |
+   | `AUTH_SECRET` | 随机会话密钥，可用 `openssl rand -base64 32` 生成 |
+   | `AUTH_TRUST_HOST` | 设为 `true` |
+   | `AI_PROVIDER` | 设为 `openai` |
+   | `OPENAI_API_KEY` | 通义千问 API Key |
+   | `OPENAI_BASE_URL` | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+   | `OPENAI_MODEL` | `qwen3-vl-plus` |
+
+4. **构建命令**（Vercel → Settings → Build & Development Settings）：
+
+   ```bash
+   npx prisma generate && npx prisma migrate deploy && npm run build
+   ```
+
+   首次部署会自动创建所有数据表。
+
+> 部署完成后即可在手机、平板、PC 浏览器访问；在移动端浏览器中选择「添加到主屏幕」可作为 PWA 使用。
+>
+> **注意**：Vercel Hobby 计划的函数最长执行 60 秒，复杂题目的 AI 识别可能超时。如需更长耗时，请升级 Vercel Pro（300 秒）或改用下方 Docker 部署。
+
+### 方式二：使用 Docker 部署
 
 #### 1. 启动服务
 
@@ -56,21 +93,26 @@
 **选项 A：直接使用 Docker 命令**
 
 ```bash
-docker run -d --name wrong-notebook \
-  -e NEXTAUTH_SECRET="your_secret_key" \
+docker run -d --name ai-wrong-review \
+  -e DATABASE_URL="postgresql://...supabase连接池地址:6543/postgres?pgbouncer=true&connection_limit=1" \
+  -e DIRECT_URL="postgresql://...supabase直连地址:5432/postgres" \
+  -e AUTH_SECRET="your_secret_key" \
+  -e OPENAI_API_KEY="sk-..." \
+  -e OPENAI_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1" \
+  -e OPENAI_MODEL="qwen3-vl-plus" \
   -p 3000:3000 \
-  -v $(pwd)/data:/app/data \
-  -v $(pwd)/config:/app/config \
   ghcr.io/wttwins/wrong-notebook
 ```
 
+> 数据库使用外部 PostgreSQL（Supabase），无需再挂载 `/app/data` 卷。
+
 **选项 B：使用 Docker Compose (推荐)**
 
-使用 `docker-compose.yml` 文件进行管理。
+使用本仓库的 `docker-compose.yml` 文件进行管理。
 
 1.  **下载配置文件**：
     ```bash
-    curl -o docker-compose.yml https://raw.githubusercontent.com/wttwins/wrong-notebook/refs/heads/main/docker-compose.yml
+    curl -o docker-compose.yml https://raw.githubusercontent.com/alexzhm2010/ai-wrong-question-review/main/docker-compose.yml
     ```
 2.  **启动服务**：
     ```bash
@@ -85,7 +127,7 @@ docker run -d --name wrong-notebook \
     docker-compose down
     ```
 
-### 方式二：本地源码运行
+### 方式三：本地源码运行
 
 #### 1. 克隆仓库
 
@@ -116,7 +158,8 @@ cp .env.example .env
 
 | 环境变量 | 描述 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `DATABASE_URL` | 数据库连接地址 | `file:./dev.db` | SQLite 数据库路径 |
+| `DATABASE_URL` | 数据库连接地址 | 无 | Supabase 连接池连接串（端口 6543，带 `pgbouncer=true&connection_limit=1`） |
+| `DIRECT_URL` | 迁移直连地址 | 无 | Supabase 直连串（端口 5432），仅 `prisma migrate` 使用 |
 | `NEXTAUTH_SECRET` | Auth 密钥 | 无 | 用于加密 Session，生产环境建议设置,可以使用 openssl rand -base64 32 生成一个随机字符串作为密钥 |
 | `NEXTAUTH_URL` | 访问地址 | `http://your-domain-name:3000` | 部署后的访问地址 |
 | `AUTH_TRUST_HOST` | 信任主机头 | `true` | 设置为 `true` 时自动推断 URL，适合 Docker/PaaS |
@@ -128,7 +171,7 @@ cp .env.example .env
 
 | 环境变量 | 描述 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `AI_PROVIDER` | AI 提供商 | `gemini` | 可选 `gemini`、`openai` 或 `azure` |
+| `AI_PROVIDER` | AI 提供商 | `openai` | 可选 `openai`（兼容通义千问/智谱/豆包等）、`gemini` 或 `azure` |
 
 **Gemini 配置**
 
@@ -184,13 +227,14 @@ npm run dev
 本项目支持动态配置 AI 模型，无需重启服务器。
 
 1.  **进入设置**：点击首页右上角的设置图标。
-2.  **选择提供商**：支持 Google Gemini、OpenAI 和 **Azure OpenAI**。
+2.  **选择提供商**：支持 **OpenAI 兼容接口**（内置通义千问 VL、智谱 GLM-4V、豆包、硅基流动、Kimi 等预设，一键填充）、Google Gemini 和 **Azure OpenAI**。
 3.  **填写参数**：
     *   **通用参数**: API Key、Base URL（或 Endpoint）、Model Name（或 Deployment Name）。
     *   **Azure 特有**: Deployment Name（部署名称）、API Version（API 版本）。
-4.  **保存生效**：点击保存后即刻生效。
+4.  **保存生效**：点击保存后即刻生效，配置保存在 Supabase 的 `AppSetting` 表中，多设备访问时保持一致。
 
-> **注意**：网页配置会保存到 `config/app-config.json` 文件中，该文件的优先级高于 `.env` 环境变量。
+> **注意**：网页保存的配置写入数据库，优先级高于 `.env` 环境变量；数据库中没有记录时才回退到环境变量默认值。
+> **拍照识题必须使用支持视觉的模型**（如 `qwen3-vl-plus`、`glm-4.6v`）。DeepSeek 等纯文本模型只能做文字解析。
 
 ### 配置样例
 
@@ -213,6 +257,16 @@ npm run dev
 | 模型 | `gpt-4o`（推荐）、`gpt-4-turbo`、`o3`、`o4-mini` 等 |
 
 > **兼容模式**：OpenAI 提供商兼容所有支持 OpenAI API 格式的第三方服务。只需将 Base URL 改为对应服务地址，即可使用硅基流动、智谱 GLM、月之暗面 Kimi、通义千问 DashScope 等平台的模型。模型名称需填写对应平台的完整模型 ID。
+
+#### 通义千问 VL（推荐，中文题目识别）
+
+| 参数 | 值 |
+| :--- | :--- |
+| API Key | [阿里云百炼](https://bailian.console.aliyun.com/) → API-KEY 管理 |
+| Base URL | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| 模型 | `qwen3-vl-plus`（推荐）、`qwen-vl-max`、`qwen2.5-vl-72b-instruct` |
+
+> 在设置页「快速选择供应商预设」中选择「通义千问 VL」会自动填入以上参数。
 
 #### Azure OpenAI
 

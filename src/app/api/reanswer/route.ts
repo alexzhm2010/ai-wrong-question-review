@@ -7,6 +7,9 @@ import { createLogger } from "@/lib/logger";
 
 const logger = createLogger('api:reanswer');
 
+// Vercel 函数最大执行时长（Hobby 上限 60s；Docker 部署不受此限制）
+export const maxDuration = 60;
+
 export async function POST(req: Request) {
     logger.info('Reanswer API called');
 
@@ -35,7 +38,7 @@ export async function POST(req: Request) {
             return badRequest("Missing question text");
         }
 
-        const aiService = getAIService();
+        const aiService = await getAIService();
 
         // 根据是否有图片选择不同的重新解题方式
         const result = await aiService.reanswerQuestion(questionText, language, subject, imageBase64, gradeSemester);

@@ -9,7 +9,7 @@ const logger = createLogger('api:settings');
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
-    const config = getAppConfig();
+    const config = await getAppConfig();
     // Return full config including API keys since this is an authenticated endpoint
     return NextResponse.json(config);
 }
@@ -17,7 +17,7 @@ export async function GET() {
 export async function POST(req: Request) {
     try {
         const body = await req.json();
-        const currentConfig = getAppConfig();
+        const currentConfig = await getAppConfig();
 
         // Don't save masked keys if they somehow get sent back (for Gemini)
         if (body.gemini?.apiKey === '********') {
@@ -46,7 +46,7 @@ export async function POST(req: Request) {
             body.azure.apiKey = currentConfig.azure?.apiKey;
         }
 
-        const updatedConfig = updateAppConfig(body);
+        const updatedConfig = await updateAppConfig(body);
         return NextResponse.json(updatedConfig);
     } catch (error) {
         logger.error({ error }, 'Failed to update settings');

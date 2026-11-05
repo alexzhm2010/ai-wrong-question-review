@@ -1,10 +1,10 @@
-import fs from 'fs';
-import path from 'path';
+import { prisma } from './prisma';
 import { createLogger } from './logger';
 
 const logger = createLogger('config');
 
-const CONFIG_FILE_PATH = path.join(process.cwd(), 'config', 'app-config.json');
+// 配置在数据库中的存储键
+const CONFIG_KEY = 'app_config';
 
 // OpenAI 实例配置
 export interface OpenAIInstance {
@@ -88,15 +88,15 @@ function migrateOpenAIConfig(legacy: LegacyOpenAIConfig): AppConfig['openai'] {
 }
 
 const DEFAULT_CONFIG: AppConfig = {
-    aiProvider: (process.env.AI_PROVIDER as 'gemini' | 'openai' | 'azure') || 'gemini',
+    aiProvider: (process.env.AI_PROVIDER as 'gemini' | 'openai' | 'azure') || 'openai',
     allowRegistration: true,
     openai: {
         instances: process.env.OPENAI_API_KEY ? [{
             id: 'env-default',
             name: 'Default (ENV)',
             apiKey: process.env.OPENAI_API_KEY,
-            baseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
-            model: process.env.OPENAI_MODEL || 'gpt-4o',
+            baseUrl: process.env.OPENAI_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+            model: process.env.OPENAI_MODEL || 'qwen3-vl-plus',
         }] : [],
         activeInstanceId: process.env.OPENAI_API_KEY ? 'env-default' : undefined,
     },
@@ -121,50 +121,67 @@ const DEFAULT_CONFIG: AppConfig = {
     },
 };
 
-export function getAppConfig(): AppConfig {
-    if (fs.existsSync(CONFIG_FILE_PATH)) {
-        try {
-            const fileContent = fs.readFileSync(CONFIG_FILE_PATH, 'utf-8');
-            const userConfig = JSON.parse(fileContent);
-
-            // 检测并迁移旧版 OpenAI 配置
-            let openaiConfig = userConfig.openai;
-            if (isLegacyOpenAIConfig(userConfig.openai)) {
-                logger.info('Detected legacy OpenAI config, migrating to multi-instance format...');
-                openaiConfig = migrateOpenAIConfig(userConfig.openai);
-                // 持久化迁移结果
-                const migratedConfig = {
-                    ...userConfig,
-                    openai: openaiConfig,
-                };
-                fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(migratedConfig, null, 2));
-                logger.info('Legacy OpenAI config migrated successfully');
-            }
-
-            // Merge with default to ensure all fields exist
-            return {
-                ...DEFAULT_CONFIG,
-                ...userConfig,
-                openai: {
-                    instances: openaiConfig?.instances || DEFAULT_CONFIG.openai?.instances || [],
-                    activeInstanceId: openaiConfig?.activeInstanceId || DEFAULT_CONFIG.openai?.activeInstanceId,
-                },
-                gemini: { ...DEFAULT_CONFIG.gemini, ...userConfig.gemini },
-                azure: { ...DEFAULT_CONFIG.azure, ...userConfig.azure },
-                prompts: { ...DEFAULT_CONFIG.prompts, ...userConfig.prompts },
-                timeouts: { ...DEFAULT_CONFIG.timeouts, ...userConfig.timeouts },
-            };
-        } catch (error) {
-            logger.error({ error }, 'Failed to read config file');
-            return DEFAULT_CONFIG;
-        }
-    }
-    return DEFAULT_CONFIG;
+// 合并数据库配置与默认值，保证字段完整
+function mergeConfig(userConfig: Partial<AppConfig>): AppConfig {
+    return {
+        ...DEFAULT_CONFIG,
+        ...userConfig,
+        openai: {
+            instances: userConfig.openai?.instances || DEFAULT_CONFIG.openai?.instances || [],
+            activeInstanceId: userConfig.openai?.activeInstanceId || DEFAULT_CONFIG.openai?.activeInstanceId,
+        },
+        gemini: { ...DEFAULT_CONFIG.gemini, ...userConfig.gemini },
+        azure: { ...DEFAULT_CONFIG.azure, ...userConfig.azure },
+        prompts: { ...DEFAULT_CONFIG.prompts, ...userConfig.prompts },
+        timeouts: { ...DEFAULT_CONFIG.timeouts, ...userConfig.timeouts },
+    };
 }
 
-export function updateAppConfig(newConfig: Partial<AppConfig>) {
-    const currentConfig = getAppConfig();
-    const updatedConfig = {
+/**
+ * 读取应用配置。
+ * 配置持久化在数据库 AppSetting 表中，因此在 Vercel 等 serverless 环境下也能跨实例共享。
+ */
+export async function getAppConfig(): Promise<AppConfig> {
+    try {
+        const row = await prisma.appSetting.findUnique({ where: { key: CONFIG_KEY } });
+        if (!row) {
+            return DEFAULT_CONFIG;
+        }
+
+        const userConfig = JSON.parse(row.value) as Partial<AppConfig>;
+
+        // 检测并迁移旧版 OpenAI 配置
+        if (isLegacyOpenAIConfig(userConfig.openai)) {
+            logger.info('Detected legacy OpenAI config, migrating to multi-instance format...');
+            const openaiConfig = migrateOpenAIConfig(userConfig.openai);
+            const migrated = mergeConfig({ ...userConfig, openai: openaiConfig });
+            await saveConfig(migrated);
+            logger.info('Legacy OpenAI config migrated successfully');
+            return migrated;
+        }
+
+        return mergeConfig(userConfig);
+    } catch (error) {
+        logger.error({ error }, 'Failed to read app config from database');
+        return DEFAULT_CONFIG;
+    }
+}
+
+// 直接写入完整配置
+async function saveConfig(config: AppConfig): Promise<void> {
+    await prisma.appSetting.upsert({
+        where: { key: CONFIG_KEY },
+        create: { key: CONFIG_KEY, value: JSON.stringify(config) },
+        update: { value: JSON.stringify(config) },
+    });
+}
+
+/**
+ * 更新应用配置（局部合并后写库）。
+ */
+export async function updateAppConfig(newConfig: Partial<AppConfig>): Promise<AppConfig> {
+    const currentConfig = await getAppConfig();
+    const updatedConfig: AppConfig = {
         ...currentConfig,
         ...newConfig,
         openai: {
@@ -178,17 +195,17 @@ export function updateAppConfig(newConfig: Partial<AppConfig>) {
     };
 
     try {
-        fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(updatedConfig, null, 2));
+        await saveConfig(updatedConfig);
         return updatedConfig;
     } catch (error) {
-        logger.error({ error }, 'Failed to write config file');
+        logger.error({ error }, 'Failed to write app config');
         throw error;
     }
 }
 
 // 获取当前激活的 OpenAI 实例配置
-export function getActiveOpenAIConfig(): OpenAIInstance | undefined {
-    const config = getAppConfig();
+export async function getActiveOpenAIConfig(): Promise<OpenAIInstance | undefined> {
+    const config = await getAppConfig();
     const instances = config.openai?.instances || [];
     const activeId = config.openai?.activeInstanceId;
 
@@ -201,4 +218,3 @@ export function getActiveOpenAIConfig(): OpenAIInstance | undefined {
 
 // 最大实例数限制
 export const MAX_OPENAI_INSTANCES = 10;
-

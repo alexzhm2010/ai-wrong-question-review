@@ -19,18 +19,13 @@ COPY . .
 # Install OpenSSL for Prisma
 RUN apk add --no-cache openssl
 
-# Generate Prisma Client and Seed Database
-# We temporarily set DATABASE_URL to a local file for the build process to generate the file
-ENV DATABASE_URL="file:/app/prisma/dev.db"
+# Generate Prisma Client only (数据库迁移与初始化在容器启动时执行)
+ENV DATABASE_URL="postgresql://placeholder:placeholder@localhost:5432/placeholder"
 
 # Pre-compile runtime scripts FIRST (needed for tag seeding)
 RUN npx tsc scripts/rebuild-system-tags.ts --outDir dist-scripts --esModuleInterop --resolveJsonModule --skipLibCheck --module commonjs --target ES2020
 
-# Initialize database: generate client, run migrations, seed admin user, seed system tags
-RUN npx prisma generate \
-    && npx prisma migrate deploy \
-    && npx prisma db seed \
-    && node ./dist-scripts/scripts/rebuild-system-tags.js
+RUN npx prisma generate
 
 # Next.js collects completely anonymous telemetry data about general usage.
 # Learn more here: https://nextjs.org/telemetry
@@ -66,29 +61,19 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 # Copy Prisma schema and migrations for runtime usage if needed (e.g. for migrations)
 COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 
-# Copy config directory for runtime
-COPY --from=builder --chown=nextjs:nodejs /app/config ./config
-
 # Copy pre-compiled runtime scripts
 COPY --from=builder --chown=nextjs:nodejs /app/dist-scripts ./dist-scripts
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/seed-admin.js ./dist-scripts/scripts/seed-admin.js
 
-# Create data directory for SQLite persistence
-RUN mkdir -p /app/data && chown -R nextjs:nodejs /app/data
-
-# Copy entrypoint script
+# Copy entrypoint and optional HTTPS proxy
 COPY --chown=nextjs:nodejs --chmod=755 docker-entrypoint.sh ./
 COPY --chown=nextjs:nodejs https-server.js ./
 
 EXPOSE 3000
-
 ENV PORT=3000
-# set hostname to localhost
 ENV HOSTNAME="0.0.0.0"
 
-# Environment variables 
-# Point to the persistent data location
-ENV DATABASE_URL="file:/app/data/dev.db"
+# 数据库连接信息由部署环境注入（Supabase）
 ENV AUTH_TRUST_HOST=true
 
 # Use entrypoint script to handle DB initialization

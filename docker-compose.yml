@@ -1,18 +1,23 @@
 version: '3'
 
 services:
-  wrong-notebook:
+  ai-wrong-review:
     image: ghcr.io/wttwins/wrong-notebook:latest
-    container_name: wrong-notebook
+    container_name: ai-wrong-review
     restart: always
     ports:
       - "3000:3000"
     environment:
-      # NEXTAUTH_URL 根据实际情况设置你的信息
-      #- NEXTAUTH_URL=http://your_domain_name:3000
-      - NEXTAUTH_SECRET=your_secret_key
+      # Supabase 连接串（连接池 6543，迁移直连 5432）
+      - DATABASE_URL=postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1
+      - DIRECT_URL=postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
+      - AUTH_SECRET=your_secret_key
+      - AUTH_TRUST_HOST=true
+      # AI：通义千问 VL
+      - AI_PROVIDER=openai
+      - OPENAI_API_KEY=sk-xxxx
+      - OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+      - OPENAI_MODEL=qwen3-vl-plus
     volumes:
-      # Persist the SQLite database
-      - ./data:/app/data
+      # 仅用于保存应用版本标记与可选本地配置覆盖，数据库在 Supabase
       - ./config:/app/config
-

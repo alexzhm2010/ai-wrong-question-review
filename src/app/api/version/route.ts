@@ -1,13 +1,7 @@
 import { NextResponse } from 'next/server';
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import packageJson from '../../../../package.json';
 
 export async function GET() {
-  try {
-    const packageJsonPath = join(process.cwd(), 'package.json');
-    const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
-    return NextResponse.json({ version: packageJson.version });
-  } catch {
-    return NextResponse.json({ version: 'unknown' });
-  }
+  // 静态导入 package.json，避免 serverless 打包后进程工作目录无该文件
+  return NextResponse.json({ version: packageJson.version });
 }

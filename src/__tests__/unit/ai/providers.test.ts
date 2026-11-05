@@ -129,7 +129,7 @@ describe('AI Provider 初始化', () => {
     describe('AI Service Factory', () => {
         it('应该根据配置返回 OpenAI Provider', async () => {
             const { getAIService } = await import('@/lib/ai');
-            vi.mocked(getAppConfig).mockReturnValue({
+            vi.mocked(getAppConfig).mockResolvedValue({
                 aiProvider: 'openai',
                 openai: {
                     instances: [{ id: 'test', name: 'Test', apiKey: 'test-openai-key', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o' }],
@@ -137,7 +137,7 @@ describe('AI Provider 初始化', () => {
                 },
                 gemini: { apiKey: '', model: '' }
             } as any);
-            vi.mocked(getActiveOpenAIConfig).mockReturnValue({
+            vi.mocked(getActiveOpenAIConfig).mockResolvedValue({
                 id: 'test',
                 name: 'Test',
                 apiKey: 'test-openai-key',
@@ -145,7 +145,7 @@ describe('AI Provider 初始化', () => {
                 model: 'gpt-4o',
             });
 
-            const service = getAIService();
+            const service = await getAIService();
 
             expect(service).toBeDefined();
             expect(service.constructor.name).toBe('OpenAIProvider');
@@ -153,13 +153,13 @@ describe('AI Provider 初始化', () => {
 
         it('应该根据配置返回 Gemini Provider', async () => {
             const { getAIService } = await import('@/lib/ai');
-            vi.mocked(getAppConfig).mockReturnValue({
+            vi.mocked(getAppConfig).mockResolvedValue({
                 aiProvider: 'gemini',
                 gemini: { apiKey: 'test-gemini-key', model: 'gemini-2.0-flash' },
                 openai: { apiKey: '', model: '' }
             } as any);
 
-            const service = getAIService();
+            const service = await getAIService();
 
             expect(service).toBeDefined();
             expect(service.constructor.name).toBe('GeminiProvider');
@@ -167,12 +167,12 @@ describe('AI Provider 初始化', () => {
 
         it('配置未知 provider 时应该默认返回 Gemini Provider', async () => {
             const { getAIService } = await import('@/lib/ai');
-            vi.mocked(getAppConfig).mockReturnValue({
+            vi.mocked(getAppConfig).mockResolvedValue({
                 aiProvider: 'unknown',
                 gemini: { apiKey: 'test-gemini-key' },
             } as any);
 
-            const service = getAIService();
+            const service = await getAIService();
 
             expect(service).toBeDefined();
             expect(service.constructor.name).toBe('GeminiProvider');

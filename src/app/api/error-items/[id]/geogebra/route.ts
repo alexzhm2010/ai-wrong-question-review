@@ -8,6 +8,9 @@ import { getAIService } from "@/lib/ai";
 
 const logger = createLogger('api:error-items:geogebra');
 
+// Vercel 函数最大执行时长（Hobby 上限 60s；Docker 部署不受此限制）
+export const maxDuration = 60;
+
 export async function POST(
     req: Request,
     { params }: { params: Promise<{ id: string }> }
@@ -64,7 +67,7 @@ export async function POST(
             });
         }
 
-        const aiService = getAIService();
+        const aiService = await getAIService();
 
         // Use frontend-provided data if available (more up-to-date), fall back to DB
         const body = await req.json().catch(() => ({}));

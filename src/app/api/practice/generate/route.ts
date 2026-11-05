@@ -8,6 +8,9 @@ import { createLogger } from "@/lib/logger";
 
 const logger = createLogger('api:practice:generate');
 
+// Vercel 函数最大执行时长（Hobby 上限 60s；Docker 部署不受此限制）
+export const maxDuration = 60;
+
 export async function POST(req: Request) {
     const session = await getServerSession(authOptions);
 
@@ -34,7 +37,7 @@ export async function POST(req: Request) {
             tags = [];
         }
 
-        const aiService = getAIService();
+        const aiService = await getAIService();
         const similarQuestion = await aiService.generateSimilarQuestion(
             errorItemWithSubject.questionText || "",
             tags,

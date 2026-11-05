@@ -12,6 +12,9 @@ const logger = createLogger('api:geogebra-analyze');
  * Used by the correction editor where the error item hasn't been saved yet.
  * Does NOT require an item ID.
  */
+// Vercel 函数最大执行时长（Hobby 上限 60s；Docker 部署不受此限制）
+export const maxDuration = 60;
+
 export async function POST(req: Request) {
     const session = await getServerSession(authOptions);
 
@@ -30,7 +33,7 @@ export async function POST(req: Request) {
             );
         }
 
-        const aiService = getAIService();
+        const aiService = await getAIService();
         const result = await aiService.analyzeForGeogebra(
             questionText,
             answerText || "",

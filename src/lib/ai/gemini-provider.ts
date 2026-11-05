@@ -159,7 +159,7 @@ export class GeminiProvider implements AIService {
     }
 
     async analyzeImage(imageBase64: string, mimeType: string = "image/jpeg", language: 'zh' | 'en' = 'zh', grade?: 7 | 8 | 9 | 10 | 11 | 12 | null, subject?: string | null, gradeSemester?: string | null): Promise<ParsedQuestion> {
-        const config = getAppConfig();
+        const config = await getAppConfig();
 
         // 从数据库获取各学科标签
         const prefetchedMathTags = (subject === '数学' || !subject) ? await getMathTagsFromDB(grade || null) : [];
@@ -248,7 +248,7 @@ export class GeminiProvider implements AIService {
     }
 
     async generateSimilarQuestion(originalQuestion: string, knowledgePoints: string[], language: 'zh' | 'en' = 'zh', difficulty: DifficultyLevel = 'medium', gradeSemester?: string | null): Promise<ParsedQuestion> {
-        const config = getAppConfig();
+        const config = await getAppConfig();
         const prompt = generateSimilarQuestionPrompt(language, originalQuestion, knowledgePoints, difficulty, {
             customTemplate: config.prompts?.similar
         }, gradeSemester);
