@@ -80,21 +80,10 @@ export async function compressImage(
  */
 export async function processImageFile(file: File): Promise<string> {
     const fileSizeMB = file.size / 1024 / 1024;
-    const threshold = 1; // 1MB 阈值
 
     console.log(`文件大小: ${fileSizeMB.toFixed(2)}MB`);
 
-    if (fileSizeMB > threshold) {
-        console.log('文件超过阈值，开始压缩...');
-        return await compressImage(file, threshold);
-    } else {
-        console.log('文件大小合适，无需压缩');
-        // 直接返回 Base64
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result as string);
-            reader.onerror = reject;
-            reader.readAsDataURL(file);
-        });
-    }
+    // 无论原图大小，都统一缩放到最长边 1600px，降低上传体积与视觉 token 数量，
+    // 显著缩短 AI 分析耗时（手机直出照片常见 3000-4000px，直接上传会让模型预处理变慢）。
+    return await compressImage(file, 1, 1600, 0.8);
 }

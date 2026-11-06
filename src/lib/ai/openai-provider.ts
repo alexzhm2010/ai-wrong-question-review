@@ -32,6 +32,11 @@ export class OpenAIProvider implements AIService {
         this.openai = new OpenAI({
             apiKey: apiKey,
             baseURL: baseURL || undefined,
+            // 明确设置超时与重试次数：SDK 默认超时 10 分钟、失败自动重试 2 次，
+            // 遇到 429/5xx 时会导致前端「AI 正在分析」长时间卡住。
+            // 单次最长 120 秒、不自动重试，失败立即让前端拿到错误。
+            timeout: 120000,
+            maxRetries: 0,
             defaultHeaders: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             },
@@ -193,6 +198,7 @@ export class OpenAIProvider implements AIService {
         logger.box('📝 Full System Prompt', systemPrompt);
 
         try {
+            const startedAt = Date.now();
             // 构建请求参数（用于日志显示，图片数据截断）
             const requestParamsForLog = {
                 model: this.model,
@@ -298,6 +304,7 @@ export class OpenAIProvider implements AIService {
             const parsedResult = this.parseResponse(text);
 
             logger.box('✅ Parsed & Validated Result', JSON.stringify(parsedResult, null, 2));
+            logger.info({ durationMs: Date.now() - startedAt, model: this.model }, 'Image analysis duration');
 
             return parsedResult;
 
