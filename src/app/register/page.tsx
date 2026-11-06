@@ -9,6 +9,7 @@ import Link from "next/link";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { Eye, EyeOff, Loader2, AlertCircle } from "lucide-react";
 import { apiClient } from "@/lib/api-client";
+import { toast } from "@/lib/toast";
 import { RegisterRequest } from "@/types/api";
 
 export default function RegisterPage() {
@@ -62,7 +63,7 @@ export default function RegisterPage() {
                 enrollmentYear: parseInt(enrollmentYear)
             });
 
-            alert(t.auth?.register?.success || 'Registration successful! Please login');
+            toast.success(t.auth?.register?.success || 'Registration successful! Please login');
             router.push("/login");
         } catch (error: any) {
             let errorMsg = error.data?.message;

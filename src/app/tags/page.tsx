@@ -12,6 +12,7 @@ import { BackButton } from "@/components/ui/back-button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { apiClient } from "@/lib/api-client";
+import { toast } from "@/lib/toast";
 import { TagStats, TagStatsResponse } from "@/types/api";
 
 // 标签树节点类型
@@ -139,7 +140,7 @@ export default function TagsPage() {
     // 添加自定义标签
     const handleAddCustomTag = async () => {
         if (!newTagName.trim()) {
-            alert(t.tags?.custom?.enterName || "Please enter tag name");
+            toast.info(t.tags?.custom?.enterName || "Please enter tag name");
             return;
         }
 
@@ -154,12 +155,12 @@ export default function TagsPage() {
             // 刷新
             await fetchCustomTags();
             await fetchTags(newTagSubject);
-            alert(t.tags?.custom?.success || "Tag added successfully!");
+            toast.success(t.tags?.custom?.success || "Tag added successfully!");
         } catch (error: any) {
             if (error?.message?.includes('409')) {
-                alert(t.tags?.custom?.exists || "Tag already exists");
+                toast.info(t.tags?.custom?.exists || "Tag already exists");
             } else {
-                alert("Failed to add tag");
+                toast.error("Failed to add tag");
             }
         } finally {
             setSubmitting(false);
@@ -178,7 +179,7 @@ export default function TagsPage() {
             await fetchTags(subject);
         } catch (error) {
             console.error("Failed to delete tag:", error);
-            alert("Failed to delete tag");
+            toast.error("Failed to delete tag");
         }
     };
 

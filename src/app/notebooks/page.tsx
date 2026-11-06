@@ -12,6 +12,7 @@ import { RenameNotebookDialog } from "@/components/rename-notebook-dialog";
 
 import { Notebook } from "@/types/api";
 import { apiClient } from "@/lib/api-client";
+import { toast } from "@/lib/toast";
 
 import { useLanguage } from "@/contexts/LanguageContext";
 
@@ -47,7 +48,7 @@ export default function NotebooksPage() {
         } catch (error: any) {
             console.error(error);
             const message = error.data?.message || t.notebooks?.createError || "Failed to create";
-            alert(message);
+            toast.error(message);
         }
     };
 
@@ -60,7 +61,7 @@ export default function NotebooksPage() {
 
     const handleDelete = async (id: string, errorCount: number, name: string) => {
         if (errorCount > 0) {
-            alert(t.notebooks?.deleteNotEmpty || "Please clear all items in this notebook first.");
+            toast.info(t.notebooks?.deleteNotEmpty || "Please clear all items in this notebook first.");
             return;
         }
         if (!confirm((t.notebooks?.deleteConfirm || "Are you sure?").replace("{name}", name))) return;
@@ -71,7 +72,7 @@ export default function NotebooksPage() {
         } catch (error: any) {
             console.error(error);
             const message = error.data?.message || t.notebooks?.deleteError || "Failed to delete";
-            alert(message);
+            toast.error(message);
         }
     };
 

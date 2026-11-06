@@ -5,7 +5,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, RefreshCw, CheckCircle, Eye, Send, XCircle, ArrowLeft, House } from "lucide-react";
+import { Loader2, RefreshCw, CheckCircle, Eye, Send, XCircle, ArrowLeft, House, BookOpen } from "lucide-react";
 import { ParsedQuestion } from "@/lib/ai/types";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { Textarea } from "@/components/ui/textarea";
@@ -126,7 +126,28 @@ function PracticeContent() {
     };
 
     if (!errorItemId) {
-        return <div className="p-8 text-center">{t.practice.invalidRequest || "Invalid Request"}</div>;
+        const isZh = language === 'zh';
+        return (
+            <div className="flex min-h-[60vh] flex-col items-center justify-center gap-5 px-4 text-center">
+                <div className="rounded-full bg-muted p-4">
+                    <BookOpen className="h-10 w-10 text-muted-foreground" />
+                </div>
+                <div className="space-y-1">
+                    <h2 className="text-xl font-semibold">
+                        {isZh ? "选择一道错题开始练习" : "Pick a question to practice"}
+                    </h2>
+                    <p className="text-muted-foreground">
+                        {isZh ? "请从错题本选择一道题开始练习" : "Please select a question from a notebook to start practicing."}
+                    </p>
+                </div>
+                <Link href="/notebooks">
+                    <Button>
+                        <ArrowLeft className="mr-2 h-4 w-4" />
+                        {isZh ? "返回错题本列表" : "Back to notebooks"}
+                    </Button>
+                </Link>
+            </div>
+        );
     }
 
     return (

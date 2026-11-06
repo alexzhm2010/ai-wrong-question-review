@@ -11,6 +11,7 @@ import { RenameNotebookDialog } from "@/components/rename-notebook-dialog";
 
 import { Notebook } from "@/types/api";
 import { apiClient } from "@/lib/api-client";
+import { toast } from "@/lib/toast";
 
 import { useLanguage } from "@/contexts/LanguageContext";
 
@@ -36,7 +37,7 @@ export default function NotebookDetailPage() {
             setNotebook(data);
         } catch (error) {
             console.error("Failed to fetch notebook:", error);
-            alert(t.notebooks?.notFound || "Notebook not found");
+            toast.info(t.notebooks?.notFound || "Notebook not found");
             router.push("/notebooks");
         } finally {
             setLoading(false);

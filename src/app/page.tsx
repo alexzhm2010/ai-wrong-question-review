@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, Suspense, useEffect } from "react";
+import { useState, Suspense, useEffect, useRef } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { UploadZone } from "@/components/upload-zone";
@@ -13,13 +13,14 @@ import { AnalyzeResponse, Notebook, AppConfig } from "@/types/api";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { processImageFile } from "@/lib/image-utils";
-import { Upload, BookOpen, Tags, LogOut, BarChart3, PenLine } from "lucide-react";
+import { Upload, BookOpen, Tags, LogOut, BarChart3, PenLine, X } from "lucide-react";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { BroadcastNotification } from "@/components/broadcast-notification";
 import { signOut } from "next-auth/react";
 
 import { ProgressFeedback, ProgressStatus } from "@/components/ui/progress-feedback";
 import { frontendLogger } from "@/lib/frontend-logger";
+import { toast } from "@/lib/toast";
 import { TextInputZone } from "@/components/text-input-zone";
 import { DirectTextEditor } from "@/components/direct-text-editor";
 
@@ -37,6 +38,14 @@ function HomeContent() {
     const [autoSelectedNotebookId, setAutoSelectedNotebookId] = useState<string | null>(null);
 
     const [config, setConfig] = useState<AppConfig | null>(null);
+
+    // Cancellation + elapsed time for AI analysis
+    const [elapsedMs, setElapsedMs] = useState(0);
+    const analysisStartedAtRef = useRef<number | null>(null);
+    const phaseStartedAtRef = useRef<number | null>(null);
+    const abortControllerRef = useRef<AbortController | null>(null);
+    const abortTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const cancelRequestedRef = useRef(false);
 
     // Input mode: "image" for photo upload, "text" for AI solve, "direct" for manual entry
     const [inputMode, setInputMode] = useState<"image" | "text" | "direct">("image");
@@ -102,6 +111,57 @@ function HomeContent() {
         };
     }, [analysisStep, safetyTimeout]);
 
+    const isAnalysisActive = analysisStep !== 'idle';
+
+    // 每 100ms 更新已等待时长（整个 AI 流程累计，不随阶段重置）
+    useEffect(() => {
+        if (!isAnalysisActive) {
+            analysisStartedAtRef.current = null;
+            setElapsedMs(0);
+            return;
+        }
+        if (analysisStartedAtRef.current === null) {
+            analysisStartedAtRef.current = Date.now();
+        }
+        const interval = setInterval(() => {
+            setElapsedMs(Date.now() - (analysisStartedAtRef.current ?? Date.now()));
+        }, 100);
+        return () => clearInterval(interval);
+    }, [isAnalysisActive]);
+
+    // 组件卸载时终止进行中的请求
+    useEffect(() => {
+        return () => {
+            abortControllerRef.current?.abort();
+            if (abortTimerRef.current) clearTimeout(abortTimerRef.current);
+        };
+    }, []);
+
+    const beginAnalysisRequest = () => {
+        abortControllerRef.current?.abort();
+        if (abortTimerRef.current) clearTimeout(abortTimerRef.current);
+        const controller = new AbortController();
+        abortControllerRef.current = controller;
+        cancelRequestedRef.current = false;
+        abortTimerRef.current = setTimeout(() => controller.abort(), aiTimeout);
+        return controller;
+    };
+
+    const finishAnalysisRequest = () => {
+        if (abortTimerRef.current) {
+            clearTimeout(abortTimerRef.current);
+            abortTimerRef.current = null;
+        }
+        abortControllerRef.current = null;
+    };
+
+    const cancelAnalysis = () => {
+        if (!abortControllerRef.current) return;
+        cancelRequestedRef.current = true;
+        abortControllerRef.current.abort();
+        toast.info(language === 'zh' ? '已取消本次 AI 分析' : 'AI analysis cancelled');
+    };
+
     const onImageSelect = (file: File) => {
         const imageUrl = URL.createObjectURL(file);
         setCroppingImage(imageUrl);
@@ -124,23 +184,27 @@ function HomeContent() {
             }
         });
 
+        const controller = beginAnalysisRequest();
+
         try {
             frontendLogger.info('[HomeAnalyze]', 'Step 1/5: Compressing image');
             setAnalysisStep('compressing');
             const base64Image = await processImageFile(file);
+            if (controller.signal.aborted) return;
             setCurrentImage(base64Image);
             frontendLogger.info('[HomeAnalyze]', 'Image compressed successfully', {
                 size: base64Image.length
             });
 
             frontendLogger.info('[HomeAnalyze]', 'Step 2/5: Calling API endpoint /api/analyze');
+            phaseStartedAtRef.current = Date.now();
             setAnalysisStep('analyzing');
             const apiStartTime = Date.now();
             const data = await apiClient.post<AnalyzeResponse>("/api/analyze", {
                 imageBase64: base64Image,
                 language: language,
                 subjectId: initialNotebookId || autoSelectedNotebookId || undefined
-            }, { timeout: aiTimeout }); // Use configured timeout
+            }, { timeout: aiTimeout, signal: controller.signal }); // Use configured timeout
             const apiDuration = Date.now() - apiStartTime;
             frontendLogger.info('[HomeAnalyze]', 'API response received, validating data', {
                 apiDuration
@@ -195,6 +259,11 @@ function HomeContent() {
                 totalDuration
             });
         } catch (error: any) {
+            if (cancelRequestedRef.current) {
+                frontendLogger.info('[HomeError]', 'Analysis cancelled by user');
+                return;
+            }
+
             const errorDuration = Date.now() - startTime;
             frontendLogger.error('[HomeError]', 'Analysis failed', {
                 errorDuration,
@@ -237,16 +306,17 @@ function HomeContent() {
                     }
                 }
 
-                alert(errorMessage);
+                toast.error(errorMessage);
             } catch (innerError) {
                 frontendLogger.error('[HomeError]', 'Failed to process error message', {
                     innerError: String(innerError)
                 });
-                alert('Analysis failed. Please try again.');
+                toast.error('Analysis failed. Please try again.');
             }
         } finally {
             // Always reset analysis state, even if setState throws
             frontendLogger.info('[HomeAnalyze]', 'Finally: Resetting analysis state to idle');
+            finishAnalysisRequest();
             setAnalysisStep('idle');
             frontendLogger.info('[HomeAnalyze]', 'Analysis state reset complete');
         }
@@ -277,7 +347,7 @@ function HomeContent() {
             setStep("upload");
             setParsedData(null);
             setCurrentImage(null);
-            alert(t.common?.messages?.saveSuccess || 'Saved successfully!');
+            toast.success(t.common?.messages?.saveSuccess || 'Saved successfully!');
 
             // Redirect to notebook page if subjectId is present
             if (finalData.subjectId) {
@@ -289,7 +359,7 @@ function HomeContent() {
                 errorMessage: error?.data?.message || error?.message || String(error),
                 errorData: error?.data,
             });
-            alert(t.common?.messages?.saveFailed || 'Failed to save');
+            toast.error(t.common?.messages?.saveFailed || 'Failed to save');
         }
     };
 
@@ -297,7 +367,10 @@ function HomeContent() {
         const startTime = Date.now();
         frontendLogger.info('[HomeTextSubmit]', 'Starting text-based analysis', { textLength: questionText.length });
 
+        const controller = beginAnalysisRequest();
+
         try {
+            phaseStartedAtRef.current = Date.now();
             setAnalysisStep('analyzing');
 
             // Infer subject from auto-selected notebook
@@ -317,7 +390,7 @@ function HomeContent() {
                 questionText,
                 language,
                 subject: matchedNotebook?.name || undefined,
-            }, { timeout: aiTimeout });
+            }, { timeout: aiTimeout, signal: controller.signal });
 
             setAnalysisStep('processing');
             setProgress(100);
@@ -341,6 +414,11 @@ function HomeContent() {
             const totalDuration = Date.now() - startTime;
             frontendLogger.info('[HomeTextSubmit]', 'Text analysis completed', { totalDuration });
         } catch (error: any) {
+            if (cancelRequestedRef.current) {
+                frontendLogger.info('[HomeTextSubmit]', 'Analysis cancelled by user');
+                return;
+            }
+
             const errorDuration = Date.now() - startTime;
             frontendLogger.error('[HomeTextSubmit]', 'Analysis failed', {
                 errorDuration,
@@ -358,11 +436,12 @@ function HomeContent() {
                         errorMessage = backendErrorType;
                     }
                 }
-                alert(errorMessage);
+                toast.error(errorMessage);
             } catch {
-                alert('Analysis failed. Please try again.');
+                toast.error('Analysis failed. Please try again.');
             }
         } finally {
+            finishAnalysisRequest();
             setAnalysisStep('idle');
         }
     };
@@ -407,7 +486,7 @@ function HomeContent() {
 
             frontendLogger.info('[HomeDirectSave]', 'Save successful');
             setAnalysisStep('idle');
-            alert(t.common?.messages?.saveSuccess || 'Saved successfully!');
+            toast.success(t.common?.messages?.saveSuccess || 'Saved successfully!');
 
             if (data.subjectId) {
                 router.push(`/notebooks/${data.subjectId}`);
@@ -418,19 +497,37 @@ function HomeContent() {
                 errorMessage: error?.data?.message || error?.message || String(error),
             });
             setAnalysisStep('idle');
-            alert(t.common?.messages?.saveFailed || 'Failed to save');
+            toast.error(t.common?.messages?.saveFailed || 'Failed to save');
         }
     };
 
     const getProgressMessage = () => {
+        const isZh = language === 'zh';
+        const analyzingElapsed = Date.now() - (phaseStartedAtRef.current ?? Date.now());
+        let stage = "";
         switch (analysisStep) {
-            case 'compressing': return t.common.progress?.compressing || "Compressing...";
-            case 'uploading': return t.common.progress?.uploading || "Uploading...";
-            case 'analyzing': return t.common.progress?.analyzing || "Analyzing...";
-            case 'processing': return t.common.progress?.processing || "Processing...";
-            case 'saving': return "保存中...";
-            default: return "";
+            case 'compressing':
+                stage = isZh ? "正在压缩图片" : "Compressing image";
+                break;
+            case 'uploading':
+                stage = isZh ? "正在上传" : "Uploading";
+                break;
+            case 'analyzing':
+                stage = analyzingElapsed < 1000
+                    ? (isZh ? "正在上传" : "Uploading")
+                    : (isZh ? "AI 正在解析（通常 20–60 秒）" : "AI is analyzing (usually 20–60s)");
+                break;
+            case 'processing':
+                stage = isZh ? "正在处理结果" : "Processing result";
+                break;
+            case 'saving':
+                stage = isZh ? "正在保存" : "Saving";
+                break;
+            default:
+                return "";
         }
+        const seconds = (elapsedMs / 1000).toFixed(1);
+        return `${stage} · ${isZh ? `已等待 ${seconds} 秒` : `${seconds}s elapsed`}`;
     };
 
     return (
@@ -440,6 +537,20 @@ function HomeContent() {
                 progress={progress}
                 message={getProgressMessage()}
             />
+
+            {['compressing', 'uploading', 'analyzing', 'processing'].includes(analysisStep) && (
+                <div className="pointer-events-none fixed inset-x-0 bottom-6 z-[60] flex justify-center px-4">
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="pointer-events-auto gap-2 shadow-lg"
+                        onClick={cancelAnalysis}
+                    >
+                        <X className="h-4 w-4" />
+                        {t.common?.cancel || '取消'}
+                    </Button>
+                </div>
+            )}
 
             <div className="container mx-auto p-4 space-y-8 pb-20">
                 {/* Header Section */}

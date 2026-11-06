@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 import { useLanguage } from "@/contexts/LanguageContext";
+import { toast } from "@/lib/toast";
 
 interface CreateNotebookDialogProps {
     open: boolean;
@@ -28,7 +29,7 @@ export function CreateNotebookDialog({ open, onOpenChange, onCreate }: CreateNot
 
     const handleCreate = async () => {
         if (!name.trim()) {
-            alert(t.notebooks?.dialog?.enterName || "Please enter notebook name");
+            toast.info(t.notebooks?.dialog?.enterName || "Please enter notebook name");
             return;
         }
 

@@ -10,6 +10,7 @@ import { Search, Filter, CheckCircle, Clock, ChevronDown, Printer, ListChecks, T
 import Link from "next/link";
 import { format } from "date-fns";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { toast } from "@/lib/toast";
 import { useRouter } from "next/navigation";
 import {
     DropdownMenu,
@@ -60,6 +61,13 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
     const [isDeleting, setIsDeleting] = useState(false);
     const { t, language } = useLanguage();
     const router = useRouter();
+    // 请求并发控制：筛选条件快速变化时只保留最后一次结果
+    const requestSeqRef = useRef(0);
+    const abortRef = useRef<AbortController | null>(null);
+
+    useEffect(() => {
+        return () => abortRef.current?.abort();
+    }, []);
 
     const handleExportPrint = () => {
         const params = new URLSearchParams();
@@ -155,13 +163,13 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
             await apiClient.post("/api/error-items/batch-delete", {
                 ids: Array.from(selectedIds),
             });
-            alert(t.notebook?.batchDeleteSuccess || "Deleted successfully");
+            toast.success(t.notebook?.batchDeleteSuccess || "Deleted successfully");
             setIsSelectMode(false);
             setSelectedIds(new Set());
             fetchItems();
         } catch (error) {
             console.error(error);
-            alert(t.common?.messages?.deleteFailed || "Delete failed");
+            toast.error(t.common?.messages?.deleteFailed || "Delete failed");
         } finally {
             setIsDeleting(false);
         }
@@ -171,31 +179,42 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
     const prevFiltersRef = useRef({ search, masteryFilter, timeFilter, selectedTag, subjectId, gradeFilter, chapterFilter, paperLevelFilter });
 
     useEffect(() => {
-        const prevFilters = prevFiltersRef.current;
-        const filtersChanged =
-            prevFilters.search !== search ||
-            prevFilters.masteryFilter !== masteryFilter ||
-            prevFilters.timeFilter !== timeFilter ||
-            prevFilters.selectedTag !== selectedTag ||
-            prevFilters.subjectId !== subjectId ||
-            prevFilters.gradeFilter !== gradeFilter ||
-            prevFilters.chapterFilter !== chapterFilter ||
-            prevFilters.paperLevelFilter !== paperLevelFilter;
+        // 250ms 防抖：避免输入每个字符都触发一次列表请求
+        const timer = setTimeout(() => {
+            const prevFilters = prevFiltersRef.current;
+            const filtersChanged =
+                prevFilters.search !== search ||
+                prevFilters.masteryFilter !== masteryFilter ||
+                prevFilters.timeFilter !== timeFilter ||
+                prevFilters.selectedTag !== selectedTag ||
+                prevFilters.subjectId !== subjectId ||
+                prevFilters.gradeFilter !== gradeFilter ||
+                prevFilters.chapterFilter !== chapterFilter ||
+                prevFilters.paperLevelFilter !== paperLevelFilter;
 
-        // 更新 ref
-        prevFiltersRef.current = { search, masteryFilter, timeFilter, selectedTag, subjectId, gradeFilter, chapterFilter, paperLevelFilter };
+            // 更新 ref
+            prevFiltersRef.current = { search, masteryFilter, timeFilter, selectedTag, subjectId, gradeFilter, chapterFilter, paperLevelFilter };
 
-        if (filtersChanged && page !== 1) {
-            // 筛选条件变化且不在第一页，重置到第一页（会再次触发此 effect）
-            setPage(1);
-            return;
-        }
+            if (filtersChanged && page !== 1) {
+                // 筛选条件变化且不在第一页，重置到第一页（会再次触发此 effect）
+                setPage(1);
+                return;
+            }
 
-        // 正常请求数据
-        fetchItems();
+            // 正常请求数据
+            fetchItems();
+        }, 250);
+
+        return () => clearTimeout(timer);
     }, [page, search, masteryFilter, timeFilter, selectedTag, subjectId, gradeFilter, chapterFilter, paperLevelFilter]);
 
     const fetchItems = async () => {
+        const seq = ++requestSeqRef.current;
+        // 取消上一次仍在进行的请求
+        abortRef.current?.abort();
+        const controller = new AbortController();
+        abortRef.current = controller;
+
         setLoading(true);
         try {
             const params = new URLSearchParams();
@@ -217,14 +236,20 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
             params.append("page", page.toString());
             params.append("pageSize", pageSize.toString());
 
-            const response = await apiClient.get<PaginatedResponse<ErrorItem>>(`/api/error-items/list?${params.toString()}`);
+            const response = await apiClient.get<PaginatedResponse<ErrorItem>>(`/api/error-items/list?${params.toString()}`, { signal: controller.signal });
+            // 已被更新的请求取代，丢弃结果
+            if (seq !== requestSeqRef.current) return;
             setItems(response.items);
             setTotal(response.total);
             setTotalPages(response.totalPages);
         } catch (error) {
+            // 主动取消的请求不当作错误
+            if (seq !== requestSeqRef.current || controller.signal.aborted) return;
             console.error(error);
         } finally {
-            setLoading(false);
+            if (seq === requestSeqRef.current) {
+                setLoading(false);
+            }
         }
     };
 

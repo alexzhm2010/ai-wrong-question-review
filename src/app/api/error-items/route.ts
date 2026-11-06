@@ -108,8 +108,9 @@ export async function POST(req: Request) {
             logger.debug({ finalGradeSemester, educationStage: user.educationStage, enrollmentYear: user.enrollmentYear }, 'Grade calculated');
         }
 
-        // 处理知识点标签
+        // 处理知识点标签（先去重并批量查询，避免为每个标签单独查库）
         const tagNames: string[] = Array.isArray(knowledgePoints) ? knowledgePoints : [];
+        const uniqueTagNames = Array.from(new Set(tagNames.filter((name): name is string => typeof name === 'string' && name.trim().length > 0)));
         const tagConnections: { id: string }[] = [];
 
         // 推断学科
@@ -117,41 +118,48 @@ export async function POST(req: Request) {
         const subjectKey = inferSubjectFromName(subject?.name ?? null) || 'other';
         logger.debug({ subjectId, subjectName: subject?.name, subjectKey }, 'Subject inferred');
 
-        // 处理每个标签
-        for (const tagName of tagNames) {
-            try {
-                let tag = await prisma.knowledgeTag.findFirst({
-                    where: {
-                        name: tagName,
-                        OR: [
-                            { isSystem: true },
-                            { userId: user.id },
-                        ],
-                    },
+        if (uniqueTagNames.length > 0) {
+            const existingTags = await prisma.knowledgeTag.findMany({
+                where: {
+                    name: { in: uniqueTagNames },
+                    OR: [
+                        { isSystem: true },
+                        { userId: user.id },
+                    ],
+                },
+                orderBy: { isSystem: 'desc' },
+            });
+
+            const tagByName = new Map<string, { id: string }>();
+            for (const tag of existingTags) {
+                if (!tagByName.has(tag.name)) tagByName.set(tag.name, tag);
+            }
+
+            const missingNames = uniqueTagNames.filter((name) => !tagByName.has(name));
+            if (missingNames.length > 0) {
+                // 父级只计算一次
+                const parentId = await findParentTagIdForGrade(finalGradeSemester, subjectKey);
+                await prisma.knowledgeTag.createMany({
+                    data: missingNames.map((name) => ({
+                        name,
+                        subject: subjectKey,
+                        isSystem: false,
+                        userId: user.id,
+                        parentId,
+                    })),
                 });
-
-                if (!tag) {
-                    const parentId = await findParentTagIdForGrade(finalGradeSemester, subjectKey);
-                    logger.debug({ tagName, parentId, subjectKey }, 'Creating new custom tag');
-
-                    tag = await prisma.knowledgeTag.create({
-                        data: {
-                            name: tagName,
-                            subject: subjectKey,
-                            isSystem: false,
-                            userId: user.id,
-                            parentId: parentId,
-                        },
-                    });
-                    logger.debug({ tagId: tag.id, tagName }, 'Custom tag created');
-                } else {
-                    logger.debug({ tagId: tag.id, tagName, isSystem: tag.isSystem }, 'Existing tag found');
+                const createdTags = await prisma.knowledgeTag.findMany({
+                    where: { name: { in: missingNames }, userId: user.id },
+                });
+                for (const tag of createdTags) {
+                    if (!tagByName.has(tag.name)) tagByName.set(tag.name, tag);
                 }
+                logger.debug({ createdCount: createdTags.length, parentId, subjectKey }, 'Custom tags created');
+            }
 
-                tagConnections.push({ id: tag.id });
-            } catch (tagError) {
-                logger.error({ tagName, error: tagError }, 'Error processing tag');
-                throw tagError;
+            for (const name of uniqueTagNames) {
+                const tag = tagByName.get(name);
+                if (tag) tagConnections.push({ id: tag.id });
             }
         }
 

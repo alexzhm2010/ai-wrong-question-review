@@ -18,6 +18,7 @@ import {
 import { Trash2, Ban, CheckCircle, Loader2 } from "lucide-react";
 import { apiClient } from "@/lib/api-client";
 import { AdminUser, AppConfig } from "@/types/api";
+import { toast } from "@/lib/toast";
 
 export function UserManagement() {
     const { data: session } = useSession();
@@ -48,7 +49,7 @@ export function UserManagement() {
             setAllowRegistration(checked);
         } catch (error) {
             console.error("Failed to update registration setting", error);
-            alert(t.common.error);
+            toast.error(t.common.error);
         } finally {
             setSavingRegistration(false);
         }
@@ -78,7 +79,7 @@ export function UserManagement() {
             fetchUsers();
         } catch (error) {
             console.error("Failed to update user status", error);
-            alert(t.common.error);
+            toast.error(t.common.error);
         }
     };
 
@@ -91,7 +92,7 @@ export function UserManagement() {
         } catch (error: any) {
             console.error("Failed to delete user", error);
             const text = error.data?.message || t.common.error;
-            alert(text);
+            toast.error(text);
         }
     };
 

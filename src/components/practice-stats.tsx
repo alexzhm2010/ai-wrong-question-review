@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, Legend } from "recharts";
@@ -52,6 +52,12 @@ export function PracticeStats() {
     const { t, language } = useLanguage();
     const [stats, setStats] = useState<PracticeStatsData | null>(null);
     const [loading, setLoading] = useState(true);
+    // 仅客户端挂载后再渲染图表，避免首屏容器宽高为 -1 的 recharts 警告
+    const mounted = useSyncExternalStore(
+        () => () => {},
+        () => true,
+        () => false
+    );
 
     useEffect(() => {
         apiClient.get<PracticeStatsData>("/api/stats/practice")
@@ -136,8 +142,9 @@ export function PracticeStats() {
                     <CardHeader>
                         <CardTitle>{t.stats?.subjectDistribution || "Subject Distribution"}</CardTitle>
                     </CardHeader>
-                    <CardContent className="h-[300px]">
-                        <ResponsiveContainer width="100%" height="100%">
+                    <CardContent className="h-[300px] min-h-[300px] w-full min-w-0">
+                        {mounted && stats.subjectStats.length > 0 && (
+                        <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                             <PieChart>
                                 <Pie
                                     data={stats.subjectStats}
@@ -157,6 +164,7 @@ export function PracticeStats() {
                                 <Tooltip />
                             </PieChart>
                         </ResponsiveContainer>
+                        )}
                     </CardContent>
                 </Card>
 
@@ -165,8 +173,9 @@ export function PracticeStats() {
                     <CardHeader>
                         <CardTitle>{t.stats?.weeklyTrend || "Monthly Trend"}</CardTitle>
                     </CardHeader>
-                    <CardContent className="h-[300px]">
-                        <ResponsiveContainer width="100%" height="100%">
+                    <CardContent className="h-[300px] min-h-[300px] w-full min-w-0">
+                        {mounted && stats.activityStats.length > 0 && (
+                        <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                             <BarChart data={stats.activityStats} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
                                 <XAxis
@@ -201,6 +210,7 @@ export function PracticeStats() {
                                 ))}
                             </BarChart>
                         </ResponsiveContainer>
+                        )}
                     </CardContent>
                 </Card>
             </div>

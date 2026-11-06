@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell } from "recharts";
 
@@ -15,6 +15,13 @@ export function WrongAnswerStats() {
     const [data, setData] = useState<AnalyticsData | null>(null);
     const [loading, setLoading] = useState(true);
     const { t, language } = useLanguage();
+
+    // 仅客户端挂载后再渲染图表，避免首屏容器宽高为 -1 的 recharts 警告
+    const mounted = useSyncExternalStore(
+        () => () => {},
+        () => true,
+        () => false
+    );
 
     const CustomTooltip = ({ active, payload, label }: any) => {
         if (active && payload && payload.length) {
@@ -108,8 +115,9 @@ export function WrongAnswerStats() {
                     <CardHeader>
                         <CardTitle>{t.wrongAnswerStats.SubjectDistribution}</CardTitle>
                     </CardHeader>
-                    <CardContent className="h-[300px]">
-                        <ResponsiveContainer width="100%" height="100%">
+                    <CardContent className="h-[300px] min-h-[300px] w-full min-w-0">
+                        {mounted && data.subjectStats.length > 0 && (
+                        <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                             <PieChart>
                                 <Pie
                                     data={data.subjectStats}
@@ -129,6 +137,7 @@ export function WrongAnswerStats() {
                                 <Tooltip />
                             </PieChart>
                         </ResponsiveContainer>
+                        )}
                     </CardContent>
                 </Card>
 
@@ -137,8 +146,9 @@ export function WrongAnswerStats() {
                     <CardHeader>
                         <CardTitle>{t.wrongAnswerStats.MonthlyTrend}</CardTitle>
                     </CardHeader>
-                    <CardContent className="h-[300px]">
-                        <ResponsiveContainer width="100%" height="100%">
+                    <CardContent className="h-[300px] min-h-[300px] w-full min-w-0">
+                        {mounted && data.activityData.length > 0 && (
+                        <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                             <BarChart data={data.activityData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                                 <defs>
                                     <linearGradient id="colorCount" x1="0" y1="0" x2="0" y2="1">
@@ -171,6 +181,7 @@ export function WrongAnswerStats() {
                                 />
                             </BarChart>
                         </ResponsiveContainer>
+                        )}
                     </CardContent>
                 </Card>
             </div>

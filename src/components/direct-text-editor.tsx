@@ -13,6 +13,7 @@ import { NotebookSelector } from "@/components/notebook-selector";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { inferSubjectFromName } from "@/lib/knowledge-tags";
 import type { MistakeStatus } from "@/lib/mistake-status";
+import { toast } from "@/lib/toast";
 
 interface DirectTextEditorProps {
     onSubmit: (data: {
@@ -50,7 +51,7 @@ export function DirectTextEditor({ onSubmit, defaultNotebookId, defaultNotebookN
     const handleSubmit = async () => {
         if (!questionText.trim()) return;
         if (!subjectId) {
-            alert(t.editor.messages?.selectNotebook || "请选择错题本");
+            toast.info(t.editor.messages?.selectNotebook || "请选择错题本");
             return;
         }
 

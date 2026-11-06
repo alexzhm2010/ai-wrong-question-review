@@ -50,7 +50,7 @@ export interface ErrorItem {
     userId: string;
     subjectId?: string | null;
     subject?: Notebook | null;
-    originalImageUrl: string;
+    originalImageUrl?: string;
     ocrText?: string | null;
     questionText?: string | null;
     answerText?: string | null;

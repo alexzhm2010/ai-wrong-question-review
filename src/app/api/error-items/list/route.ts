@@ -144,16 +144,47 @@ export async function GET(req: Request) {
         });
 
         // 分页查询
-        const errorItems = await prisma.errorItem.findMany({
+        // 默认不返回 base64 图片、OCR 原文与 AI 解析等大字段，避免列表接口达到数 MB；
+        // 打印预览等需要完整数据的场景显式传 includeImage=true。
+        const includeImage = searchParams.get("includeImage") === "true";
+        const baseQuery = {
             where: whereClause,
-            orderBy: { createdAt: "desc" },
-            include: {
-                subject: true,
-                tags: true,
-            },
+            orderBy: { createdAt: "desc" as const },
             skip: (page - 1) * pageSize,
             take: pageSize,
-        });
+        };
+
+        const errorItems = includeImage
+            ? await prisma.errorItem.findMany({
+                ...baseQuery,
+                include: {
+                    subject: true,
+                    tags: true,
+                },
+            })
+            : await prisma.errorItem.findMany({
+                ...baseQuery,
+                select: {
+                    id: true,
+                    userId: true,
+                    subjectId: true,
+                    questionText: true,
+                    answerText: true,
+                    wrongAnswerText: true,
+                    knowledgePoints: true,
+                    mistakeStatus: true,
+                    masteryLevel: true,
+                    gradeSemester: true,
+                    paperLevel: true,
+                    source: true,
+                    errorType: true,
+                    userNotes: true,
+                    createdAt: true,
+                    updatedAt: true,
+                    subject: true,
+                    tags: true,
+                },
+            });
 
         const totalPages = Math.ceil(total / pageSize);
 
