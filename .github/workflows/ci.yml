@@ -98,7 +98,9 @@ jobs:
         run: npm run build
 
   e2e-test:
-    runs-on: ubuntu-latest
+    # 固定到 24.04：ubuntu-latest 已滚动到 26.04，Playwright 1.57 尚不支持，
+    # `playwright install --with-deps` 会报 "does not support chromium on ubuntu26.04-x64"。
+    runs-on: ubuntu-24.04
     name: E2E Tests
     needs: build-check
     timeout-minutes: 60
