@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: ai-wrong-question-review
+    name: wrong_review
     runtime: docker
     dockerfilePath: ./Dockerfile
     plan: free
