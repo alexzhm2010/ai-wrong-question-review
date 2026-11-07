@@ -82,7 +82,9 @@ test('Admin can configure OpenAI settings with multi-instance support', async ({
     // Verify values match
     // First combobox should be AI Provider, second should be instance selector
     await expect(page.locator('button[role="combobox"]').first()).toHaveText('OpenAI / Compatible');
-    await expect(page.locator('input[placeholder="sk-..."]')).toHaveValue(apiKey);
+    // API key is masked on read-back (never rendered in plaintext again).
+    await expect(page.locator('input[placeholder="sk-..."]')).toHaveValue('********');
+    await expect(page.locator('input[placeholder="sk-..."]')).not.toHaveValue(apiKey);
     await expect(page.locator('input[placeholder="https://api.openai.com/v1"]')).toHaveValue(baseURL);
     await expect(page.locator('input[placeholder="gpt-4o"]')).toHaveValue(modelName);
 });
