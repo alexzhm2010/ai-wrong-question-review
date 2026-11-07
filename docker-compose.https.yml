@@ -31,7 +31,8 @@ services:
       # 替换为你的实际访问地址
       - NEXTAUTH_URL=https://YOUR_IP_OR_DOMAIN
       - NEXTAUTH_SECRET=your_secret_key_here
-      - AUTH_TRUST_HOST=true
+      # 管理员初始密码（生产必填，勿用默认值）
+      - ADMIN_PASSWORD=change-me-before-exposing
       
       # === HTTPS 配置 ===
       # 启用内置 HTTPS

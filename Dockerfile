@@ -74,7 +74,8 @@ ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
 # 数据库连接信息由部署环境注入（Supabase）
-ENV AUTH_TRUST_HOST=true
+# 注：next-auth v4 不读取 AUTH_TRUST_HOST / AUTH_SECRET，请勿再设置这两个变量。
+# 会话密钥使用 NEXTAUTH_SECRET，访问地址使用 NEXTAUTH_URL。
 
 # Use entrypoint script to handle DB initialization
 ENTRYPOINT ["./docker-entrypoint.sh"]

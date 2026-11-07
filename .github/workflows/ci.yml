@@ -77,7 +77,7 @@ jobs:
     env:
       DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/test"
       DIRECT_URL: "postgresql://postgres:postgres@localhost:5432/test"
-      AUTH_SECRET: "ci-placeholder-secret"
+      NEXTAUTH_SECRET: "ci-placeholder-secret"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

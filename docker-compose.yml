@@ -11,8 +11,12 @@ services:
       # Supabase 连接串（连接池 6543，迁移直连 5432）
       - DATABASE_URL=postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1
       - DIRECT_URL=postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
-      - AUTH_SECRET=your_secret_key
-      - AUTH_TRUST_HOST=true
+      # next-auth v4 只读取 NEXTAUTH_SECRET（AUTH_SECRET 是 v5 变量，不会生效）
+      - NEXTAUTH_SECRET=your_secret_key
+      - NEXTAUTH_URL=http://localhost:3000
+      # 首个管理员账号，生产环境请改成强密码
+      - ADMIN_EMAIL=admin@localhost
+      - ADMIN_PASSWORD=change-me-before-exposing
       # AI：通义千问 VL
       - AI_PROVIDER=openai
       - OPENAI_API_KEY=sk-xxxx

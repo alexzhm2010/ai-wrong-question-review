@@ -70,7 +70,8 @@ services:
       - CERT_DOMAIN=YOUR_IP_OR_DOMAIN  # 替换为你的 IP 或域名
       - NEXTAUTH_URL=https://YOUR_IP_OR_DOMAIN
       - NEXTAUTH_SECRET=your_secret_key
-      - AUTH_TRUST_HOST=true
+      # 管理员初始密码（生产必填）
+      - ADMIN_PASSWORD=change-me-before-exposing
     volumes:
       - ./certs:/app/certs  # 证书持久化
 ```
@@ -100,7 +101,8 @@ docker logs wrong-notebook | grep -i cert
 | `HTTPS_ENABLED` | 是 | - | 设为 `true` 启用 HTTPS |
 | `CERT_DOMAIN` | 否 | `localhost` | 证书的 CN（你的 IP 或域名） |
 | `NEXTAUTH_URL` | 是 | - | 完整访问地址 |
-| `AUTH_TRUST_HOST` | 是 | - | 设为 `true` |
+| `ADMIN_PASSWORD` | 是 | - | 首个管理员密码，务必使用强密码；未设置时生产模式会生成随机密码并打印到启动日志 |
+| `NEXTAUTH_SECRET` | 是 | - | 会话加密密钥（next-auth v4 变量；`AUTH_SECRET` / `AUTH_TRUST_HOST` 是 v5 变量，本项目不会读取） |
 | `HTTPS_PORT` | 否 | `443` | HTTPS 监听端口 |
 
 ### 使用自定义证书

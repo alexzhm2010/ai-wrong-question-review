@@ -181,4 +181,62 @@ describe('seed-admin docker helper', () => {
             },
         });
     });
+
+    it('uses injected admin credentials when provided', async () => {
+        const prisma = {
+            user: {
+                findUnique: vi.fn().mockResolvedValue(null),
+                create: vi.fn().mockResolvedValue({}),
+                update: vi.fn(),
+            },
+        };
+        const hash = vi.fn().mockResolvedValue('hashed-strong-password');
+        const { seedAdmin, DEFAULT_ADMIN } = require('../../../../scripts/seed-admin.js');
+
+        const result = await seedAdmin({
+            prisma,
+            hash,
+            admin: { ...DEFAULT_ADMIN, email: 'ops@example.com', password: 'a-strong-password' },
+        });
+
+        expect(result).toEqual({ action: 'created', email: 'ops@example.com' });
+        expect(hash).toHaveBeenCalledWith('a-strong-password', 12);
+        expect(prisma.user.create).toHaveBeenCalledWith(
+            expect.objectContaining({ data: expect.objectContaining({ email: 'ops@example.com' }) }),
+        );
+    });
+
+    describe('resolveAdminCredentials', () => {
+        const { resolveAdminCredentials } = require('../../../../scripts/seed-admin.js');
+
+        it('uses explicitly configured credentials', () => {
+            expect(resolveAdminCredentials({
+                ADMIN_EMAIL: 'ops@example.com',
+                ADMIN_PASSWORD: 'a-strong-password',
+                NODE_ENV: 'production',
+            })).toEqual({
+                email: 'ops@example.com',
+                password: 'a-strong-password',
+                generated: false,
+            });
+        });
+
+        it('generates a random strong password in production when none is set', () => {
+            const first = resolveAdminCredentials({ NODE_ENV: 'production' });
+            const second = resolveAdminCredentials({ NODE_ENV: 'production' });
+            expect(first.generated).toBe(true);
+            expect(first.email).toBe('admin@localhost');
+            expect(first.password.length).toBeGreaterThan(20);
+            expect(first.password).not.toBe('123456');
+            expect(first.password).not.toBe(second.password);
+        });
+
+        it('keeps the development default outside production', () => {
+            expect(resolveAdminCredentials({ NODE_ENV: 'test' })).toEqual({
+                email: 'admin@localhost',
+                password: '123456',
+                generated: false,
+            });
+        });
+    });
 });

@@ -65,8 +65,10 @@
    |---|---|
    | `DATABASE_URL` | Supabase 连接池连接串（6543） |
    | `DIRECT_URL` | Supabase 直连串（5432），用于迁移 |
-   | `AUTH_SECRET` | 随机会话密钥，可用 `openssl rand -base64 32` 生成 |
-   | `AUTH_TRUST_HOST` | 设为 `true` |
+   | `NEXTAUTH_SECRET` | 随机会话密钥，可用 `openssl rand -base64 32` 生成（项目为 next-auth **v4**，`AUTH_SECRET` 无效） |
+   | `NEXTAUTH_URL` | 部署后的完整访问地址，如 `https://xxx.vercel.app` |
+   | `ADMIN_EMAIL` | 首个管理员邮箱，默认 `admin@localhost` |
+   | `ADMIN_PASSWORD` | 首个管理员密码，**必须设置强密码** |
    | `AI_PROVIDER` | 设为 `openai` |
    | `OPENAI_API_KEY` | 通义千问 API Key |
    | `OPENAI_BASE_URL` | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
@@ -90,8 +92,9 @@
 
 1. 打开 https://dashboard.render.com/blueprints → **New Blueprint Instance**
 2. 选择本仓库，Render 会自动读取 `render.yaml` 创建 Web Service
-3. 在环境变量页填写 `DATABASE_URL`、`DIRECT_URL`、`OPENAI_API_KEY`，点击 **Apply**
-4. 首次部署会自动执行 `prisma migrate deploy` 创建数据表
+3. 在环境变量页填写 `DATABASE_URL`、`DIRECT_URL`、`OPENAI_API_KEY`、`ADMIN_PASSWORD`，点击 **Apply**；服务创建后再把 `NEXTAUTH_URL` 补成实际域名 `https://xxx.onrender.com`
+4. 首次部署会自动执行 `prisma migrate deploy` 创建数据表，并由 `seed-admin` 用 `ADMIN_PASSWORD` 创建首个管理员（`ADMIN_EMAIL`，默认 `admin@localhost`）
+5. 用该账号登录并立即修改密码。**注册默认关闭**，如需开放请在设置页手动开启
 
 > 免费实例闲置 15 分钟后会休眠，首次访问需等待约 30–60 秒冷启动；需要常驻可升级到 Starter（$7/月）。
 
@@ -107,7 +110,9 @@
 docker run -d --name ai-wrong-review \
   -e DATABASE_URL="postgresql://...supabase连接池地址:6543/postgres?pgbouncer=true&connection_limit=1" \
   -e DIRECT_URL="postgresql://...supabase直连地址:5432/postgres" \
-  -e AUTH_SECRET="your_secret_key" \
+  -e NEXTAUTH_SECRET="your_secret_key" \
+  -e NEXTAUTH_URL="http://localhost:3000" \
+  -e ADMIN_PASSWORD="change-me-before-exposing" \
   -e OPENAI_API_KEY="sk-..." \
   -e OPENAI_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1" \
   -e OPENAI_MODEL="qwen3-vl-plus" \
@@ -173,7 +178,9 @@ cp .env.example .env
 | `DIRECT_URL` | 迁移直连地址 | 无 | Supabase 直连串（端口 5432），仅 `prisma migrate` 使用 |
 | `NEXTAUTH_SECRET` | Auth 密钥 | 无 | 用于加密 Session，生产环境建议设置,可以使用 openssl rand -base64 32 生成一个随机字符串作为密钥 |
 | `NEXTAUTH_URL` | 访问地址 | `http://your-domain-name:3000` | 部署后的访问地址 |
-| `AUTH_TRUST_HOST` | 信任主机头 | `true` | 设置为 `true` 时自动推断 URL，适合 Docker/PaaS |
+| `AUTH_TRUST_HOST` | — | — | **已废弃**：Auth.js v5 变量，本项目 next-auth v4 不会读取，设置无效 |
+| `ADMIN_EMAIL` | 首个管理员邮箱 | `admin@localhost` | 容器首次启动时由 `seed-admin` 创建 |
+| `ADMIN_PASSWORD` | 首个管理员密码 | 生产自动生成 | 建议显式设置强密码；生产未设置时会生成随机密码并打印到启动日志（仅显示一次） |
 | `LOG_LEVEL` | 日志级别 | `debug` (开发) / `info` (生产) | 可选值：`trace`, `debug`, `info`, `warn`, `error`, `fatal` |
 | `HTTP_PROXY` | HTTP 代理 | 无 | 设置 HTTP 代理 |
 | `HTTPS_PROXY` | HTTPS 代理 | 无 | 设置 HTTPS 代理 |
