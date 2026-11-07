@@ -1,3 +1,5 @@
+# Blueprint ai_wrong_question：此文件只定义单个 Web 服务。
+# 服务名请勿随意变更：改名会让 Render 按新名字另建服务，并可能给 onrender.com 域名加上消歧后缀。
 services:
   - type: web
     name: wrong_review
