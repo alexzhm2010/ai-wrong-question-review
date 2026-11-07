@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mocks = vi.hoisted(() => ({
     mockPrismaErrorItem: {
         findUnique: vi.fn(),
+        findFirst: vi.fn(), // C-02 后改为带 userId 的 findFirst
     },
     mockPrismaPracticeRecord: {
         create: vi.fn(),
@@ -67,7 +68,7 @@ describe('/api/practice', () => {
         };
 
         it('应该成功生成类似题目', async () => {
-            mocks.mockPrismaErrorItem.findUnique.mockResolvedValue(mockErrorItem);
+            mocks.mockPrismaErrorItem.findFirst.mockResolvedValue(mockErrorItem);
             const aiResult = {
                 questionText: '求解 2x - 3 = 7',
                 answerText: 'x = 5',
@@ -96,7 +97,7 @@ describe('/api/practice', () => {
         });
 
         it('应该支持不同难度级别', async () => {
-            mocks.mockPrismaErrorItem.findUnique.mockResolvedValue(mockErrorItem);
+            mocks.mockPrismaErrorItem.findFirst.mockResolvedValue(mockErrorItem);
             mocks.mockAIService.generateSimilarQuestion.mockResolvedValue({
                 questionText: '简单题目',
                 answerText: '答案',
@@ -126,7 +127,7 @@ describe('/api/practice', () => {
         });
 
         it('应该默认使用 medium 难度', async () => {
-            mocks.mockPrismaErrorItem.findUnique.mockResolvedValue(mockErrorItem);
+            mocks.mockPrismaErrorItem.findFirst.mockResolvedValue(mockErrorItem);
             mocks.mockAIService.generateSimilarQuestion.mockResolvedValue({
                 questionText: '题目',
                 answerText: '答案',
@@ -156,7 +157,7 @@ describe('/api/practice', () => {
         });
 
         it('应该返回 404 当错题不存在', async () => {
-            mocks.mockPrismaErrorItem.findUnique.mockResolvedValue(null);
+            mocks.mockPrismaErrorItem.findFirst.mockResolvedValue(null);
 
             const request = new Request('http://localhost/api/practice/generate', {
                 method: 'POST',
@@ -174,8 +175,28 @@ describe('/api/practice', () => {
             expect(data.message).toBe('Item not found');
         });
 
+        it('C-02 回归：查询必须带 userId，不能按 id 直查他人题目', async () => {
+            mocks.mockPrismaErrorItem.findFirst.mockResolvedValue(null);
+
+            const request = new Request('http://localhost/api/practice/generate', {
+                method: 'POST',
+                body: JSON.stringify({ errorItemId: 'another-users-item', language: 'zh' }),
+                headers: { 'Content-Type': 'application/json' },
+            });
+
+            const response = await GENERATE_POST(request);
+
+            expect(response.status).toBe(404);
+            expect(mocks.mockPrismaErrorItem.findFirst).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    where: { id: 'another-users-item', userId: 'user-123' },
+                })
+            );
+            expect(mocks.mockAIService.generateSimilarQuestion).not.toHaveBeenCalled();
+        });
+
         it('应该正确解析知识点标签', async () => {
-            mocks.mockPrismaErrorItem.findUnique.mockResolvedValue(mockErrorItem);
+            mocks.mockPrismaErrorItem.findFirst.mockResolvedValue(mockErrorItem);
             mocks.mockAIService.generateSimilarQuestion.mockResolvedValue({
                 questionText: '题目',
                 answerText: '答案',
@@ -208,7 +229,7 @@ describe('/api/practice', () => {
                 ...mockErrorItem,
                 knowledgePoints: 'invalid json{',
             };
-            mocks.mockPrismaErrorItem.findUnique.mockResolvedValue(errorItemWithInvalidTags);
+            mocks.mockPrismaErrorItem.findFirst.mockResolvedValue(errorItemWithInvalidTags);
             mocks.mockAIService.generateSimilarQuestion.mockResolvedValue({
                 questionText: '题目',
                 answerText: '答案',
@@ -243,7 +264,7 @@ describe('/api/practice', () => {
                 ...mockErrorItem,
                 knowledgePoints: null,
             };
-            mocks.mockPrismaErrorItem.findUnique.mockResolvedValue(errorItemWithNoTags);
+            mocks.mockPrismaErrorItem.findFirst.mockResolvedValue(errorItemWithNoTags);
             mocks.mockAIService.generateSimilarQuestion.mockResolvedValue({
                 questionText: '题目',
                 answerText: '答案',
@@ -270,7 +291,7 @@ describe('/api/practice', () => {
                 ...mockErrorItem,
                 subject: { id: 'physics', name: '物理' },
             };
-            mocks.mockPrismaErrorItem.findUnique.mockResolvedValue(errorItemWithPhysics);
+            mocks.mockPrismaErrorItem.findFirst.mockResolvedValue(errorItemWithPhysics);
             mocks.mockAIService.generateSimilarQuestion.mockResolvedValue({
                 questionText: '物理题目',
                 answerText: '答案',
@@ -300,7 +321,7 @@ describe('/api/practice', () => {
                 ...mockErrorItem,
                 subject: { id: 'unknown', name: '未知学科' },
             };
-            mocks.mockPrismaErrorItem.findUnique.mockResolvedValue(errorItemWithUnknownSubject);
+            mocks.mockPrismaErrorItem.findFirst.mockResolvedValue(errorItemWithUnknownSubject);
             mocks.mockAIService.generateSimilarQuestion.mockResolvedValue({
                 questionText: '题目',
                 answerText: '答案',
@@ -329,7 +350,7 @@ describe('/api/practice', () => {
                 ...mockErrorItem,
                 subject: null,
             };
-            mocks.mockPrismaErrorItem.findUnique.mockResolvedValue(errorItemWithNoSubject);
+            mocks.mockPrismaErrorItem.findFirst.mockResolvedValue(errorItemWithNoSubject);
             mocks.mockAIService.generateSimilarQuestion.mockResolvedValue({
                 questionText: '题目',
                 answerText: '答案',
@@ -354,7 +375,7 @@ describe('/api/practice', () => {
         });
 
         it('应该处理 AI 服务错误', async () => {
-            mocks.mockPrismaErrorItem.findUnique.mockResolvedValue(mockErrorItem);
+            mocks.mockPrismaErrorItem.findFirst.mockResolvedValue(mockErrorItem);
             mocks.mockAIService.generateSimilarQuestion.mockRejectedValue(
                 new Error('AI service unavailable')
             );

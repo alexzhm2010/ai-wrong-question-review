@@ -41,6 +41,18 @@ vi.mock('@/lib/config', () => ({
     updateAppConfig: mocks.mockUpdateAppConfig,
 }));
 
+// Mock next-auth：原测试缺少该 mock，getServerSession 会在单元测试环境
+// 调用 Next.js 的 headers() 并抛出 "called outside a request scope"。
+vi.mock('next-auth', () => ({
+    getServerSession: vi.fn(() => Promise.resolve({
+        user: { id: 'admin-1', email: 'admin@localhost', role: 'admin' },
+    })),
+}));
+
+vi.mock('@/lib/auth', () => ({
+    authOptions: {},
+}));
+
 // Import after mocks
 import { GET, POST } from '@/app/api/settings/route';
 
@@ -65,8 +77,9 @@ describe('/api/settings', () => {
             const response = await GET();
             const data = await response.json();
 
-            expect(data.openai.instances[0].apiKey).toBe('sk-test-key');
-            expect(data.gemini.apiKey).toBe('AIza-test-key');
+            // GET /api/settings 对密钥做掩码（安全行为），不应返回明文
+            expect(data.openai.instances[0].apiKey).toBe('********');
+            expect(data.gemini.apiKey).toBe('********');
             expect(data.gemini.model).toBe('gemini-2.5-flash');
         });
 

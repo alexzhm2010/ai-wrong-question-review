@@ -1,20 +1,32 @@
 import { NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
 import { prisma } from "@/lib/prisma";
+import { authOptions } from "@/lib/auth";
+import { unauthorized } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
 
 const logger = createLogger('api:tags:stats');
 
 export const dynamic = "force-dynamic";
 
-
 /**
  * GET /api/tags/stats
- * 获取标签使用频率统计
+ * 获取当前登录用户的标签使用频率统计
+ *
+ * H-02：原实现无鉴权且 findMany 不带 where，匿名即可拿到全站知识点分布
+ * 与错题总数；现在强制登录并把 userId 放进查询条件。
+ * 注：knowledgePoints 是 JSON 字符串列，暂时仍需拉回内存统计；数据量增大后
+ * 应迁移到 KnowledgeTag 关联表的数据库侧聚合（见 P2 建议）。
  */
-export async function GET(req: Request) {
+export async function GET(_req?: Request) {
+    const session = await getServerSession(authOptions);
+    if (!session?.user) {
+        return unauthorized("Authentication required");
+    }
+
     try {
-        // 获取所有错题的知识点
         const errorItems = await prisma.errorItem.findMany({
+            where: { userId: session.user.id },
             select: {
                 knowledgePoints: true,
             },

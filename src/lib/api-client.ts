@@ -27,16 +27,28 @@ async function request<T>(url: string, options: RequestOptions = {}): Promise<T>
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
+    // 若调用方也传了 signal，把它链接到内部控制器，而不是让它覆盖超时控制。
+    // 原实现把 ...rest 放在 signal 之后，外部 signal 会直接顶掉内部超时，
+    // 导致首页 AI 分析的超时设置实际失效。
+    const externalSignal = rest.signal;
+    const onExternalAbort = () => controller.abort();
+    if (externalSignal) {
+        if (externalSignal.aborted) controller.abort();
+        else externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+    }
+
     try {
         const res = await fetch(finalUrl, {
+            ...rest,
             headers: {
                 ...defaultHeaders,
                 ...headers,
             },
+            // 内部控制器必须放在最后，保证超时始终生效
             signal: controller.signal,
-            ...rest,
         });
         clearTimeout(timeoutId);
+        externalSignal?.removeEventListener('abort', onExternalAbort);
 
         if (!res.ok) {
             let errorData;
@@ -62,6 +74,7 @@ async function request<T>(url: string, options: RequestOptions = {}): Promise<T>
         }
     } catch (error) {
         clearTimeout(timeoutId);
+        externalSignal?.removeEventListener('abort', onExternalAbort);
         if (error instanceof Error && error.name === 'AbortError') {
             throw new ApiError(408, 'Request Timeout', {
                 message: 'AI_TIMEOUT_ERROR'

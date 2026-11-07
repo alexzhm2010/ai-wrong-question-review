@@ -39,7 +39,8 @@ describe('config module', () => {
 
             expect(findUniqueMock).toHaveBeenCalledWith({ where: { key: 'app_config' } });
             expect(config.aiProvider).toBe('gemini');
-            expect(config.allowRegistration).toBe(true);
+            // H-04：出厂默认关闭注册（fail-closed）
+            expect(config.allowRegistration).toBe(false);
         });
 
         it('应该从环境变量读取 AI Provider', async () => {

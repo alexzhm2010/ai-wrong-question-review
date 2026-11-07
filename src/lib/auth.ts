@@ -12,8 +12,9 @@ export const authOptions: NextAuthOptions = {
     session: {
         strategy: "jwt",
     },
-    // @ts-expect-error trustHost is a valid option in newer NextAuth versions but types might be lagging
-    trustHost: true,
+    // 注：trustHost 是 Auth.js v5 的配置项，本项目使用 next-auth v4（4.24.x），
+    // 该字段在 v4 中会被静默忽略。原来的 `@ts-expect-error` 只会掩盖类型错误，已移除。
+    // 代理环境下的 Host 信任由下方 cookies 的显式配置与 NEXTAUTH_URL 处理。
     pages: {
         signIn: "/login",
     },
@@ -126,5 +127,6 @@ logger.info({
     NODE_ENV: process.env.NODE_ENV,
     NEXTAUTH_URL: process.env.NEXTAUTH_URL,
     HAS_SECRET: !!process.env.NEXTAUTH_SECRET,
-    AUTH_TRUST_HOST: process.env.AUTH_TRUST_HOST
+    // AUTH_TRUST_HOST 同样是 v5 变量，v4 不会读取，不再记录以免误导排障
+    COOKIE_NAME: 'next-auth.session-token'
 }, 'AuthConfig loading');

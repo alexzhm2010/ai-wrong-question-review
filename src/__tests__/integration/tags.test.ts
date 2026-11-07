@@ -49,6 +49,22 @@ describe('/api/tags', () => {
     });
 
     describe('GET /api/tags/stats (标签统计)', () => {
+        // H-02：统计接口现在要求登录，且按 userId 过滤
+        beforeEach(() => {
+            mocks.mockGetServerSession.mockResolvedValue({
+                user: { id: 'user-1', email: 'test@example.com' },
+            });
+        });
+
+        it('H-02 回归：匿名访问应返回 401', async () => {
+            mocks.mockGetServerSession.mockResolvedValue(null);
+
+            const response = await GET_STATS(new Request('http://localhost/api/tags/stats'));
+
+            expect(response.status).toBe(401);
+            expect(mocks.mockPrismaErrorItem.findMany).not.toHaveBeenCalled();
+        });
+
         it('应该返回标签使用频率统计', async () => {
             const errorItems = [
                 { knowledgePoints: '["一元一次方程", "移项"]' },

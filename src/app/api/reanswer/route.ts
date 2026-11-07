@@ -51,16 +51,17 @@ export async function POST(req: Request) {
         const stack = error instanceof Error ? error.stack : undefined;
         logger.error({ error: errorMessageFromError, stack }, 'Reanswer error occurred');
 
-        let errorMessage = errorMessageFromError || "Failed to reanswer question";
+        // L-01：只把已知的标准化错误码透传给前端做国际化，
+        // 不再把上游 error.message（可能含端点、URL、网络细节）回显给调用方。
+        const KNOWN_AI_CODES = [
+            'AI_AUTH_ERROR',
+            'AI_CONNECTION_FAILED',
+            'AI_TIMEOUT_ERROR',
+            'AI_QUOTA_EXCEEDED',
+            'AI_RESPONSE_ERROR',
+        ] as const;
+        const matchedCode = KNOWN_AI_CODES.find(code => errorMessageFromError.includes(code));
 
-        if (errorMessageFromError.includes('AI_AUTH_ERROR')) {
-            errorMessage = 'AI_AUTH_ERROR';
-        } else if (errorMessageFromError === 'AI_CONNECTION_FAILED') {
-            errorMessage = 'AI_CONNECTION_FAILED';
-        } else if (errorMessageFromError === 'AI_RESPONSE_ERROR') {
-            errorMessage = 'AI_RESPONSE_ERROR';
-        }
-
-        return createErrorResponse(errorMessage, 500, ErrorCode.AI_ERROR);
+        return createErrorResponse(matchedCode || 'AI_UNKNOWN_ERROR', 500, ErrorCode.AI_ERROR);
     }
 }

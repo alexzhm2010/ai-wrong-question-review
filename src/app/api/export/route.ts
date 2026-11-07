@@ -52,9 +52,9 @@ export async function GET(req: Request) {
         });
 
         const reviewSchedules = await prisma.reviewSchedule.findMany({
-            where: exportAll
-                ? { errorItem: { userId: { not: undefined } } }
-                : { errorItem: { userId: user.id } },
+            // `not: undefined` 在 Prisma 中等价于不加约束，写法有误导性；
+            // 全量导出直接传空 where，与其它表的 userFilter 语义保持一致。
+            where: exportAll ? {} : { errorItem: { userId: user.id } },
         });
 
         const practiceRecords = await prisma.practiceRecord.findMany({

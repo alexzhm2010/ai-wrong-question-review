@@ -6,6 +6,7 @@ import { calculateGrade } from "@/lib/grade-calculator";
 import { inferSubjectFromName } from "@/lib/knowledge-tags";
 import { findParentTagIdForGrade } from "@/lib/tag-recognition";
 import { compare } from "bcryptjs";
+import { createHash, timingSafeEqual } from "node:crypto";
 
 const logger = createLogger('api:openclaw:batch-upload');
 
@@ -13,6 +14,16 @@ const MAX_IMAGES = 20;
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png'];
 const ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png'];
+
+/**
+ * L-02：常量时间比较集成 API Key。
+ * 先做 SHA-256 把两边都变成固定长度，避免长度不等时提前返回造成时序差异。
+ */
+function safeKeyEquals(provided: string, expected: string): boolean {
+    const a = createHash('sha256').update(provided, 'utf8').digest();
+    const b = createHash('sha256').update(expected, 'utf8').digest();
+    return timingSafeEqual(a, b);
+}
 
 interface ImageData {
     base64: string;
@@ -117,7 +128,20 @@ async function createErrorItem(
     const tagNames: string[] = Array.isArray(knowledgePoints) ? knowledgePoints : [];
     const tagConnections: { id: string }[] = [];
 
-    const subject = subjectId ? await prisma.subject.findUnique({ where: { id: subjectId } }) : null;
+    // H-03：目标错题本必须属于当前写入身份，否则忽略该 subjectId（不挂到他人本子）
+    let ownedSubjectId: string | undefined;
+    let subject: { name: string } | null = null;
+    if (subjectId) {
+        subject = await prisma.subject.findFirst({
+            where: { id: subjectId, userId },
+            select: { name: true },
+        });
+        if (subject) {
+            ownedSubjectId = subjectId;
+        } else {
+            logger.warn({ subjectId, userId }, 'Rejected subjectId not owned by integration user');
+        }
+    }
     const subjectKey = subject ? inferSubjectFromName(subject.name) : null;
 
     const user = await prisma.user.findUnique({
@@ -167,7 +191,7 @@ async function createErrorItem(
     const errorItem = await prisma.errorItem.create({
         data: {
             userId: userId,
-            subjectId: subjectId || undefined,
+            subjectId: ownedSubjectId,
             originalImageUrl: `data:${mimeType};base64,${imageBase64}`,
             ocrText: questionText || null,
             questionText: questionText || null,
@@ -223,7 +247,7 @@ export async function POST(req: Request) {
                 );
             }
 
-            if (apiKey !== expectedApiKey) {
+            if (!safeKeyEquals(apiKey, expectedApiKey)) {
                 logger.warn('Invalid API key provided');
                 return createErrorResponse(
                     'API密钥无效',
@@ -233,7 +257,22 @@ export async function POST(req: Request) {
                 );
             }
 
-            userEmail = requestData.userEmail;
+            // H-03：集成 API Key 是全局凭据，写入身份必须由服务端绑定，
+            // 不再信任请求体里的 userEmail（否则一把 Key 即可冒充任意用户，含 admin）。
+            const boundEmail = process.env.OPENCLAW_SERVICE_USER_EMAIL;
+            if (!boundEmail) {
+                logger.error('OPENCLAW_SERVICE_USER_EMAIL is not configured for apikey auth mode');
+                return createErrorResponse(
+                    '集成账号未配置',
+                    500,
+                    ErrorCode.INTERNAL_ERROR,
+                    'OPENCLAW_SERVICE_USER_EMAIL is required in apikey auth mode'
+                );
+            }
+            if (requestData.userEmail && requestData.userEmail !== boundEmail) {
+                logger.warn({ attempted: requestData.userEmail }, 'Ignored userEmail override in apikey mode');
+            }
+            userEmail = boundEmail;
             subjectId = requestData.subjectId;
         } else {
             // 用户名密码认证模式（默认）

@@ -319,7 +319,8 @@ describe('/api/reanswer', () => {
             const data = await response.json();
 
             expect(response.status).toBe(500);
-            expect(data.message).toBe('Unknown error occurred');
+            // L-01：不再回显上游 error.message，统一返回标准错误码
+            expect(data.message).toBe('AI_UNKNOWN_ERROR');
         });
 
         it('应该处理没有错误消息的异常', async () => {
@@ -338,7 +339,7 @@ describe('/api/reanswer', () => {
             const data = await response.json();
 
             expect(response.status).toBe(500);
-            expect(data.message).toBe('Failed to reanswer question');
+            expect(data.message).toBe('AI_UNKNOWN_ERROR');
         });
     });
 

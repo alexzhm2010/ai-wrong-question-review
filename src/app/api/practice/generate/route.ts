@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { authOptions } from "@/lib/auth";
 import { getServerSession } from "next-auth";
 import { getAIService } from "@/lib/ai";
-import { notFound, internalError, unauthorized } from "@/lib/api-errors";
+import { notFound, internalError, unauthorized, badRequest } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
 
 const logger = createLogger('api:practice:generate');
@@ -21,8 +21,14 @@ export async function POST(req: Request) {
     try {
         const { errorItemId, language, difficulty } = await req.json();
 
-        const errorItemWithSubject = await prisma.errorItem.findUnique({
-            where: { id: errorItemId },
+        if (typeof errorItemId !== 'string' || !errorItemId) {
+            return badRequest("errorItemId is required");
+        }
+
+        // C-02：按 id 查询必须同时带上归属条件，否则任意登录用户
+        // 都能读取他人题目内容（并借机消耗服务端 AI 配额）。
+        const errorItemWithSubject = await prisma.errorItem.findFirst({
+            where: { id: errorItemId, userId: session.user.id },
             include: { subject: true }
         });
 

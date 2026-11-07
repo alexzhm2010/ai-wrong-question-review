@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { authOptions } from "@/lib/auth";
 import { getServerSession } from "next-auth";
 import { calculateGrade } from "@/lib/grade-calculator";
-import { unauthorized, internalError } from "@/lib/api-errors";
+import { unauthorized, internalError, forbidden } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
 import { findParentTagIdForGrade } from "@/lib/tag-recognition";
 import { inferSubjectFromName } from "@/lib/knowledge-tags";
@@ -113,8 +113,18 @@ export async function POST(req: Request) {
         const uniqueTagNames = Array.from(new Set(tagNames.filter((name): name is string => typeof name === 'string' && name.trim().length > 0)));
         const tagConnections: { id: string }[] = [];
 
-        // 推断学科
-        const subject = await prisma.subject.findUnique({ where: { id: subjectId || '' } });
+        // 推断学科（H-01：创建路径同样要校验错题本归属，与 PUT /[id] 的处理保持一致）
+        let subject: { id: string; name: string } | null = null;
+        if (subjectId) {
+            subject = await prisma.subject.findFirst({
+                where: { id: subjectId, userId: user.id },
+                select: { id: true, name: true },
+            });
+            if (!subject) {
+                logger.warn({ subjectId, userId: user.id }, 'Rejected subjectId not owned by current user');
+                return forbidden("Not authorized to use this notebook");
+            }
+        }
         const subjectKey = inferSubjectFromName(subject?.name ?? null) || 'other';
         logger.debug({ subjectId, subjectName: subject?.name, subjectKey }, 'Subject inferred');
 

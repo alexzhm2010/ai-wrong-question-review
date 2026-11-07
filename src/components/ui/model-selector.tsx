@@ -47,13 +47,12 @@ export function ModelSelector({ provider, apiKey, baseUrl, currentModel, onModel
         setError(null);
 
         try {
-            const params = new URLSearchParams({
+            // apiKey / baseUrl 走 POST body，避免密钥出现在 URL query 与访问日志中
+            const data = await apiClient.post<ModelsResponse>('/api/ai/models', {
                 provider,
                 apiKey,
                 ...(baseUrl && { baseUrl }),
             });
-
-            const data = await apiClient.get<ModelsResponse>(`/api/ai/models?${params}`);
 
             // Check if there's an error message in the response
             if ('error' in data && typeof data.error === 'string') {
@@ -71,7 +70,12 @@ export function ModelSelector({ provider, apiKey, baseUrl, currentModel, onModel
             }
         } catch (err: any) {
             console.error("Failed to fetch models:", err);
-            const errorMsg = err?.message || (t.modelSelector?.fetchFailed || "Failed to fetch models");
+            // 非 2xx 时 ApiError.data 里带服务端返回的固定错误文案
+            const serverMessage =
+                err?.data && typeof err.data === 'object' && typeof err.data.error === 'string'
+                    ? err.data.error
+                    : undefined;
+            const errorMsg = serverMessage || err?.message || (t.modelSelector?.fetchFailed || "Failed to fetch models");
             setError(errorMsg + (t.modelSelector?.enterManually || ", please enter manually"));
             setUseCustom(true);
         } finally {

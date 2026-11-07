@@ -89,7 +89,10 @@ function migrateOpenAIConfig(legacy: LegacyOpenAIConfig): AppConfig['openai'] {
 
 const DEFAULT_CONFIG: AppConfig = {
     aiProvider: (process.env.AI_PROVIDER as 'gemini' | 'openai' | 'azure') || 'openai',
-    allowRegistration: true,
+    // H-04：出厂默认关闭注册（fail-closed）。首个管理员由 `npm run db:seed`
+    // 创建的 admin@localhost 担任，后续账号由管理员在设置页显式开启注册或自行创建。
+    // 开放式注册会把所有「需登录」漏洞的利用门槛降到「花几秒注册一个账号」。
+    allowRegistration: false,
     openai: {
         instances: process.env.OPENAI_API_KEY ? [{
             id: 'env-default',

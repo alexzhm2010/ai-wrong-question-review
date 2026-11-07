@@ -34,12 +34,13 @@ vi.mock('bcryptjs', () => ({
 }));
 
 // Import after mocks
-import { POST } from '@/app/api/register/route';
+import { POST, resetRegisterRateLimit } from '@/app/api/register/route';
 import { GET as GET_STATUS } from '@/app/api/register/status/route';
 
 describe('/api/register', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        resetRegisterRateLimit();
         // Reset config mock to allow registration by default
         mocks.mockGetAppConfig.mockReturnValue({
             aiProvider: 'gemini',

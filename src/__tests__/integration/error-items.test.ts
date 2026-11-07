@@ -16,15 +16,19 @@ const mocks = vi.hoisted(() => ({
         findFirst: vi.fn(), // 用于去重检查
         findMany: vi.fn(),
         update: vi.fn(),
+        updateMany: vi.fn(), // PATCH /notes 改为原子 updateMany
         delete: vi.fn(),
         count: vi.fn(),
     },
     mockPrismaKnowledgeTag: {
         findFirst: vi.fn(),
+        findMany: vi.fn(),
         create: vi.fn(),
+        createMany: vi.fn(),
     },
     mockPrismaSubject: {
         findUnique: vi.fn(),
+        findFirst: vi.fn(), // 创建路径的归属校验
     },
     mockSession: {
         user: {
@@ -84,6 +88,14 @@ describe('/api/error-items', () => {
 
         // Default: subject not found (handle null case)
         mocks.mockPrismaSubject.findUnique.mockResolvedValue(null);
+        // H-01：创建路径按 { id, userId } 查归属，默认返回一个属于当前用户的错题本
+        mocks.mockPrismaSubject.findFirst.mockImplementation(async (args: any) => {
+            const id = args?.where?.id;
+            return id ? { id, name: '数学' } : null;
+        });
+        mocks.mockPrismaKnowledgeTag.findMany.mockResolvedValue([]);
+        mocks.mockPrismaKnowledgeTag.createMany.mockResolvedValue({ count: 0 });
+        mocks.mockPrismaErrorItem.updateMany.mockResolvedValue({ count: 1 });
 
         // Default: knowledgeTag returns a mock tag (used when finding existing tags)
         mocks.mockPrismaKnowledgeTag.findFirst.mockImplementation(async (args: any) => {
@@ -167,6 +179,29 @@ describe('/api/error-items', () => {
 
             expect(response.status).toBe(201);
             expect(data.subjectId).toBe('subject-math-id');
+            expect(mocks.mockPrismaSubject.findFirst).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    where: { id: 'subject-math-id', userId: 'user-123' },
+                })
+            );
+        });
+
+        it('H-01 回归：不属于当前用户的 subjectId 应返回 403', async () => {
+            mocks.mockPrismaSubject.findFirst.mockResolvedValue(null);
+
+            const request = new Request('http://localhost/api/error-items', {
+                method: 'POST',
+                body: JSON.stringify({
+                    questionText: '越权写入测试',
+                    subjectId: 'someone-elses-notebook',
+                }),
+                headers: { 'Content-Type': 'application/json' },
+            });
+
+            const response = await POST(request);
+
+            expect(response.status).toBe(403);
+            expect(mocks.mockPrismaErrorItem.create).not.toHaveBeenCalled();
         });
 
         it('应该成功创建错题并设置年级学期', async () => {
@@ -666,7 +701,8 @@ describe('/api/error-items', () => {
         });
 
         it('应该处理数据库错误', async () => {
-            mocks.mockPrismaErrorItem.update.mockRejectedValue(new Error('Database error'));
+            // C-01 后 notes 使用 updateMany 完成原子更新
+            mocks.mockPrismaErrorItem.updateMany.mockRejectedValue(new Error('Database error'));
 
             const request = new Request('http://localhost/api/error-items/error-item-1/notes', {
                 method: 'PATCH',

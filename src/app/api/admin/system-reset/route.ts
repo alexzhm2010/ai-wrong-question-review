@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authOptions } from "@/lib/auth";
 import { getServerSession } from "next-auth";
-import { internalError, unauthorized, forbidden } from "@/lib/api-errors";
+import { internalError, unauthorized, forbidden, badRequest } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
 
 const logger = createLogger('api:admin:system-reset');
@@ -18,6 +18,19 @@ export async function POST(req: Request) {
     // Strictly enforce Admin role
     if ((session.user as any).role !== 'admin') {
         return forbidden("Admin access required for system reset");
+    }
+
+    // M-03：不可逆的全库清空必须携带一次性确认串，防止误触 / CSRF 直接触发。
+    // 前端已有两级确认（confirm + 输入 RESET），服务端这里独立校验，不信任前端。
+    let confirm: unknown;
+    try {
+        const body = await req.json();
+        confirm = body?.confirm;
+    } catch {
+        // 允许空 body，但会被下面的确认串校验拒绝
+    }
+    if (confirm !== 'RESET') {
+        return badRequest("Confirmation string 'RESET' is required for system reset");
     }
     // but typically this should be restricted.
     // The user said "include user data", but wiping SELF is tricky.

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock dependencies
 vi.mock('@google/genai', () => {
@@ -38,6 +38,10 @@ vi.mock('@/lib/ai/tag-service', () => ({
 }));
 
 import { GeminiProvider } from '@/lib/ai/gemini-provider';
+
+// Provider 使用 1s / 2s / 4s 的指数退避；fake timers 的 shouldAdvanceTime
+// 仍按真实时间推进，5s 默认超时不够，这里放宽到 20s。
+vi.setConfig({ testTimeout: 20000 });
 
 describe('GeminiProvider Retry Logic', () => {
     let provider: GeminiProvider;

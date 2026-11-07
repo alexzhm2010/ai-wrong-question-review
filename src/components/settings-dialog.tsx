@@ -304,7 +304,7 @@ export function SettingsDialog() {
 
         setSystemResetting(true);
         try {
-            await apiClient.post("/api/admin/system-reset", {});
+            await apiClient.post("/api/admin/system-reset", { confirm: userInput });
             toast.success(t.settings?.clearSuccess || "Success - System Reset Complete");
             setOpen(false);
             window.location.reload();

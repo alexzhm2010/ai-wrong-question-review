@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
+import { requireAdmin } from '@/lib/auth-utils';
+import { assertSafeOutboundUrl } from '@/lib/ssrf-guard';
 import { OpenAIProvider } from '@/lib/ai/openai-provider';
 import { GeminiProvider } from '@/lib/ai/gemini-provider';
 import { AzureOpenAIProvider } from '@/lib/ai/azure-provider';
@@ -98,12 +100,29 @@ export async function POST(request: NextRequest) {
         if (!session?.user) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
+        // AI 配置界面仅对管理员开放（与 POST /api/settings 一致）
+        if (!requireAdmin(session)) {
+            return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        }
 
         const body: AITestRequest = await request.json();
-        const { provider, apiKey, baseUrl, model, endpoint, deploymentName, apiVersion, language = 'zh' } = body;
+        let { provider, apiKey, baseUrl, model, endpoint, deploymentName, apiVersion, language = 'zh' } = body;
 
         if (!provider || !apiKey) {
             return NextResponse.json({ error: 'Missing provider or apiKey' }, { status: 400 });
+        }
+
+        // B-02：出站地址虽仍允许来自表单（用于测试尚未保存的配置），
+        // 但必须经 SSRF 校验：仅 HTTPS 公网地址，禁止内网/元数据/DNS 解析到内网。
+        try {
+            if (baseUrl) baseUrl = (await assertSafeOutboundUrl(baseUrl)).toString();
+            if (endpoint) endpoint = (await assertSafeOutboundUrl(endpoint)).toString();
+        } catch (error) {
+            logger.warn(
+                { provider, reason: error instanceof Error ? error.message : 'unknown' },
+                'Rejected unsafe AI test endpoint'
+            );
+            return NextResponse.json({ error: 'Unsafe or invalid AI endpoint' }, { status: 400 });
         }
 
         logger.info({ provider, model, baseUrl: baseUrl || endpoint }, 'AI 连接测试开始');
@@ -241,9 +260,10 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(response);
 
     } catch (error) {
+        // L-01：内部错误详情只写服务端日志，对外返回固定文案
         logger.error({ error }, 'AI 测试 API 异常');
         return NextResponse.json(
-            { error: error instanceof Error ? error.message : 'Internal server error' },
+            { error: 'Internal server error' },
             { status: 500 }
         );
     }

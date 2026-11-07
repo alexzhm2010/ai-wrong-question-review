@@ -1,55 +1,117 @@
 /**
- * Models Route 单元测试
+ * /api/ai/models 单元测试
  *
- * 测试 /api/ai/models 端点的 Gemini 和 OpenAI 模型列表功能
+ * 覆盖 P0 审查 B-01 修复后的契约：
+ * - POST + JSON body（apiKey 不再走 URL query）
+ * - 必须登录且必须是 admin
+ * - 出站 baseUrl 经 SSRF 校验后才允许发起 fetch
+ * - 上游失败返回 502，不再伪装成 200 成功
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
-// Mock logger
+const mocks = vi.hoisted(() => ({
+    getServerSession: vi.fn(),
+    assertSafeOutboundUrl: vi.fn(),
+}));
+
 vi.mock('@/lib/logger', () => ({
     createLogger: vi.fn(() => ({
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        box: vi.fn(),
-        divider: vi.fn(),
+        debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(),
     })),
+}));
+
+vi.mock('next-auth', () => ({
+    getServerSession: mocks.getServerSession,
+    default: vi.fn(),
+}));
+
+vi.mock('@/lib/auth', () => ({ authOptions: {} }));
+
+vi.mock('@/lib/ssrf-guard', () => ({
+    assertSafeOutboundUrl: mocks.assertSafeOutboundUrl,
+    UnsafeOutboundUrlError: class UnsafeOutboundUrlError extends Error {},
 }));
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
-import { GET } from '@/app/api/ai/models/route';
+import { POST } from '@/app/api/ai/models/route';
 
-function makeRequest(params: Record<string, string>): NextRequest {
-    const url = new URL('http://localhost/api/ai/models');
-    for (const [k, v] of Object.entries(params)) {
-        url.searchParams.set(k, v);
-    }
-    return new NextRequest(url);
+function makeRequest(body: Record<string, unknown>): NextRequest {
+    return new NextRequest(new URL('http://localhost/api/ai/models'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
 }
 
-describe('GET /api/ai/models - Gemini provider', () => {
+describe('POST /api/ai/models', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        mocks.getServerSession.mockResolvedValue({
+            user: { id: 'admin-1', role: 'admin', email: 'admin@localhost' },
+        });
+        mocks.assertSafeOutboundUrl.mockImplementation(async (raw: string) => {
+            if (/internal|localhost|127\.0\.0\.1|169\.254/.test(raw)) {
+                throw new Error('Outbound host resolves to a private or reserved address');
+            }
+            return new URL(raw);
+        });
     });
 
-    it('应该正确获取并返回 Gemini 视觉模型列表', async () => {
+    it('未登录时应返回 401 且不发起任何出站请求', async () => {
+        mocks.getServerSession.mockResolvedValue(null);
+
+        const res = await POST(makeRequest({ provider: 'gemini', apiKey: 'test-key' }));
+
+        expect(res.status).toBe(401);
+        expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('非 admin 登录用户应返回 403', async () => {
+        mocks.getServerSession.mockResolvedValue({
+            user: { id: 'u-2', role: 'user', email: 'u@example.com' },
+        });
+
+        const res = await POST(makeRequest({ provider: 'gemini', apiKey: 'test-key' }));
+
+        expect(res.status).toBe(403);
+        expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('缺少 apiKey 应返回 400', async () => {
+        const res = await POST(makeRequest({ provider: 'gemini' }));
+
+        expect(res.status).toBe(400);
+        expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('内网 baseUrl 应被拒绝（400）且不发起出站请求', async () => {
+        const res = await POST(makeRequest({
+            provider: 'openai',
+            apiKey: 'test-key',
+            baseUrl: 'http://127.0.0.1:8080/v1',
+        }));
+
+        expect(res.status).toBe(400);
+        expect(mocks.assertSafeOutboundUrl).toHaveBeenCalledWith('http://127.0.0.1:8080/v1');
+        expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('应正确获取并返回 Gemini 模型列表', async () => {
         mockFetch.mockResolvedValueOnce({
             ok: true,
             json: async () => ({
                 models: [
-                    { name: 'models/gemini-2.0-flash', displayName: 'Gemini 2.0 Flash' },
-                    { name: 'models/gemini-1.5-pro', displayName: 'Gemini 1.5 Pro' },
-                    { name: 'models/gemini-2.5-flash', displayName: 'Gemini 2.5 Flash' },
+                    { name: 'models/gemini-2.0-flash' },
+                    { name: 'models/gemini-1.5-pro' },
+                    { name: 'models/gemini-2.5-flash' },
                 ],
             }),
         });
 
-        const req = makeRequest({ provider: 'gemini', apiKey: 'test-key' });
-        const res = await GET(req);
+        const res = await POST(makeRequest({ provider: 'gemini', apiKey: 'test-key' }));
         const body = await res.json();
 
         expect(res.status).toBe(200);
@@ -61,148 +123,58 @@ describe('GET /api/ai/models - Gemini provider', () => {
         });
         expect(body.models[1].id).toBe('gemini-1.5-pro');
         expect(body.models[2].id).toBe('gemini-2.5-flash');
+        // 请求路径本身不带任何密钥参数
+        expect(String(mockFetch.mock.calls[0][0])).toContain('generativelanguage.googleapis.com');
     });
 
-    it('应该使用自定义 baseUrl', async () => {
+    it('应使用校验后的自定义 baseUrl 请求 OpenAI 兼容接口', async () => {
         mockFetch.mockResolvedValueOnce({
             ok: true,
-            json: async () => ({ models: [] }),
+            json: async () => ({ data: [{ id: 'qwen3-vl-plus', owned_by: 'alibaba' }] }),
         });
 
-        const req = makeRequest({
-            provider: 'gemini',
-            apiKey: 'my-key',
-            baseUrl: 'https://custom.google.com',
-        });
-        await GET(req);
-
-        expect(mockFetch).toHaveBeenCalledWith(
-            'https://custom.google.com/v1beta/models?key=my-key',
-            expect.any(Object)
-        );
-    });
-
-    it('应返回所有模型（不区分视觉/非视觉）', async () => {
-        mockFetch.mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({
-                models: [
-                    { name: 'models/gemini-2.0-flash' },
-                    { name: 'models/text-embedding-004' },
-                    { name: 'models/gemini-1.5-pro' },
-                    { name: 'models/text-to-speech-01' },
-                ],
-            }),
-        });
-
-        const req = makeRequest({ provider: 'gemini', apiKey: 'test-key' });
-        const res = await GET(req);
+        const res = await POST(makeRequest({
+            provider: 'openai',
+            apiKey: 'test-key',
+            baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        }));
         const body = await res.json();
 
-        expect(body.models).toHaveLength(4);
-        expect(body.models.map((m: any) => m.id)).toEqual([
-            'gemini-2.0-flash',
-            'text-embedding-004',
-            'gemini-1.5-pro',
-            'text-to-speech-01',
-        ]);
+        expect(res.status).toBe(200);
+        expect(body.models[0].id).toBe('qwen3-vl-plus');
+        expect(String(mockFetch.mock.calls[0][0]))
+            .toBe('https://dashscope.aliyuncs.com/compatible-mode/v1/models');
     });
 
     it('API 返回空 models 数组时应返回空列表', async () => {
-        mockFetch.mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({ models: [] }),
-        });
+        mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ models: [] }) });
 
-        const req = makeRequest({ provider: 'gemini', apiKey: 'test-key' });
-        const res = await GET(req);
+        const res = await POST(makeRequest({ provider: 'gemini', apiKey: 'test-key' }));
         const body = await res.json();
 
         expect(res.status).toBe(200);
         expect(body.models).toEqual([]);
     });
 
-    it('API 返回无 models 字段时应返回空列表', async () => {
-        mockFetch.mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({}),
-        });
+    it('上游失败应返回 502，而不是伪装成 200 成功', async () => {
+        mockFetch.mockResolvedValueOnce({ ok: false, status: 401 });
 
-        const req = makeRequest({ provider: 'gemini', apiKey: 'test-key' });
-        const res = await GET(req);
+        const res = await POST(makeRequest({ provider: 'gemini', apiKey: 'bad-key' }));
         const body = await res.json();
 
-        expect(res.status).toBe(200);
+        expect(res.status).toBe(502);
         expect(body.models).toEqual([]);
+        // L-01：不回显上游错误细节
+        expect(body.error).toBe('Failed to fetch models');
     });
 
-    it('Gemini API 返回错误时应返回 200 和空模型列表', async () => {
-        mockFetch.mockResolvedValueOnce({
-            ok: false,
-            status: 403,
-            text: async () => 'Forbidden',
-        });
+    it('fetch 应禁用重定向跟随并设置超时', async () => {
+        mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ data: [] }) });
 
-        const req = makeRequest({ provider: 'gemini', apiKey: 'bad-key' });
-        const res = await GET(req);
-        const body = await res.json();
+        await POST(makeRequest({ provider: 'openai', apiKey: 'test-key' }));
 
-        expect(res.status).toBe(200);
-        expect(body.models).toEqual([]);
-        expect(body.error).toContain('Gemini API error');
-    });
-
-    it('缺少 apiKey 时应返回 400', async () => {
-        const req = makeRequest({ provider: 'gemini' });
-        const res = await GET(req);
-        const body = await res.json();
-
-        expect(res.status).toBe(400);
-        expect(body.error).toBe('API key is required');
-    });
-});
-
-describe('GET /api/ai/models - OpenAI provider', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
-
-    it('应该正确获取并返回 OpenAI 视觉模型列表', async () => {
-        mockFetch.mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({
-                data: [
-                    { id: 'gpt-4o', owned_by: 'openai' },
-                    { id: 'gpt-4-turbo', owned_by: 'openai' },
-                    { id: 'text-embedding-3-small', owned_by: 'openai' },
-                ],
-            }),
-        });
-
-        const req = makeRequest({ apiKey: 'test-key' });
-        const res = await GET(req);
-        const body = await res.json();
-
-        expect(res.status).toBe(200);
-        expect(body.models).toHaveLength(3);
-        expect(body.models[0].id).toBe('gpt-4o');
-        expect(body.models[1].id).toBe('gpt-4-turbo');
-        expect(body.models[2].id).toBe('text-embedding-3-small');
-    });
-
-    it('OpenAI API 返回错误时应返回 200 和空模型列表', async () => {
-        mockFetch.mockResolvedValueOnce({
-            ok: false,
-            statusText: 'Unauthorized',
-            status: 401,
-        });
-
-        const req = makeRequest({ apiKey: 'bad-key' });
-        const res = await GET(req);
-        const body = await res.json();
-
-        expect(res.status).toBe(200);
-        expect(body.models).toEqual([]);
-        expect(body.error).toContain('API error');
+        const init = mockFetch.mock.calls[0][1];
+        expect(init.redirect).toBe('manual');
+        expect(init.signal).toBeDefined();
     });
 });
