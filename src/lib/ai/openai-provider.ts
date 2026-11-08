@@ -283,9 +283,12 @@ export class OpenAIProvider implements AIService {
                 fullText = response?.choices?.[0]?.message?.content || '';
                 onDelta?.(fullText);
             } else {
-                // 用 any 调用以兼容 extra_body（部分 SDK 类型未声明 enable_thinking）
-                const createFn = this.openai.chat.completions.create as any;
-                const stream = await createFn({
+                // 必须保留 this 绑定（SDK 内部会访问 this._client），不能把 create 解引用后单独调用。
+                // 通过 .bind 固定 this，并对函数整体做类型断言以兼容 extra_body 与流式返回。
+                const create = this.openai.chat.completions.create.bind(
+                    this.openai.chat.completions
+                ) as unknown as (body: Record<string, unknown>) => Promise<any>;
+                const stream: any = await create({
                     model: this.model,
                     messages,
                     max_tokens: maxTokens,
