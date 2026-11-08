@@ -28,8 +28,15 @@ describe('mistake status helpers', () => {
         expect(normalizeMistakeStatusForSave('bad-value', '')).toBe('unknown');
     });
 
+    it('判定答对时不应被残留的学生答案覆盖为做错了', () => {
+        expect(normalizeMistakeStatus('correct')).toBe('correct');
+        expect(normalizeMistakeStatusForSave('correct', 'B. (1/4, +∞)')).toBe('correct');
+        expect(normalizeMistakeStatusForSave('correct', '')).toBe('correct');
+    });
+
     it('应该按语言显示状态标签', () => {
         expect(getMistakeStatusLabel('wrong_attempt', 'zh')).toBe('做错了');
+        expect(getMistakeStatusLabel('correct', 'zh')).toBe('答对了');
         expect(getMistakeStatusLabel('not_attempted', 'en')).toBe('Not attempted');
         expect(getMistakeStatusLabel('bad-value', 'zh')).toBe('未判断');
     });

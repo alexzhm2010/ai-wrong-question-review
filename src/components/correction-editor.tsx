@@ -18,7 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { apiClient } from "@/lib/api-client";
 import { UserProfile, Notebook } from "@/types/api";
 import { inferSubjectFromName } from "@/lib/knowledge-tags";
-import { normalizeMistakeStatusForSave, type MistakeStatus } from "@/lib/mistake-status";
+import { getMistakeStatusLabel, normalizeMistakeStatusForSave, type MistakeStatus } from "@/lib/mistake-status";
 import type { ReanswerQuestionResult } from "@/lib/ai/types";
 import { buildReanswerRequestBody } from "@/lib/reanswer-request";
 import { GeogebraDemo } from "@/components/geogebra-demo";
@@ -213,12 +213,16 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                             if (isSaving) return; // 防止重复点击
                             setIsSaving(true);
                             try {
+                                const status = normalizeMistakeStatusForSave(
+                                    data.mistakeStatus,
+                                    data.wrongAnswerText
+                                );
                                 await onSave({
                                     ...data,
-                                    mistakeStatus: normalizeMistakeStatusForSave(
-                                        data.mistakeStatus,
-                                        data.wrongAnswerText
-                                    ),
+                                    mistakeStatus: status,
+                                    // 答对时不保留「错误解答 / 错因」，避免把正确答案误标为错误
+                                    wrongAnswerText: status === 'correct' ? '' : data.wrongAnswerText,
+                                    mistakeAnalysis: status === 'correct' ? '' : data.mistakeAnalysis,
                                 });
                             } finally {
                                 setIsSaving(false);
@@ -334,38 +338,47 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                                     <SelectTrigger>
                                         <SelectValue />
                                     </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="not_attempted">{t.editor.mistakeStatuses?.notAttempted || "不会做"}</SelectItem>
-                                        <SelectItem value="wrong_attempt">{t.editor.mistakeStatuses?.wrongAttempt || "做错了"}</SelectItem>
-                                        <SelectItem value="unknown">{t.editor.mistakeStatuses?.unknown || "未判断"}</SelectItem>
-                                    </SelectContent>
+                                        <SelectContent>
+                                            <SelectItem value="correct">{t.editor.mistakeStatuses?.correct || "答对了"}</SelectItem>
+                                            <SelectItem value="not_attempted">{t.editor.mistakeStatuses?.notAttempted || "不会做"}</SelectItem>
+                                            <SelectItem value="wrong_attempt">{t.editor.mistakeStatuses?.wrongAttempt || "做错了"}</SelectItem>
+                                            <SelectItem value="unknown">{t.editor.mistakeStatuses?.unknown || "未判断"}</SelectItem>
+                                        </SelectContent>
                                 </Select>
                             </div>
-                            <div className="space-y-2">
-                                <Label>{t.editor.wrongAnswerText || "错误解答原文"}</Label>
-                                <Textarea
-                                    value={data.wrongAnswerText || ""}
-                                    onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setData({
-                                        ...data,
-                                        wrongAnswerText: e.target.value,
-                                        mistakeStatus: e.target.value.trim() ? "wrong_attempt" : data.mistakeStatus,
-                                    })}
-                                    className="min-h-[100px] font-mono text-sm"
-                                    placeholder={t.editor.wrongAnswerPlaceholder || "如果图片里没有错误解答，可留空"}
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>{t.editor.mistakeAnalysis || "错因分析"}</Label>
-                                <Textarea
-                                    value={data.mistakeAnalysis || ""}
-                                    onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setData({
-                                        ...data,
-                                        mistakeAnalysis: e.target.value,
-                                    })}
-                                    className="min-h-[140px] font-mono text-sm"
-                                    placeholder={t.editor.mistakeAnalysisPlaceholder || "分析错误可能发生在哪一步、为什么错、导致什么后果"}
-                                />
-                            </div>
+                            {data.mistakeStatus === 'correct' ? (
+                                <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                                    ✅ 已判定该题作答正确，无需填写「错误解答原文」与「错因分析」。
+                                </div>
+                            ) : (
+                                <>
+                                    <div className="space-y-2">
+                                        <Label>{t.editor.wrongAnswerText || "错误解答原文"}</Label>
+                                        <Textarea
+                                            value={data.wrongAnswerText || ""}
+                                            onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setData({
+                                                ...data,
+                                                wrongAnswerText: e.target.value,
+                                                mistakeStatus: e.target.value.trim() ? "wrong_attempt" : data.mistakeStatus,
+                                            })}
+                                            className="min-h-[100px] font-mono text-sm"
+                                            placeholder={t.editor.wrongAnswerPlaceholder || "如果图片里没有错误解答，可留空"}
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label>{t.editor.mistakeAnalysis || "错因分析"}</Label>
+                                        <Textarea
+                                            value={data.mistakeAnalysis || ""}
+                                            onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setData({
+                                                ...data,
+                                                mistakeAnalysis: e.target.value,
+                                            })}
+                                            className="min-h-[140px] font-mono text-sm"
+                                            placeholder={t.editor.mistakeAnalysisPlaceholder || "分析错误可能发生在哪一步、为什么错、导致什么后果"}
+                                        />
+                                    </div>
+                                </>
+                            )}
                         </CardContent>
                     </Card>
                 </div>
@@ -443,20 +456,15 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                         </CardHeader>
                         <CardContent className="space-y-3 text-sm">
                             <div className="text-muted-foreground">
-                                {t.editor.mistakeStatus || "作答状态"}：
-                                {data.mistakeStatus === 'wrong_attempt'
-                                    ? (t.editor.mistakeStatuses?.wrongAttempt || "做错了")
-                                    : data.mistakeStatus === 'not_attempted'
-                                        ? (t.editor.mistakeStatuses?.notAttempted || "不会做")
-                                        : (t.editor.mistakeStatuses?.unknown || "未判断")}
+                                {t.editor.mistakeStatus || "作答状态"}：{getMistakeStatusLabel(data.mistakeStatus, language)}
                             </div>
-                            {data.wrongAnswerText && (
+                            {data.mistakeStatus !== 'correct' && data.wrongAnswerText && (
                                 <div>
                                     <div className="font-medium mb-1">{t.editor.wrongAnswerText || "错误解答原文"}</div>
                                     <MarkdownRenderer content={data.wrongAnswerText} />
                                 </div>
                             )}
-                            {data.mistakeAnalysis && (
+                            {data.mistakeStatus !== 'correct' && data.mistakeAnalysis && (
                                 <div>
                                     <div className="font-medium mb-1">{t.editor.mistakeAnalysis || "错因分析"}</div>
                                     <MarkdownRenderer content={data.mistakeAnalysis} />

@@ -798,11 +798,37 @@ export function SettingsDialog() {
                                                 ...prev,
                                                 aiOptions: {
                                                     enableThinking: val,
+                                                    mathThinking: prev.aiOptions?.mathThinking ?? true,
                                                     maxTokens: prev.aiOptions?.maxTokens ?? 4096,
                                                 },
                                             }))
                                         }
                                         aria-label={(t.settings?.general as any)?.enableThinking || "AI 思考/推理模式"}
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="space-y-2 pt-4 border-t">
+                                <div className="flex items-center justify-between gap-4">
+                                    <div className="space-y-1">
+                                        <Label>{(t.settings?.general as any)?.mathThinking || "数学题深度思考"}</Label>
+                                        <p className="text-xs text-muted-foreground">
+                                            {(t.settings?.general as any)?.mathThinkingDesc || "数学题默认开启深度思考以提高解答正确率（会变慢）；若更看重速度可关闭。"}
+                                        </p>
+                                    </div>
+                                    <Switch
+                                        checked={config.aiOptions?.mathThinking ?? true}
+                                        onCheckedChange={(val: boolean) =>
+                                            setConfig((prev) => ({
+                                                ...prev,
+                                                aiOptions: {
+                                                    enableThinking: prev.aiOptions?.enableThinking ?? false,
+                                                    mathThinking: val,
+                                                    maxTokens: prev.aiOptions?.maxTokens ?? 4096,
+                                                },
+                                            }))
+                                        }
+                                        aria-label={(t.settings?.general as any)?.mathThinking || "数学题深度思考"}
                                     />
                                 </div>
                             </div>
@@ -816,6 +842,7 @@ export function SettingsDialog() {
                                             ...prev,
                                             aiOptions: {
                                                 enableThinking: prev.aiOptions?.enableThinking ?? false,
+                                                mathThinking: prev.aiOptions?.mathThinking ?? true,
                                                 maxTokens: parseInt(val, 10),
                                             },
                                         }))

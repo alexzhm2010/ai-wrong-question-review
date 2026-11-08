@@ -137,6 +137,7 @@ export interface AppConfig {
     };
     aiOptions?: {
         enableThinking?: boolean;
+        mathThinking?: boolean;
         maxTokens?: number;
     };
 }

@@ -228,7 +228,10 @@ export class OpenAIProvider implements AIService {
     ): Promise<ParsedQuestion> {
         const config = await getAppConfig();
         // P0：思考/推理开关，默认关闭（提速）；P1：输出 token 上限，默认 4096
-        const enableThinking = config.aiOptions?.enableThinking ?? false;
+        // P2：数学题默认开启深度思考（可在设置中单独关闭），以提高解答正确率
+        const mathThinking = config.aiOptions?.mathThinking !== false;
+        const isMath = !!subject && subject.includes('数学');
+        const enableThinking = (config.aiOptions?.enableThinking ?? false) || (isMath && mathThinking);
         const maxTokens = config.aiOptions?.maxTokens ?? 4096;
 
         const { systemPrompt, messages } = await this.buildAnalyzeMessages(imageBase64, mimeType, language, grade, subject, gradeSemester);
@@ -391,6 +394,10 @@ export class OpenAIProvider implements AIService {
     async reanswerQuestion(questionText: string, language: 'zh' | 'en' = 'zh', subject?: string | null, imageBase64?: string, gradeSemester?: string | null): Promise<ReanswerQuestionResult> {
         const { generateReanswerPrompt } = await import('./prompts');
         const prompt = generateReanswerPrompt(language, questionText, subject, undefined, gradeSemester);
+        const config = await getAppConfig();
+        const mathThinking = config.aiOptions?.mathThinking !== false;
+        const isMath = !!subject && subject.includes('数学');
+        const enableThinking = (config.aiOptions?.enableThinking ?? false) || (isMath && mathThinking);
 
         logger.info({
             provider: 'OpenAI',
@@ -398,6 +405,7 @@ export class OpenAIProvider implements AIService {
             model: this.model,
             questionLength: questionText.length,
             subject: subject || 'auto',
+            enableThinking,
             hasImage: !!imageBase64
         }, 'Reanswer Question Request');
         logger.debug({ prompt }, 'Full prompt');
@@ -428,13 +436,21 @@ export class OpenAIProvider implements AIService {
             };
             logger.debug({ requestParams }, 'Request parameters');
 
-            const response = await this.openai.chat.completions.create({
+            const extraBody: Record<string, unknown> = {};
+            if (this.supportsThinking()) {
+                extraBody.enable_thinking = enableThinking;
+            }
+            const create = this.openai.chat.completions.create.bind(
+                this.openai.chat.completions
+            ) as unknown as (body: Record<string, unknown>) => Promise<any>;
+            const response = await create({
                 model: this.model,
                 messages: [
                     { role: "system", content: prompt },
                     { role: "user", content: userContent }
                 ],
                 max_tokens: 8192,
+                ...(Object.keys(extraBody).length ? { extra_body: extraBody } : {}),
             });
 
             logger.debug({ response: JSON.stringify(response) }, 'Full API response');

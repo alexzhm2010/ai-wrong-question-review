@@ -103,6 +103,7 @@ export const translations = {
             wrongAnswerPlaceholder: "Leave blank if no wrong answer is visible",
             mistakeAnalysisPlaceholder: "Explain where and why the mistake happened",
             mistakeStatuses: {
+                correct: "Correct",
                 notAttempted: "Not attempted",
                 wrongAttempt: "Wrong attempt",
                 unknown: "Unknown",
@@ -745,6 +746,7 @@ export const translations = {
             wrongAnswerPlaceholder: "如果图片里没有错误解答，可留空",
             mistakeAnalysisPlaceholder: "分析错误可能发生在哪一步、为什么错、导致什么后果",
             mistakeStatuses: {
+                correct: "答对了",
                 notAttempted: "不会做",
                 wrongAttempt: "做错了",
                 unknown: "未判断",

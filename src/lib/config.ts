@@ -43,6 +43,7 @@ export interface AppConfig {
     };
     aiOptions?: {
         enableThinking?: boolean; // AI 思考/推理模式，默认 false（关闭以提速）
+        mathThinking?: boolean;   // 数学题是否自动开启深度思考，默认 true（更准但更慢）
         maxTokens?: number;      // 单次分析最大输出 token，默认 4096
     };
 }
@@ -128,6 +129,7 @@ const DEFAULT_CONFIG: AppConfig = {
     },
     aiOptions: {
         enableThinking: false,
+        mathThinking: true,
         maxTokens: 4096,
     },
 };

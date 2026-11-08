@@ -197,7 +197,7 @@ describe('AI Prompts', () => {
             const prompt = generateReanswerPrompt('zh', questionText, '数学');
             expect(prompt).not.toContain('推断');
             expect(prompt).toContain('不要猜测');
-            expect(prompt).toContain('当前图片中可见');
+            expect(prompt).toContain('仅当 mistake_status = wrong_attempt');
         });
     });
 

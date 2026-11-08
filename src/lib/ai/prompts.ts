@@ -117,6 +117,22 @@ export const DEFAULT_ANALYZE_TEMPLATE = `【角色与核心任务 (ROLE AND CORE
 
 {{language_instruction}}
 
+【最重要的工作顺序：先独立解题，再评判作答 (CRITICAL WORKFLOW)】
+必须严格按以下顺序完成，**不得跳步、不得颠倒**：
+1. **第一步 · 独立解题**：只依据题干，把图片中的学生作答、勾画、批注、红色对勾/叉号、分数一律忽略。独立、完整地求解，得到你确信的正确答案与解析。
+2. **第二步 · 自检**：输出前必须验证结论——把答案代回原题检验；选择题/取值范围题必须把各选项端点或边界值代入题干逐一验证；解集/区间题必须先把集合写成明确的区间，再判断包含（⊆）关系。若自检不通过，重新求解，直到通过再输出。
+3. **第三步 · 评判作答**：在**已经确定正确答案**之后，才去比对图片中的学生作答：
+   - 学生作答与你的正确答案**一致** → mistake_status 填 correct，wrong_answer_text 与 mistake_analysis **都必须留空**。
+   - 与正确答案**不一致** → mistake_status 填 wrong_attempt，按原样摘录学生答案到 wrong_answer_text，并在 mistake_analysis 中分析错在哪一步、为什么错、导致什么后果。
+   - 图片中看不到任何作答痕迹 → not_attempted，其余留空。
+   - 完全无法判断 → unknown，其余留空。
+
+【禁止事项 (PROHIBITIONS)】
+- **严禁**为了"证明学生答错"而修改、扭曲或降级你的正确答案；**严禁**从学生答案反推正确答案。
+- **严禁**在独立解答与学生答案一致时，编造错误或错因。
+- 学生答案、批注、对勾/叉号**一律不得作为解题依据**，它们只用于第三步的对错判定。
+- 若你无法确信正确答案，mistake_status 填 unknown 并留空错因，**不要猜测**。
+
 【核心输出要求 (OUTPUT REQUIREMENTS)】
 你的响应输出**必须严格遵循以下自定义标签格式**。**严禁**使用 JSON 或 Markdown 代码块。**严禁**对 LaTeX 公式中的反斜杠进行二次转义（如 "\\frac" 是错误的，必须是 "\frac"）。
 
@@ -133,18 +149,6 @@ export const DEFAULT_ANALYZE_TEMPLATE = `【角色与核心任务 (ROLE AND CORE
 <requires_image>
 判断这道题是否需要依赖图片才能正确解答。如果题目包含几何图形、函数图像、实验装置图、电路图等必须看图才能理解的内容，填写 true；如果只需要文字描述即可理解（如英语题、纯文字数学题），填写 false。
 </requires_image>
-
-<wrong_answer_text>
-如果图片中包含学生已经写出的错误解答、错误步骤、草稿或错误答案，请尽量按原样摘录；如果没有看到学生错误解答，请留空。
-</wrong_answer_text>
-
-<mistake_status>
-填写以下值之一：wrong_attempt（图片中有错误解答或错误步骤）、not_attempted（没有错误解答，像是完全不会做或未作答）、unknown（无法判断）。
-</mistake_status>
-
-<mistake_analysis>
-如果图片中包含错误解答，请分析错误可能发生在哪一步、为什么错、导致了什么后果；如果没有错误解答，请留空。
-</mistake_analysis>
 
 <question_text>
 在此处填写题目的完整文本。使用 Markdown 格式。所有数学公式使用 LaTeX 符号（行内 $...$，块级 $$...$$）。
@@ -195,6 +199,27 @@ export const DEFAULT_ANALYZE_TEMPLATE = `【角色与核心任务 (ROLE AND CORE
 * **直接使用标准的 LaTeX 符号**（如 $\frac{1}{2}$），**不要**进行 JSON 转义（不要写成 \\frac）。
 * 如果解析过程需要表格（如列表对比、分步计算表），遵循上述【表格处理规则】。
 </analysis>
+
+【作答判定（必须在完成上面的 answer_text 与 analysis 之后再填写）】
+- mistake_status：只能是 correct / wrong_attempt / not_attempted / unknown 之一。
+  * correct：学生作答与上面 answer_text 中的正确答案一致（**此时即使图片有笔迹，也判 correct**）。
+  * wrong_attempt：学生作答与正确答案不一致，或存在明确错误的步骤。
+  * not_attempted：看不到任何作答痕迹。
+  * unknown：无法判断。
+- wrong_answer_text：仅当 mistake_status 为 wrong_attempt 时，按原样摘录学生的错误解答；其余情况留空。
+- mistake_analysis：仅当 mistake_status 为 wrong_attempt 时，分析错在哪一步、为什么错、导致什么后果；其余情况留空。
+
+<mistake_status>
+correct / wrong_attempt / not_attempted / unknown 之一
+</mistake_status>
+
+<wrong_answer_text>
+仅 wrong_attempt 时填写学生错误解答原文，否则留空。
+</wrong_answer_text>
+
+<mistake_analysis>
+仅 wrong_attempt 时填写错因分析，否则留空。
+</mistake_analysis>
 
 【知识点标签列表（KNOWLEDGE POINT LIST）】
 {{knowledge_points_list}}
@@ -465,6 +490,15 @@ export const DEFAULT_REANSWER_TEMPLATE = `【角色与核心任务 (ROLE AND COR
 【学科提示 (SUBJECT HINT)】
 {{subject_hint}}
 
+【工作顺序：先独立解题，再评判作答 (CRITICAL WORKFLOW)】
+1. **第一步 · 独立解题**：只依据上面的题目文本独立求解，得到你确信的正确答案与解析。图片中的学生作答、批注、对勾/叉号不得作为解题依据。
+2. **第二步 · 自检**：输出前把答案代回原题检验；选择题/取值范围题把各选项端点或边界值代入题干验证；区间/解集题先写成明确区间再判断。若不通过则重新求解。
+3. **第三步 · 评判作答**：确定正确答案后，才看图片中的学生作答：
+   - 与正确答案**一致** → mistake_status = correct，wrong_answer_text 与 mistake_analysis 留空。
+   - 与正确答案**不一致** → wrong_attempt，摘录学生答案并分析错因。
+   - 看不到作答痕迹 → not_attempted；无法判断 → unknown。
+- **严禁**为了证明学生答错而修改正确答案，或从学生答案反推正确答案。
+
 【核心输出要求 (OUTPUT REQUIREMENTS)】
 你的响应输出**必须严格遵循以下自定义标签格式**。**严禁**使用 JSON 或 Markdown 代码块。
 
@@ -486,15 +520,15 @@ export const DEFAULT_REANSWER_TEMPLATE = `【角色与核心任务 (ROLE AND COR
 </knowledge_points>
 
 <wrong_answer_text>
-请只根据校正后的题目文本和当前图片中可见的学生作答痕迹重新判断学生错误解答。如果当前图片中可见错误解答、错误步骤、草稿或错误答案，请尽量按原样摘录；如果看不到学生作答痕迹，请留空，不要猜测。
+仅当 mistake_status = wrong_attempt 时，按原样摘录学生的错误解答；其余情况留空。
 </wrong_answer_text>
 
 <mistake_status>
-重新判断并填写以下值之一：wrong_attempt（当前题目文本或当前图片中明确有错误解答或错误步骤）、not_attempted（当前图片明确显示未作答或空白）、unknown（看不到学生作答痕迹或无法判断）。不要猜测。
+重新判断并填写以下值之一：correct（学生作答与你的正确答案一致）、wrong_attempt（与正确答案不一致或存在明确错误步骤）、not_attempted（图片明确显示未作答或空白）、unknown（看不到作答痕迹或无法判断）。不要猜测。
 </mistake_status>
 
 <mistake_analysis>
-请基于校正后的题目和当前图片中可见的学生作答痕迹重新判断错因。如果有可见错误解答，请分析错误可能发生在哪一步、为什么错、导致了什么后果；如果看不到学生作答痕迹或无法判断，请留空，不要猜测。
+仅当 mistake_status = wrong_attempt 时，分析错在哪一步、为什么错、导致什么后果；其余情况留空。
 </mistake_analysis>
 
 【!!! 关键格式与内容约束 (CRITICAL RULES) !!!】
