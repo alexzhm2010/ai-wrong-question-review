@@ -129,41 +129,40 @@ export function ImageCropper({ imageSrc, open, onClose, onCropComplete }: ImageC
 
     return (
         <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-            <DialogContent className="max-w-3xl h-[90vh] flex flex-col p-0 gap-0">
-                <DialogHeader className="p-4 border-b shrink-0">
+            <DialogContent className="flex h-[90svh] max-h-[90svh] w-[calc(100vw_-_1rem)] max-w-[calc(100vw_-_1rem)] flex-col gap-0 overflow-hidden p-0 sm:w-full sm:max-w-3xl">
+                <DialogHeader className="shrink-0 border-b p-4 pr-12">
                     <DialogTitle>{t.common.cropper?.title || "Crop Image"}</DialogTitle>
                 </DialogHeader>
 
-                <div className="flex-1 bg-black w-full overflow-auto flex items-center justify-center p-4">
+                <div className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden bg-black p-2 sm:p-4">
                     <ReactCrop
                         crop={crop}
                         onChange={(_, percentCrop) => setCrop(percentCrop)}
                         onComplete={(c) => setCompletedCrop(c)}
-                        className="max-h-full"
+                        className="max-h-full max-w-full"
+                        style={{ maxHeight: '100%', maxWidth: '100%' }}
                     >
                         <img
                             ref={imgRef}
                             alt="Crop me"
                             src={imageSrc}
                             onLoad={onImageLoad}
-                            style={{ maxHeight: '70vh', maxWidth: '100%', objectFit: 'contain' }}
+                            style={{ maxWidth: '100%', maxHeight: 'calc(90svh - 12rem)', display: 'block' }}
                         />
                     </ReactCrop>
                 </div>
 
-                <div className="p-4 border-t bg-background shrink-0">
-                    <div className="flex justify-between items-center">
-                        <p className="text-sm text-muted-foreground">
-                            {t.common.cropper?.hint || "💡 Drag to adjust crop area"}
-                        </p>
-                        <div className="flex gap-2">
-                            <Button variant="outline" onClick={onClose}>
-                                {t.common.cancel || "Cancel"}
-                            </Button>
-                            <Button onClick={handleConfirm}>
-                                {t.common.confirm || "Confirm"}
-                            </Button>
-                        </div>
+                <div className="flex shrink-0 flex-col gap-2 border-t bg-background p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+                    <p className="text-xs text-muted-foreground sm:text-sm">
+                        {t.common.cropper?.hint || "💡 Drag to adjust crop area"}
+                    </p>
+                    <div className="flex w-full gap-2 sm:w-auto">
+                        <Button variant="outline" className="flex-1 sm:flex-none" onClick={onClose}>
+                            {t.common.cancel || "Cancel"}
+                        </Button>
+                        <Button className="flex-1 sm:flex-none" onClick={handleConfirm}>
+                            {t.common.confirm || "Confirm"}
+                        </Button>
                     </div>
                 </div>
             </DialogContent>

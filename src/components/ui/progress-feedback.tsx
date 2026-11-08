@@ -30,10 +30,10 @@ export function ProgressFeedback({ status, progress, message, className }: Progr
 
     return (
         <div className={cn(
-            "fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm",
+            "fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm",
             className
         )}>
-            <div className="w-full max-w-md p-6 space-y-6 bg-card rounded-lg border shadow-lg mx-4">
+            <div className="w-full max-w-md space-y-4 rounded-lg border bg-card p-5 shadow-lg sm:space-y-6 sm:p-6">
                 <div className="flex flex-col items-center justify-center space-y-4 text-center">
                     <div className="relative">
                         <Loader2 className="h-12 w-12 animate-spin text-primary" />
@@ -43,7 +43,7 @@ export function ProgressFeedback({ status, progress, message, className }: Progr
                     </div>
 
                     <div className="space-y-2 w-full">
-                        <h3 className="text-lg font-semibold tracking-tight">
+                        <h3 className="break-words text-base font-semibold tracking-tight sm:text-lg">
                             {message}
                         </h3>
                         {progress !== undefined && (
