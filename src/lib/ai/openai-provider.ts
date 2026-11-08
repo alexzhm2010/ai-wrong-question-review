@@ -166,7 +166,14 @@ export class OpenAIProvider implements AIService {
         }
     }
 
-    async analyzeImage(imageBase64: string, mimeType: string = "image/jpeg", language: 'zh' | 'en' = 'zh', grade?: 7 | 8 | 9 | 10 | 11 | 12 | null, subject?: string | null, gradeSemester?: string | null): Promise<ParsedQuestion> {
+    private async buildAnalyzeMessages(
+        imageBase64: string,
+        mimeType: string,
+        language: 'zh' | 'en',
+        grade?: 7 | 8 | 9 | 10 | 11 | 12 | null,
+        subject?: string | null,
+        gradeSemester?: string | null
+    ): Promise<{ systemPrompt: string; messages: any[] }> {
         const config = await getAppConfig();
 
         // 从数据库获取各学科标签
@@ -186,63 +193,72 @@ export class OpenAIProvider implements AIService {
             prefetchedEnglishTags,
         }, gradeSemester);
 
-        logger.box('🔍 AI Image Analysis Request', {
+        const messages = [
+            { role: "system", content: systemPrompt },
+            {
+                role: "user",
+                content: [
+                    {
+                        type: "image_url",
+                        image_url: { url: `data:${mimeType};base64,${imageBase64}` },
+                    },
+                ],
+            },
+        ];
+
+        return { systemPrompt, messages };
+    }
+
+    /**
+     * 判断当前模型是否支持「思考/推理」开关（仅百炼 DashScope 的 Qwen3 系列）。
+     * 其它模型（GPT / Gemini / 旧版 qwen-vl 等）传入 enable_thinking 会报错，需排除。
+     */
+    private supportsThinking(): boolean {
+        return this.baseURL.includes('dashscope') || this.model.toLowerCase().includes('qwen3');
+    }
+
+    async analyzeImageStream(
+        imageBase64: string,
+        mimeType: string = "image/jpeg",
+        language: 'zh' | 'en' = 'zh',
+        grade?: 7 | 8 | 9 | 10 | 11 | 12 | null,
+        subject?: string | null,
+        gradeSemester?: string | null,
+        onDelta?: (text: string) => void
+    ): Promise<ParsedQuestion> {
+        const config = await getAppConfig();
+        // P0：思考/推理开关，默认关闭（提速）；P1：输出 token 上限，默认 4096
+        const enableThinking = config.aiOptions?.enableThinking ?? false;
+        const maxTokens = config.aiOptions?.maxTokens ?? 4096;
+
+        const { systemPrompt, messages } = await this.buildAnalyzeMessages(imageBase64, mimeType, language, grade, subject, gradeSemester);
+
+        logger.box('🔍 AI Image Analysis Request (stream)', {
             provider: 'OpenAI',
             endpoint: `${this.baseURL}/chat/completions`,
             imageSize: `${imageBase64.length} bytes`,
             mimeType,
             model: this.model,
             language,
-            grade: grade || 'all'
+            grade: grade || 'all',
+            enableThinking,
+            maxTokens,
         });
         logger.box('📝 Full System Prompt', systemPrompt);
 
         try {
             const startedAt = Date.now();
-            // 构建请求参数（用于日志显示，图片数据截断）
-            const requestParamsForLog = {
-                model: this.model,
-                messages: [
-                    {
-                        role: "system",
-                        content: systemPrompt
-                    },
-                    {
-                        role: "user",
-                        content: [
-                            {
-                                type: "image_url",
-                                image_url: {
-                                    url: `data:${mimeType};base64,[...${imageBase64.length} bytes base64 data...]`,
-                                },
-                            },
-                        ],
-                    },
-                ],
-                max_tokens: 8192,
-            };
+            let fullText = '';
 
-            logger.box('📤 API Request (发送给 AI 的原始请求)', JSON.stringify(requestParamsForLog, null, 2));
-
-            let response: any;
+            // 仅对支持思考的模型（百炼 Qwen3）下发 enable_thinking，避免其它模型报错
+            const extraBody: Record<string, unknown> = {};
+            if (this.supportsThinking()) {
+                extraBody.enable_thinking = enableThinking;
+            }
 
             if (this.isLongCat) {
-                // LongCat 使用不同的多模态格式，绕过 SDK 直接请求
-                const messages = this.adaptMessagesForLongCat([
-                    { role: "system", content: systemPrompt },
-                    {
-                        role: "user",
-                        content: [
-                            {
-                                type: "image_url",
-                                image_url: {
-                                    url: `data:${mimeType};base64,${imageBase64}`,
-                                },
-                            },
-                        ],
-                    },
-                ]);
-
+                // LongCat 走非流式（边缘情况），整体作为一次 delta 推送
+                const adapted = this.adaptMessagesForLongCat(messages);
                 const res = await fetch(`${this.baseURL}/chat/completions`, {
                     method: 'POST',
                     headers: {
@@ -251,8 +267,9 @@ export class OpenAIProvider implements AIService {
                     },
                     body: JSON.stringify({
                         model: this.model,
-                        messages,
-                        max_tokens: 8192,
+                        messages: adapted,
+                        max_tokens: maxTokens,
+                        extra_body: extraBody,
                     }),
                 });
 
@@ -262,60 +279,59 @@ export class OpenAIProvider implements AIService {
                     throw new Error(`${res.status} status code (${errBody})`);
                 }
 
-                response = await res.json();
+                const response = await res.json();
+                fullText = response?.choices?.[0]?.message?.content || '';
+                onDelta?.(fullText);
             } else {
-                response = await this.openai.chat.completions.create({
+                // 用 any 调用以兼容 extra_body（部分 SDK 类型未声明 enable_thinking）
+                const createFn = this.openai.chat.completions.create as any;
+                const stream = await createFn({
                     model: this.model,
-                    messages: [
-                        {
-                            role: "system",
-                            content: systemPrompt
-                        },
-                        {
-                            role: "user",
-                            content: [
-                                {
-                                    type: "image_url",
-                                    image_url: {
-                                        url: `data:${mimeType};base64,${imageBase64}`,
-                                    },
-                                },
-                            ],
-                        },
-                    ],
-                    // response_format: { type: "json_object" }, // Removing to improve compatibility with 3rd party providers
-                    max_tokens: 8192,
+                    messages,
+                    max_tokens: maxTokens,
+                    stream: true,
+                    ...(Object.keys(extraBody).length ? { extra_body: extraBody } : {}),
                 });
+
+                for await (const chunk of stream) {
+                    const delta = chunk?.choices?.[0]?.delta?.content || '';
+                    if (delta) {
+                        fullText += delta;
+                        onDelta?.(delta);
+                    }
+                }
             }
 
-            logger.box('📦 Full API Response', JSON.stringify(response, null, 2));
+            logger.box('🤖 AI Raw Response', fullText);
 
-            // 检查响应是否有效
-            if (!response || !response.choices || response.choices.length === 0) {
-                logger.error({ response: JSON.stringify(response) }, 'Invalid API response - no choices array');
-                throw new Error("AI_RESPONSE_ERROR: API returned empty or invalid response");
-            }
-
-            const text = response.choices[0]?.message?.content || "";
-
-            logger.box('🤖 AI Raw Response', text);
-
-            if (!text) throw new Error("Empty response from AI");
-            const parsedResult = this.parseResponse(text);
+            if (!fullText) throw new Error("Empty response from AI");
+            const parsedResult = this.parseResponse(fullText);
 
             logger.box('✅ Parsed & Validated Result', JSON.stringify(parsedResult, null, 2));
-            logger.info({ durationMs: Date.now() - startedAt, model: this.model }, 'Image analysis duration');
+            logger.info({ durationMs: Date.now() - startedAt, model: this.model, enableThinking, maxTokens }, 'Image analysis duration (stream)');
 
             return parsedResult;
 
         } catch (error) {
-            logger.box('❌ Error during AI analysis', {
+            logger.box('❌ Error during AI streaming analysis', {
                 error: error instanceof Error ? error.message : String(error),
                 stack: error instanceof Error ? error.stack : undefined
             });
             this.handleError(error);
             throw error;
         }
+    }
+
+    async analyzeImage(
+        imageBase64: string,
+        mimeType: string = "image/jpeg",
+        language: 'zh' | 'en' = 'zh',
+        grade?: 7 | 8 | 9 | 10 | 11 | 12 | null,
+        subject?: string | null,
+        gradeSemester?: string | null
+    ): Promise<ParsedQuestion> {
+        // 非流式入口直接复用流式实现（onDelta 留空）
+        return this.analyzeImageStream(imageBase64, mimeType, language, grade, subject, gradeSemester);
     }
 
     async generateSimilarQuestion(originalQuestion: string, knowledgePoints: string[], language: 'zh' | 'en' = 'zh', difficulty: DifficultyLevel = 'medium', gradeSemester?: string | null): Promise<ParsedQuestion> {

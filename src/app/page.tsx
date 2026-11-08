@@ -16,6 +16,7 @@ import { processImageFile } from "@/lib/image-utils";
 import { Upload, BookOpen, Tags, LogOut, BarChart3, PenLine, X } from "lucide-react";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { BroadcastNotification } from "@/components/broadcast-notification";
+import { VersionBadge } from "@/components/version-badge";
 import { signOut } from "next-auth/react";
 
 import { ProgressFeedback, ProgressStatus } from "@/components/ui/progress-feedback";
@@ -23,6 +24,7 @@ import { frontendLogger } from "@/lib/frontend-logger";
 import { toast } from "@/lib/toast";
 import { TextInputZone } from "@/components/text-input-zone";
 import { DirectTextEditor } from "@/components/direct-text-editor";
+import { streamAnalyze } from "@/lib/stream-analyze";
 
 function HomeContent() {
     const [step, setStep] = useState<"upload" | "review">("upload");
@@ -30,6 +32,7 @@ function HomeContent() {
     const [progress, setProgress] = useState(0);
     const [parsedData, setParsedData] = useState<ParsedQuestion | null>(null);
     const [currentImage, setCurrentImage] = useState<string | null>(null);
+    const [livePreview, setLivePreview] = useState<string>('');
     const { t, language } = useLanguage();
     const searchParams = useSearchParams();
     const router = useRouter();
@@ -196,17 +199,24 @@ function HomeContent() {
                 size: base64Image.length
             });
 
-            frontendLogger.info('[HomeAnalyze]', 'Step 2/5: Calling API endpoint /api/analyze');
+            frontendLogger.info('[HomeAnalyze]', 'Step 2/5: Calling API endpoint /api/analyze (stream)');
             phaseStartedAtRef.current = Date.now();
             setAnalysisStep('analyzing');
+            setLivePreview('');
             const apiStartTime = Date.now();
-            const data = await apiClient.post<AnalyzeResponse>("/api/analyze", {
+            let data: AnalyzeResponse = {} as AnalyzeResponse;
+            await streamAnalyze({
                 imageBase64: base64Image,
                 language: language,
-                subjectId: initialNotebookId || autoSelectedNotebookId || undefined
-            }, { timeout: aiTimeout, signal: controller.signal }); // Use configured timeout
+                subjectId: initialNotebookId || autoSelectedNotebookId || undefined,
+                timeout: aiTimeout,
+                signal: controller.signal,
+                onDelta: (text) => setLivePreview((prev) => prev + text),
+                onDone: (result) => { data = result; },
+                onError: (msg) => { const e: any = new Error(msg); e.data = { message: msg }; throw e; },
+            });
             const apiDuration = Date.now() - apiStartTime;
-            frontendLogger.info('[HomeAnalyze]', 'API response received, validating data', {
+            frontendLogger.info('[HomeAnalyze]', 'API stream completed, validating data', {
                 apiDuration
             });
 
@@ -249,6 +259,7 @@ function HomeContent() {
 
             frontendLogger.info('[HomeAnalyze]', 'Step 5/5: Switching to review page');
             const setStepStart = Date.now();
+            setLivePreview('');
             setStep("review");
             const setStepDuration = Date.now() - setStepStart;
             frontendLogger.info('[HomeAnalyze]', 'Step switched to review', {
@@ -538,6 +549,17 @@ function HomeContent() {
                 message={getProgressMessage()}
             />
 
+            {livePreview && (analysisStep === 'analyzing' || analysisStep === 'processing') && (
+                <div className="border rounded-lg p-4 bg-card shadow-sm space-y-2">
+                    <div className="text-sm font-medium text-muted-foreground">
+                        {language === 'zh' ? "AI 实时解析中…" : "AI is analyzing…"}
+                    </div>
+                    <pre className="whitespace-pre-wrap break-words text-sm max-h-80 overflow-auto leading-relaxed">
+                        {livePreview}
+                    </pre>
+                </div>
+            )}
+
             {['compressing', 'uploading', 'analyzing', 'processing'].includes(analysisStep) && (
                 <div className="pointer-events-none fixed inset-x-0 bottom-6 z-[60] flex justify-center px-4">
                     <Button
@@ -560,6 +582,7 @@ function HomeContent() {
                     <div className="flex items-center gap-2 bg-card p-2 rounded-lg border shadow-sm shrink-0">
                         <BroadcastNotification />
                         <SettingsDialog />
+                        <VersionBadge />
                         <Button
                             variant="ghost"
                             size="icon"

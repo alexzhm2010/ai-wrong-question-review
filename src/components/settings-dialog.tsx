@@ -19,6 +19,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Settings, Trash2, Loader2, AlertTriangle, Save, Eye, EyeOff, Languages, User, Bot, Shield, RefreshCw, Plus, Zap, CheckCircle2, XCircle, Download, Upload, BarChart3 } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -779,6 +780,60 @@ export function SettingsDialog() {
                                 />
                                 <p className="text-xs text-muted-foreground">
                                     {t.settings?.general?.timeoutDesc || "Increase this value if you experience frequent timeouts during AI analysis."}
+                                </p>
+                            </div>
+
+                            <div className="space-y-2 pt-4 border-t">
+                                <div className="flex items-center justify-between gap-4">
+                                    <div className="space-y-1">
+                                        <Label>{(t.settings?.general as any)?.enableThinking || "AI 思考/推理模式"}</Label>
+                                        <p className="text-xs text-muted-foreground">
+                                            {(t.settings?.general as any)?.enableThinkingDesc || "开启后模型先推理再作答，难题更准但更慢；默认关闭以提速。"}
+                                        </p>
+                                    </div>
+                                    <Switch
+                                        checked={config.aiOptions?.enableThinking ?? false}
+                                        onCheckedChange={(val: boolean) =>
+                                            setConfig((prev) => ({
+                                                ...prev,
+                                                aiOptions: {
+                                                    enableThinking: val,
+                                                    maxTokens: prev.aiOptions?.maxTokens ?? 4096,
+                                                },
+                                            }))
+                                        }
+                                        aria-label={(t.settings?.general as any)?.enableThinking || "AI 思考/推理模式"}
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="space-y-2 pt-4 border-t">
+                                <Label>{(t.settings?.general as any)?.maxTokens || "单次分析最大输出 Token"}</Label>
+                                <Select
+                                    value={String(config.aiOptions?.maxTokens ?? 4096)}
+                                    onValueChange={(val: string) =>
+                                        setConfig((prev) => ({
+                                            ...prev,
+                                            aiOptions: {
+                                                enableThinking: prev.aiOptions?.enableThinking ?? false,
+                                                maxTokens: parseInt(val, 10),
+                                            },
+                                        }))
+                                    }
+                                >
+                                    <SelectTrigger>
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {[2048, 3072, 4096, 5120, 6144, 8192].map((v) => (
+                                            <SelectItem key={v} value={String(v)}>
+                                                {v.toLocaleString()} token{v >= 8192 ? "（原始上限）" : ""}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                                <p className="text-xs text-muted-foreground">
+                                    {(t.settings?.general as any)?.maxTokensDesc || "控制模型单次作答长度上限，越小响应越快。默认 4096。"}
                                 </p>
                             </div>
                         </div>

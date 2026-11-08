@@ -247,6 +247,21 @@ export class GeminiProvider implements AIService {
         }
     }
 
+    async analyzeImageStream(
+        imageBase64: string,
+        mimeType: string = "image/jpeg",
+        language: 'zh' | 'en' = 'zh',
+        grade?: 7 | 8 | 9 | 10 | 11 | 12 | null,
+        subject?: string | null,
+        gradeSemester?: string | null,
+        onDelta?: (text: string) => void
+    ): Promise<ParsedQuestion> {
+        // Gemini 暂走非流式：复用 analyzeImage，将完整解析作为一次 delta 推送
+        const result = await this.analyzeImage(imageBase64, mimeType, language, grade, subject, gradeSemester);
+        onDelta?.(result.analysis || '');
+        return result;
+    }
+
     async generateSimilarQuestion(originalQuestion: string, knowledgePoints: string[], language: 'zh' | 'en' = 'zh', difficulty: DifficultyLevel = 'medium', gradeSemester?: string | null): Promise<ParsedQuestion> {
         const config = await getAppConfig();
         const prompt = generateSimilarQuestionPrompt(language, originalQuestion, knowledgePoints, difficulty, {

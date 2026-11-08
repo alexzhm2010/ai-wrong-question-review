@@ -135,6 +135,10 @@ export interface AppConfig {
     timeouts?: {
         analyze?: number; // 毫秒
     };
+    aiOptions?: {
+        enableThinking?: boolean;
+        maxTokens?: number;
+    };
 }
 
 

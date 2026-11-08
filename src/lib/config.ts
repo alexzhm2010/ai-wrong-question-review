@@ -41,6 +41,10 @@ export interface AppConfig {
     timeouts?: {
         analyze?: number; // 毫秒
     };
+    aiOptions?: {
+        enableThinking?: boolean; // AI 思考/推理模式，默认 false（关闭以提速）
+        maxTokens?: number;      // 单次分析最大输出 token，默认 4096
+    };
 }
 
 // 旧版 OpenAI 配置格式（用于迁移检测）
@@ -122,6 +126,10 @@ const DEFAULT_CONFIG: AppConfig = {
     timeouts: {
         analyze: 180000,
     },
+    aiOptions: {
+        enableThinking: false,
+        maxTokens: 4096,
+    },
 };
 
 // 合并数据库配置与默认值，保证字段完整
@@ -137,6 +145,7 @@ function mergeConfig(userConfig: Partial<AppConfig>): AppConfig {
         azure: { ...DEFAULT_CONFIG.azure, ...userConfig.azure },
         prompts: { ...DEFAULT_CONFIG.prompts, ...userConfig.prompts },
         timeouts: { ...DEFAULT_CONFIG.timeouts, ...userConfig.timeouts },
+        aiOptions: { ...DEFAULT_CONFIG.aiOptions, ...userConfig.aiOptions },
     };
 }
 

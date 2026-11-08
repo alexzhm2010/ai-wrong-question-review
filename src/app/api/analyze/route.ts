@@ -5,13 +5,37 @@ import { getServerSession } from "next-auth";
 import { calculateGradeNumber, inferSubjectFromName } from "@/lib/knowledge-tags";
 import { calculateGrade } from "@/lib/grade-calculator";
 import { prisma } from "@/lib/prisma";
-import { badRequest, internalError, createErrorResponse, ErrorCode } from "@/lib/api-errors";
+import { badRequest, createErrorResponse, ErrorCode } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
 
 const logger = createLogger('api:analyze');
 
 // Vercel 函数最大执行时长（Hobby 上限 60s；Docker 部署不受此限制）
 export const maxDuration = 60;
+
+export const dynamic = 'force-dynamic';
+
+// 已知 AI 错误类型映射：将异常 message 归一化为前端可识别的错误码
+function normalizeAIErrorMessage(error: unknown): string {
+    const message = error instanceof Error ? error.message : String(error);
+    if (
+        message === 'AI_CONNECTION_FAILED' ||
+        message === 'AI_RESPONSE_ERROR' ||
+        message.includes('AI_AUTH_ERROR') ||
+        message === 'AI_TIMEOUT_ERROR' ||
+        message === 'AI_QUOTA_EXCEEDED' ||
+        message === 'AI_PERMISSION_DENIED' ||
+        message === 'AI_NOT_FOUND' ||
+        message === 'AI_SERVICE_UNAVAILABLE' ||
+        message === 'AI_UNKNOWN_ERROR'
+    ) {
+        return message.includes('AI_AUTH_ERROR') ? 'AI_AUTH_ERROR' : message;
+    }
+    if (message?.includes('Zod') || message?.includes('validate')) {
+        return 'AI_RESPONSE_ERROR';
+    }
+    return message;
+}
 
 export async function POST(req: Request) {
     logger.info('Analyze API called');
@@ -89,7 +113,6 @@ export async function POST(req: Request) {
             }
         }
 
-
         // 将内部科目名称转换为中文科目名称
         const subjectNameMapping: Record<string, string> = {
             'math': '数学',
@@ -104,53 +127,57 @@ export async function POST(req: Request) {
         };
         const subjectChinese = subjectName ? subjectNameMapping[subjectName] : null;
 
-        logger.info({ userGrade, userGradeSemester, subject: subjectChinese }, 'Calling AI service for image analysis');
+        logger.info({ userGrade, userGradeSemester, subject: subjectChinese }, 'Calling AI service for image analysis (streaming)');
         const aiService = await getAIService();
-        const analysisResult = await aiService.analyzeImage(imageBase64, mimeType, language, userGrade, subjectChinese, userGradeSemester);
 
-        logger.debug({
-            knowledgePointsCount: analysisResult.knowledgePoints?.length,
-            knowledgePointsType: typeof analysisResult.knowledgePoints,
-            isArray: Array.isArray(analysisResult.knowledgePoints)
-        }, 'AI returned knowledge points');
+        // 以 SSE 流式返回：逐段推送 delta，结束后推送结构化 result，异常推送 error
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream({
+            async start(controller) {
+                const send = (obj: unknown) => {
+                    try {
+                        controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+                    } catch {
+                        // 控制器已关闭，忽略
+                    }
+                };
+                try {
+                    const result = await aiService.analyzeImageStream(
+                        imageBase64,
+                        mimeType,
+                        language,
+                        userGrade,
+                        subjectChinese,
+                        userGradeSemester,
+                        (delta) => send({ type: 'delta', content: delta })
+                    );
+                    send({ type: 'done', result });
+                } catch (error: any) {
+                    const errorMessage = normalizeAIErrorMessage(error);
+                    logger.error({ errorMessage }, 'Streaming analysis failed');
+                    send({ type: 'error', message: errorMessage });
+                } finally {
+                    try { controller.close(); } catch { /* noop */ }
+                }
+            }
+        });
 
-        // AI 现在从数据库获取标签列表，返回的标签已经是标准化的，不需要额外处理
-        if (!analysisResult.knowledgePoints || analysisResult.knowledgePoints.length === 0) {
-            logger.warn('Knowledge points is empty or null');
-        }
-
-        logger.info('AI analysis successful');
-
-        return NextResponse.json(analysisResult);
+        return new Response(stream, {
+            headers: {
+                'Content-Type': 'text/event-stream; charset=utf-8',
+                'Cache-Control': 'no-cache, no-transform',
+                'Connection': 'keep-alive',
+                'X-Accel-Buffering': 'no',
+            },
+        });
     } catch (error: any) {
         logger.error({
             error: error.message,
             stack: error.stack
-        }, 'Analysis error occurred');
+        }, 'Analysis request error');
 
-        // 返回具体的错误类型，便于前端显示详细提示
         let errorMessage = error.message || "Failed to analyze image";
-
-        // 识别特定错误类型
-        if (error.message && (
-            error.message === 'AI_CONNECTION_FAILED' ||
-            error.message === 'AI_RESPONSE_ERROR' ||
-            error.message.includes('AI_AUTH_ERROR') ||
-            error.message === 'AI_TIMEOUT_ERROR' ||
-            error.message === 'AI_QUOTA_EXCEEDED' ||
-            error.message === 'AI_PERMISSION_DENIED' ||
-            error.message === 'AI_NOT_FOUND' ||
-            error.message === 'AI_SERVICE_UNAVAILABLE' ||
-            error.message === 'AI_UNKNOWN_ERROR'
-        )) {
-            // 直接传递 AI Provider 定义的错误类型 (如果是 AI_AUTH_ERROR，提取出来)
-            if (error.message.includes('AI_AUTH_ERROR')) {
-                errorMessage = 'AI_AUTH_ERROR';
-            } else {
-                errorMessage = error.message;
-            }
-        } else if (error.message?.includes('Zod') || error.message?.includes('validate')) {
-            // Zod 验证错误
+        if (error.message?.includes('Zod') || error.message?.includes('validate')) {
             errorMessage = 'AI_RESPONSE_ERROR';
         }
 
