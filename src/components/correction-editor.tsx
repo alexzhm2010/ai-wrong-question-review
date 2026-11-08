@@ -197,13 +197,14 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
 
     return (
         <div className="space-y-6">
-            <div className="flex items-center justify-between">
-                <h2 className="text-2xl font-bold">{t.editor.title}</h2>
-                <div className="flex gap-2">
-                    <Button variant="outline" onClick={onCancel}>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <h2 className="text-xl font-bold sm:text-2xl">{t.editor.title}</h2>
+                <div className="flex w-full gap-2 sm:w-auto">
+                    <Button variant="outline" className="flex-1 sm:flex-none" onClick={onCancel}>
                         {t.editor.cancel}
                     </Button>
                     <Button
+                        className="flex-1 sm:flex-none"
                         onClick={async () => {
                             if (!data.subjectId) {
                                 toast.info(t.editor.messages?.selectNotebook || "Please select a notebook");

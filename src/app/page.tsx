@@ -579,7 +579,7 @@ function HomeContent() {
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                     <UserWelcome />
 
-                    <div className="flex shrink-0 items-center gap-1 self-end rounded-lg border bg-card p-2 shadow-sm sm:self-auto sm:gap-2">
+                    <div className="flex w-full items-center justify-between gap-1 rounded-lg border bg-card p-2 shadow-sm sm:w-auto sm:shrink-0 sm:justify-end sm:gap-2">
                         <BroadcastNotification />
                         <SettingsDialog />
                         <VersionBadge />
