@@ -43,7 +43,7 @@ export function UploadZone({ onImageSelect, isAnalyzing, fill = false }: UploadZ
     });
 
     return (
-        <div className={fill ? "flex h-full min-h-0 flex-col" : "space-y-4"}>
+        <div className={fill ? "flex h-full min-h-0 w-full flex-1 flex-col" : "space-y-4"}>
             <Card
                 {...getRootProps()}
                 className={`border-2 border-dashed cursor-pointer transition-colors hover:border-primary/50 ${fill ? "flex h-full min-h-0 flex-1 flex-col overflow-hidden" : ""} ${isDragActive ? "border-primary bg-primary/5" : "border-muted-foreground/25"

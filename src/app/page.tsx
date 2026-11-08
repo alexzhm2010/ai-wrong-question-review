@@ -542,7 +542,7 @@ function HomeContent() {
     };
 
     return (
-        <main className="flex min-h-[100dvh] flex-col bg-background">
+        <main className={`flex flex-col bg-background ${step === 'upload' ? 'h-[100dvh] overflow-hidden' : 'min-h-[100dvh]'}`}>
             <ProgressFeedback
                 status={analysisStep}
                 progress={progress}
