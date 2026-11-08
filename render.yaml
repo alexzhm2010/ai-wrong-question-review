@@ -21,7 +21,7 @@ services:
       # AUTH_SECRET / AUTH_TRUST_HOST 是 Auth.js v5 的变量，v4 会静默忽略。
       - key: NEXTAUTH_SECRET
         generateValue: true
-      # 部署后按实际域名填写，例如 https://ai-wrong-question-review.onrender.com
+      # 部署后按实际域名填写：https://wrong-review.onrender.com
       - key: NEXTAUTH_URL
         sync: false
       # 首个管理员由容器启动时 seed-admin 创建，生产环境务必设置强密码。

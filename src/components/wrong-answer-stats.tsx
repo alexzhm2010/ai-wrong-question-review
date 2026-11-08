@@ -4,7 +4,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell } from "recharts";
 
-import { Loader2, TrendingUp, CheckCircle, BookOpen } from "lucide-react";
+import { TrendingUp, CheckCircle, BookOpen } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { apiClient } from "@/lib/api-client";
 import { AnalyticsData } from "@/types/api";
@@ -56,8 +56,33 @@ export function WrongAnswerStats() {
 
     if (loading) {
         return (
-            <div className="flex justify-center p-8">
-                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <div className="space-y-6 animate-pulse">
+                <div className="h-7 w-48 rounded bg-muted" />
+                <div className="grid gap-4 md:grid-cols-3">
+                    {[0, 1, 2].map((i) => (
+                        <Card key={i}>
+                            <CardHeader className="pb-2">
+                                <div className="h-4 w-24 rounded bg-muted" />
+                            </CardHeader>
+                            <CardContent>
+                                <div className="h-8 w-16 rounded bg-muted" />
+                                <div className="mt-2 h-3 w-32 rounded bg-muted" />
+                            </CardContent>
+                        </Card>
+                    ))}
+                </div>
+                <div className="grid gap-4 md:grid-cols-2">
+                    {[0, 1].map((i) => (
+                        <Card key={i} className="col-span-2 md:col-span-1">
+                            <CardHeader>
+                                <div className="h-5 w-32 rounded bg-muted" />
+                            </CardHeader>
+                            <CardContent className="h-[300px] min-h-[300px]">
+                                <div className="h-full w-full rounded bg-muted" />
+                            </CardContent>
+                        </Card>
+                    ))}
+                </div>
             </div>
         );
     }

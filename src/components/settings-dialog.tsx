@@ -688,37 +688,37 @@ export function SettingsDialog() {
 
                 <Tabs defaultValue="general" className="w-full">
                     <TabsList className={`grid w-full grid-cols-4 ${(session?.user as any)?.role === 'admin' ? 'sm:grid-cols-7' : 'sm:grid-cols-4'} gap-1 h-auto`}>
-                        <TabsTrigger value="general" className="px-2 sm:px-3">
-                            <Languages className="h-4 w-4 sm:mr-2" />
-                            <span className="hidden sm:inline">{t.settings?.tabs?.general || "General"}</span>
+                        <TabsTrigger value="general" aria-label={t.settings?.tabs?.general || "General"} className="px-1 sm:px-3 min-h-[44px] flex-col gap-1 sm:flex-row sm:gap-2 py-2">
+                            <Languages className="h-4 w-4" />
+                            <span className="text-[10px] sm:text-sm leading-none">{t.settings?.tabs?.general || "General"}</span>
                         </TabsTrigger>
-                        <TabsTrigger value="account" className="px-2 sm:px-3">
-                            <User className="h-4 w-4 sm:mr-2" />
-                            <span className="hidden sm:inline">{t.settings?.tabs?.account || "Account"}</span>
+                        <TabsTrigger value="account" aria-label={t.settings?.tabs?.account || "Account"} className="px-1 sm:px-3 min-h-[44px] flex-col gap-1 sm:flex-row sm:gap-2 py-2">
+                            <User className="h-4 w-4" />
+                            <span className="text-[10px] sm:text-sm leading-none">{t.settings?.tabs?.account || "Account"}</span>
                         </TabsTrigger>
                         {(session?.user as any)?.role === 'admin' && (
                             <>
-                                <TabsTrigger value="ai" className="px-2 sm:px-3">
-                                    <Bot className="h-4 w-4 sm:mr-2" />
-                                    <span className="hidden sm:inline">{t.settings?.tabs?.ai || "AI Provider"}</span>
+                                <TabsTrigger value="ai" aria-label={t.settings?.tabs?.ai || "AI Provider"} className="px-1 sm:px-3 min-h-[44px] flex-col gap-1 sm:flex-row sm:gap-2 py-2">
+                                    <Bot className="h-4 w-4" />
+                                    <span className="text-[10px] sm:text-sm leading-none">{t.settings?.tabs?.ai || "AI Provider"}</span>
                                 </TabsTrigger>
-                                <TabsTrigger value="prompts" className="px-2 sm:px-3">
-                                    <MessageSquareText className="h-4 w-4 sm:mr-2" />
-                                    <span className="hidden sm:inline">{t.settings?.tabs?.prompts || "Prompts"}</span>
+                                <TabsTrigger value="prompts" aria-label={t.settings?.tabs?.prompts || "Prompts"} className="px-1 sm:px-3 min-h-[44px] flex-col gap-1 sm:flex-row sm:gap-2 py-2">
+                                    <MessageSquareText className="h-4 w-4" />
+                                    <span className="text-[10px] sm:text-sm leading-none">{t.settings?.tabs?.prompts || "Prompts"}</span>
                                 </TabsTrigger>
-                                <TabsTrigger value="admin" className="px-2 sm:px-3">
-                                    <Shield className="h-4 w-4 sm:mr-2" />
-                                    <span className="hidden sm:inline">{t.settings?.tabs?.admin || "User Management"}</span>
+                                <TabsTrigger value="admin" aria-label={t.settings?.tabs?.admin || "User Management"} className="px-1 sm:px-3 min-h-[44px] flex-col gap-1 sm:flex-row sm:gap-2 py-2">
+                                    <Shield className="h-4 w-4" />
+                                    <span className="text-[10px] sm:text-sm leading-none">{t.settings?.tabs?.admin || "User Management"}</span>
                                 </TabsTrigger>
                             </>
                         )}
-                        <TabsTrigger value="danger" className="px-2 sm:px-3">
-                            <AlertTriangle className="h-4 w-4 sm:mr-2" />
-                            <span className="hidden sm:inline">{t.settings?.tabs?.danger || "Danger"}</span>
+                        <TabsTrigger value="danger" aria-label={t.settings?.tabs?.danger || "Danger"} className="px-1 sm:px-3 min-h-[44px] flex-col gap-1 sm:flex-row sm:gap-2 py-2">
+                            <AlertTriangle className="h-4 w-4" />
+                            <span className="text-[10px] sm:text-sm leading-none">{t.settings?.tabs?.danger || "Danger"}</span>
                         </TabsTrigger>
-                        <TabsTrigger value="about" className="px-2 sm:px-3">
-                            <Info className="h-4 w-4 sm:mr-2" />
-                            <span className="hidden sm:inline">{t.settings?.tabs?.about || "About"}</span>
+                        <TabsTrigger value="about" aria-label={t.settings?.tabs?.about || "About"} className="px-1 sm:px-3 min-h-[44px] flex-col gap-1 sm:flex-row sm:gap-2 py-2">
+                            <Info className="h-4 w-4" />
+                            <span className="text-[10px] sm:text-sm leading-none">{t.settings?.tabs?.about || "About"}</span>
                         </TabsTrigger>
                     </TabsList>
 
