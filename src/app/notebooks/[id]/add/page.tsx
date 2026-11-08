@@ -12,8 +12,11 @@ import { AnalyzeResponse, Notebook, AppConfig } from "@/types/api";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { processImageFile } from "@/lib/image-utils";
-import { ArrowLeft, Upload, PenLine, X } from "lucide-react";
-import { ProgressFeedback, ProgressStatus } from "@/components/ui/progress-feedback";
+import { ArrowLeft, Upload, PenLine } from "lucide-react";
+import type { ProgressStatus } from "@/components/ui/progress-feedback";
+import { TopProgressBar } from "@/components/top-progress-bar";
+import { StreamingReview } from "@/components/streaming-review";
+import { parsePartialXml, type PartialParsed } from "@/lib/partial-parse";
 import { frontendLogger } from "@/lib/frontend-logger";
 import { toast } from "@/lib/toast";
 import { TextInputZone } from "@/components/text-input-zone";
@@ -28,7 +31,10 @@ export default function AddErrorPage() {
     const [progress, setProgress] = useState(0);
     const [parsedData, setParsedData] = useState<ParsedQuestion | null>(null);
     const [currentImage, setCurrentImage] = useState<string | null>(null);
-    const [livePreview, setLivePreview] = useState<string>('');
+    const [streamParsed, setStreamParsed] = useState<PartialParsed>({});
+    const [isStreaming, setIsStreaming] = useState(false);
+    const streamRawRef = useRef("");
+    const lastFlushRef = useRef(0);
     const { t, language } = useLanguage();
     const [notebook, setNotebook] = useState<Notebook | null>(null);
     const [config, setConfig] = useState<AppConfig | null>(null);
@@ -195,7 +201,13 @@ export default function AddErrorPage() {
             frontendLogger.info('[AddAnalyze]', 'Step 2/5: Calling API endpoint /api/analyze (stream)');
             phaseStartedAtRef.current = Date.now();
             setAnalysisStep('analyzing');
-            setLivePreview('');
+            // 立即进入 review 视图，字段随流式内容逐段填充
+            streamRawRef.current = "";
+            lastFlushRef.current = 0;
+            setStreamParsed({});
+            setIsStreaming(true);
+            setParsedData(null);
+            setStep("review");
             const apiStartTime = Date.now();
             let data: AnalyzeResponse = {} as AnalyzeResponse;
             await streamAnalyze({
@@ -204,8 +216,18 @@ export default function AddErrorPage() {
                 subjectId: notebookId,
                 timeout: aiTimeout,
                 signal: controller.signal,
-                onDelta: (text) => setLivePreview((prev) => prev + text),
-                onDone: (result) => { data = result; },
+                onDelta: (text) => {
+                    streamRawRef.current += text;
+                    const now = Date.now();
+                    if (now - lastFlushRef.current > 80) {
+                        lastFlushRef.current = now;
+                        setStreamParsed(parsePartialXml(streamRawRef.current));
+                    }
+                },
+                onDone: (result) => {
+                    data = result;
+                    setStreamParsed(parsePartialXml(streamRawRef.current));
+                },
                 onError: (msg) => { const e: any = new Error(msg); e.data = { message: msg }; throw e; },
             });
             const apiDuration = Date.now() - apiStartTime;
@@ -239,7 +261,8 @@ export default function AddErrorPage() {
 
             frontendLogger.info('[AddAnalyze]', 'Step 5/5: Switching to review page');
             const setStepStart = Date.now();
-            setLivePreview('');
+            setIsStreaming(false);
+            setStreamParsed({});
             setStep("review");
             const setStepDuration = Date.now() - setStepStart;
             frontendLogger.info('[AddAnalyze]', 'Step switched to review', {
@@ -252,8 +275,15 @@ export default function AddErrorPage() {
         } catch (error: any) {
             if (cancelRequestedRef.current) {
                 frontendLogger.info('[AddError]', 'Analysis cancelled by user');
+                setIsStreaming(false);
+                setStreamParsed({});
+                setStep("upload");
                 return;
             }
+
+            setIsStreaming(false);
+            setStreamParsed({});
+            setStep("upload");
 
             const errorDuration = Date.now() - startTime;
             frontendLogger.error('[AddError]', 'Analysis failed', {
@@ -451,36 +481,13 @@ export default function AddErrorPage() {
 
     return (
         <main className="min-h-screen bg-background">
-            <ProgressFeedback
+            <TopProgressBar
                 status={analysisStep}
                 progress={progress}
                 message={getProgressMessage()}
+                onCancel={['compressing', 'uploading', 'analyzing', 'processing'].includes(analysisStep) ? cancelAnalysis : undefined}
+                cancelLabel={t.common?.cancel || '取消'}
             />
-
-            {livePreview && (analysisStep === 'analyzing' || analysisStep === 'processing') && (
-                <div className="border rounded-lg p-4 bg-card shadow-sm space-y-2">
-                    <div className="text-sm font-medium text-muted-foreground">
-                        {language === 'zh' ? "AI 实时解析中…" : "AI is analyzing…"}
-                    </div>
-                    <pre className="whitespace-pre-wrap break-words text-sm max-h-80 overflow-auto leading-relaxed">
-                        {livePreview}
-                    </pre>
-                </div>
-            )}
-
-            {['compressing', 'uploading', 'analyzing', 'processing'].includes(analysisStep) && (
-                <div className="pointer-events-none fixed inset-x-0 bottom-6 z-[60] flex justify-center px-4">
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        className="pointer-events-auto gap-2 shadow-lg"
-                        onClick={cancelAnalysis}
-                    >
-                        <X className="h-4 w-4" />
-                        {t.common?.cancel || '取消'}
-                    </Button>
-                </div>
-            )}
 
             <div className="container mx-auto p-4 space-y-8 pb-20">
                 {/* Header Section */}
@@ -534,15 +541,19 @@ export default function AddErrorPage() {
                     </div>
                 )}
 
-                {step === "review" && parsedData && (
-                    <CorrectionEditor
-                        initialData={parsedData}
-                        imagePreview={currentImage}
-                        onSave={handleSave}
-                        onCancel={() => setStep("upload")}
-                        initialSubjectId={notebookId}
-                        aiTimeout={aiTimeout}
-                    />
+                {step === "review" && (
+                    isStreaming ? (
+                        <StreamingReview data={streamParsed} imagePreview={currentImage} />
+                    ) : parsedData ? (
+                        <CorrectionEditor
+                            initialData={parsedData}
+                            imagePreview={currentImage}
+                            onSave={handleSave}
+                            onCancel={() => setStep("upload")}
+                            initialSubjectId={notebookId}
+                            aiTimeout={aiTimeout}
+                        />
+                    ) : null
                 )}
             </div>
 
