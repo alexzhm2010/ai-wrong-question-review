@@ -138,3 +138,42 @@ describe('AI 输出护栏 · 判定裁决', () => {
         expect(result.mistakeAnalysis).toBe('');
     });
 });
+
+describe('回归：数学选择题 B 被误判并输出自我纠错独白', () => {
+    it('典型污染响应最终判为答对了，错因全空且解析不受影响', () => {
+        const raw = [
+            '<subject>数学</subject>',
+            '<knowledge_points>集合运算, 恒成立问题</knowledge_points>',
+            '<requires_image>false</requires_image>',
+            '<question_text>已知不等式 (x-2)/(x-1) ≤ 1/2 的解集为 M……</question_text>',
+            '<answer_text>B. $\\left(\\frac{1}{4},+\\infty\\right)$</answer_text>',
+            '<analysis>解得 M=(1,3]，故 a>1/4。</analysis>',
+            '<wrong_answer_text>(B)</wrong_answer_text>',
+            '<mistake_status>wrong_attempt</mistake_status>',
+            '<mistake_analysis>',
+            '学生答案写的是"(B)"，看似选对了选项字母，但根据红笔标注，正确答案应为区间……',
+            '但注意：我们的判定规则是——学生作答与上面 answer_text 中的正确答案一致 → correct。',
+            '重新审视规则第3条：学生作答与你的正确答案一致 → mistake_status 填 correct。',
+            '然而，图片中学生写的是"(B)"，而正确选项确实是 B，但为什么之前判 wrong_attempt？——这是误判！',
+            '因此，纠正：</mistake_analysis>',
+            '',
+            '重新输出正确判定：',
+            '<mistake_status> correct </mistake_status>',
+            '<wrong_answer_text>',
+            '</wrong_answer_text>',
+        ].join('\n');
+
+        const mistake = reconcileMistakeFields({
+            answerText: extractTagSafe(raw, 'answer_text') || '',
+            wrongAnswerText: extractTagSafe(raw, 'wrong_answer_text'),
+            mistakeAnalysis: extractTagSafe(raw, 'mistake_analysis'),
+            mistakeStatus: extractTagSafe(raw, 'mistake_status'),
+        });
+
+        expect(mistake.mistakeStatus).toBe('correct');
+        expect(mistake.wrongAnswerText).toBe('');
+        expect(mistake.mistakeAnalysis).toBe('');
+        expect(sanitizeBodyText(extractTagSafe(raw, 'analysis') || ''))
+            .toBe('解得 M=(1,3]，故 a>1/4。');
+    });
+});

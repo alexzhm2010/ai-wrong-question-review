@@ -153,15 +153,18 @@ export function reconcileMistakeFields(input: MistakeFieldInput): ReconciledMist
     let analysis = stripLeakedTags(rawAnalysis);
     let repaired = polluted;
 
+    // 先用「学生作答」这个客观证据裁决：即使错因文本被污染，
+    // 学生写的 (B) 与参考答案 B 一致时也应改判为答对了。
+    if (input.answerText && wrong && !containsMetaTalk(rawWrong) &&
+        studentChoseCorrectOption(input.answerText, wrong)) {
+        status = 'correct';
+        repaired = true;
+    }
+
     if (polluted) {
         wrong = '';
         analysis = '';
         if (status === 'wrong_attempt') status = 'unknown';
-    }
-
-    if (input.answerText && wrong && studentChoseCorrectOption(input.answerText, wrong)) {
-        status = 'correct';
-        repaired = true;
     }
 
     if (status === 'correct' || status === 'not_attempted' ||
