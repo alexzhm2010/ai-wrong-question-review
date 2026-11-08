@@ -281,37 +281,28 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                         </div>
                     </div>
 
-                    <div className="space-y-2">
-                        <Label>{t.editor.question}</Label>
-                        <Textarea
-                            value={data.questionText}
-                            onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setData({ ...data, questionText: e.target.value })}
-                            className="min-h-[150px] font-mono text-sm"
-                            placeholder={t.editor.placeholder || "Supports Markdown and LaTeX..."}
-                        />
-                        <Button
-                            variant="default"
-                            size="sm"
-                            onClick={handleReanswer}
-                            disabled={isReanswering || !data.questionText.trim()}
-                            className="w-full bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white font-medium"
-                        >
-                            {isReanswering ? (
-                                <>
-                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                    {t.editor.reanswering || 'AI solving...'}
-                                </>
-                            ) : (
-                                <>
-                                    <RefreshCw className="mr-2 h-4 w-4" />
-                                    {t.editor.reanswer || '🔄 Reanswer (based on corrected question)'}
-                                </>
-                            )}
-                        </Button>
-                        <p className="text-xs text-muted-foreground">
-                            {t.editor.reanswerHint || '💡 If the question was misrecognized, correct it and click to regenerate answer'}
-                        </p>
-                    </div>
+                    <Button
+                        variant="default"
+                        size="sm"
+                        onClick={handleReanswer}
+                        disabled={isReanswering || !data.questionText.trim()}
+                        className="w-full bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white font-medium"
+                    >
+                        {isReanswering ? (
+                            <>
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                {t.editor.reanswering || 'AI solving...'}
+                            </>
+                        ) : (
+                            <>
+                                <RefreshCw className="mr-2 h-4 w-4" />
+                                {t.editor.reanswer || '🔄 Reanswer (based on corrected question)'}
+                            </>
+                        )}
+                    </Button>
+                    <p className="text-xs text-muted-foreground">
+                        {t.editor.reanswerHint || '💡 If the question was misrecognized, correct it and click to regenerate answer'}
+                    </p>
 
                     <div className="space-y-2">
                         <Label>{t.editor.tags}</Label>
@@ -326,26 +317,6 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                         <p className="text-xs text-muted-foreground">
                             {t.editor.tagsHint || "💡 Tag suggestions will appear as you type"}
                         </p>
-                    </div>
-
-                    <div className="space-y-2">
-                        <Label>{t.editor.answer}</Label>
-                        <Textarea
-                            value={data.answerText}
-                            onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setData({ ...data, answerText: e.target.value })}
-                            className="min-h-[100px] font-mono text-sm"
-                            placeholder={t.editor.placeholder || "Supports Markdown and LaTeX..."}
-                        />
-                    </div>
-
-                    <div className="space-y-2">
-                        <Label>{t.editor.analysis}</Label>
-                        <Textarea
-                            value={data.analysis}
-                            onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setData({ ...data, analysis: e.target.value })}
-                            className="min-h-[200px] font-mono text-sm"
-                            placeholder={t.editor.placeholder || "Supports Markdown and LaTeX..."}
-                        />
                     </div>
 
                     <Card>
