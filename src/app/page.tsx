@@ -542,7 +542,7 @@ function HomeContent() {
     };
 
     return (
-        <main className="min-h-screen bg-background">
+        <main className="flex min-h-[100dvh] flex-col bg-background">
             <ProgressFeedback
                 status={analysisStep}
                 progress={progress}
@@ -574,9 +574,9 @@ function HomeContent() {
                 </div>
             )}
 
-            <div className="container mx-auto p-4 space-y-8 pb-20">
+            <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-3 p-3 pb-4 sm:gap-6 sm:p-4 sm:pb-8">
                 {/* Header Section */}
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                <div className="flex shrink-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                     <UserWelcome />
 
                     <div className="flex w-full items-center justify-between gap-1 rounded-lg border bg-card p-2 shadow-sm sm:w-auto sm:shrink-0 sm:justify-end sm:gap-2">
@@ -596,10 +596,10 @@ function HomeContent() {
                 </div>
 
                 {/* Action Center */}
-                <div className={initialNotebookId ? "flex justify-center mb-6" : "grid grid-cols-2 md:grid-cols-4 gap-4"}>
+                <div className={initialNotebookId ? "flex shrink-0 justify-center" : "grid shrink-0 grid-cols-2 gap-2 sm:gap-4 md:grid-cols-4"}>
                     <Button
                         size="lg"
-                        className={`h-auto py-4 text-base shadow-sm hover:shadow-md transition-all ${initialNotebookId ? "w-full max-w-md" : ""}`}
+                        className={`h-auto px-3 py-2.5 text-sm shadow-sm transition-all hover:shadow-md sm:px-8 sm:py-4 sm:text-base ${initialNotebookId ? "w-full max-w-md" : ""}`}
                         variant={step === "upload" ? "default" : "secondary"}
                         onClick={() => { setStep("upload"); setInputMode("image"); }}
                     >
@@ -615,7 +615,7 @@ function HomeContent() {
                                 <Button
                                     variant="outline"
                                     size="lg"
-                                    className="w-full h-auto py-4 text-base shadow-sm hover:shadow-md transition-all border hover:border-primary/50 hover:bg-accent/50"
+                                    className="w-full h-auto px-3 py-2.5 text-sm shadow-sm transition-all hover:shadow-md border hover:border-primary/50 hover:bg-accent/50 sm:px-8 sm:py-4 sm:text-base"
                                 >
                                     <div className="flex items-center gap-2">
                                         <BookOpen className="h-5 w-5" />
@@ -628,7 +628,7 @@ function HomeContent() {
                                 <Button
                                     variant="outline"
                                     size="lg"
-                                    className="w-full h-auto py-4 text-base shadow-sm hover:shadow-md transition-all border hover:border-primary/50 hover:bg-accent/50"
+                                    className="w-full h-auto px-3 py-2.5 text-sm shadow-sm transition-all hover:shadow-md border hover:border-primary/50 hover:bg-accent/50 sm:px-8 sm:py-4 sm:text-base"
                                 >
                                     <div className="flex items-center gap-2">
                                         <Tags className="h-5 w-5" />
@@ -641,7 +641,7 @@ function HomeContent() {
                                 <Button
                                     variant="outline"
                                     size="lg"
-                                    className="w-full h-auto py-4 text-base shadow-sm hover:shadow-md transition-all border hover:border-primary/50 hover:bg-accent/50"
+                                    className="w-full h-auto px-3 py-2.5 text-sm shadow-sm transition-all hover:shadow-md border hover:border-primary/50 hover:bg-accent/50 sm:px-8 sm:py-4 sm:text-base"
                                 >
                                     <div className="flex items-center gap-2">
                                         <BarChart3 className="h-5 w-5" />
@@ -654,11 +654,11 @@ function HomeContent() {
                 </div>
 
                 {step === "upload" && (
-                    <div className="space-y-4">
+                    <div className="flex min-h-0 flex-1 flex-col gap-2 sm:gap-4">
                         {/* Input mode tabs */}
-                        <div className="flex gap-1 overflow-x-auto border-b sm:gap-2">
+                        <div className="flex shrink-0 gap-1 overflow-x-auto border-b sm:gap-2">
                             <button
-                                className={`flex flex-1 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap border-b-2 px-2 py-2.5 text-xs font-medium transition-colors sm:flex-none sm:gap-2 sm:px-4 sm:text-sm ${
+                                className={`flex flex-1 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap border-b-2 px-2 py-2 text-xs font-medium transition-colors sm:flex-none sm:gap-2 sm:px-4 sm:py-2.5 sm:text-sm ${
                                     inputMode === "image"
                                         ? "border-primary text-primary"
                                         : "border-transparent text-muted-foreground hover:text-foreground"
@@ -669,7 +669,7 @@ function HomeContent() {
                                 {t.app?.uploadImage || "拍照上传"}
                             </button>
                             <button
-                                className={`flex flex-1 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap border-b-2 px-2 py-2.5 text-xs font-medium transition-colors sm:flex-none sm:gap-2 sm:px-4 sm:text-sm ${
+                                className={`flex flex-1 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap border-b-2 px-2 py-2 text-xs font-medium transition-colors sm:flex-none sm:gap-2 sm:px-4 sm:py-2.5 sm:text-sm ${
                                     inputMode === "text"
                                         ? "border-primary text-primary"
                                         : "border-transparent text-muted-foreground hover:text-foreground"
@@ -680,7 +680,7 @@ function HomeContent() {
                                 {t.app?.manualInput || "AI解题"}
                             </button>
                             <button
-                                className={`flex flex-1 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap border-b-2 px-2 py-2.5 text-xs font-medium transition-colors sm:flex-none sm:gap-2 sm:px-4 sm:text-sm ${
+                                className={`flex flex-1 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap border-b-2 px-2 py-2 text-xs font-medium transition-colors sm:flex-none sm:gap-2 sm:px-4 sm:py-2.5 sm:text-sm ${
                                     inputMode === "direct"
                                         ? "border-primary text-primary"
                                         : "border-transparent text-muted-foreground hover:text-foreground"
@@ -693,28 +693,34 @@ function HomeContent() {
                         </div>
 
                         {inputMode === "image" ? (
-                            <UploadZone onImageSelect={onImageSelect} isAnalyzing={analysisStep !== 'idle'} />
+                            <div className="flex min-h-0 flex-1 flex-col">
+                                <UploadZone onImageSelect={onImageSelect} isAnalyzing={analysisStep !== 'idle'} fill />
+                            </div>
                         ) : inputMode === "text" ? (
-                            <TextInputZone
-                                onSubmit={handleTextSubmit}
-                                isAnalyzing={analysisStep !== 'idle'}
-                                defaultNotebookName={
-                                    (initialNotebookId || autoSelectedNotebookId)
-                                        ? notebooks.find(n => n.id === (initialNotebookId || autoSelectedNotebookId))?.name
-                                        : undefined
-                                }
-                            />
+                            <div className="min-h-0 flex-1 overflow-y-auto">
+                                <TextInputZone
+                                    onSubmit={handleTextSubmit}
+                                    isAnalyzing={analysisStep !== 'idle'}
+                                    defaultNotebookName={
+                                        (initialNotebookId || autoSelectedNotebookId)
+                                            ? notebooks.find(n => n.id === (initialNotebookId || autoSelectedNotebookId))?.name
+                                            : undefined
+                                    }
+                                />
+                            </div>
                         ) : (
-                            <DirectTextEditor
-                                onSubmit={handleDirectSave}
-                                defaultNotebookId={initialNotebookId || autoSelectedNotebookId || undefined}
-                                defaultNotebookName={
-                                    (initialNotebookId || autoSelectedNotebookId)
-                                        ? notebooks.find(n => n.id === (initialNotebookId || autoSelectedNotebookId))?.name
-                                        : undefined
-                                }
-                                isSaving={analysisStep === 'saving'}
-                            />
+                            <div className="min-h-0 flex-1 overflow-y-auto">
+                                <DirectTextEditor
+                                    onSubmit={handleDirectSave}
+                                    defaultNotebookId={initialNotebookId || autoSelectedNotebookId || undefined}
+                                    defaultNotebookName={
+                                        (initialNotebookId || autoSelectedNotebookId)
+                                            ? notebooks.find(n => n.id === (initialNotebookId || autoSelectedNotebookId))?.name
+                                            : undefined
+                                    }
+                                    isSaving={analysisStep === 'saving'}
+                                />
+                            </div>
                         )}
                     </div>
                 )}

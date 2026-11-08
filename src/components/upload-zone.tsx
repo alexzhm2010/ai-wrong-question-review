@@ -9,9 +9,11 @@ import { useLanguage } from "@/contexts/LanguageContext";
 interface UploadZoneProps {
     onImageSelect: (file: File) => void;  // 改为传递 File 对象
     isAnalyzing: boolean;
+    /** 是否撑满父容器剩余高度（首页整屏布局使用） */
+    fill?: boolean;
 }
 
-export function UploadZone({ onImageSelect, isAnalyzing }: UploadZoneProps) {
+export function UploadZone({ onImageSelect, isAnalyzing, fill = false }: UploadZoneProps) {
     const { t } = useLanguage();
     useEffect(() => {
         // 请求通知权限
@@ -41,29 +43,29 @@ export function UploadZone({ onImageSelect, isAnalyzing }: UploadZoneProps) {
     });
 
     return (
-        <div className="space-y-4">
+        <div className={fill ? "flex h-full min-h-0 flex-col" : "space-y-4"}>
             <Card
                 {...getRootProps()}
-                className={`border-2 border-dashed cursor-pointer transition-colors hover:border-primary/50 ${isDragActive ? "border-primary bg-primary/5" : "border-muted-foreground/25"
+                className={`border-2 border-dashed cursor-pointer transition-colors hover:border-primary/50 ${fill ? "flex h-full min-h-0 flex-1 flex-col overflow-hidden" : ""} ${isDragActive ? "border-primary bg-primary/5" : "border-muted-foreground/25"
                     }`}
             >
-                <CardContent className="flex flex-col items-center justify-center py-12 space-y-4 text-center min-h-[300px]">
+                <CardContent className={`flex flex-1 flex-col items-center justify-center text-center ${fill ? "min-h-0 gap-2 py-4 sm:gap-3 sm:py-8" : "min-h-[300px] space-y-4 py-12"}`}>
                     <input {...getInputProps()} />
-                    <div className="p-4 bg-muted rounded-full">
+                    <div className={`rounded-full bg-muted ${fill ? "p-2.5 sm:p-4" : "p-4"}`}>
                         {isAnalyzing ? (
-                            <Loader2 className="h-10 w-10 text-primary animate-spin" />
+                            <Loader2 className={`text-primary animate-spin ${fill ? "h-8 w-8 sm:h-10 sm:w-10" : "h-10 w-10"}`} />
                         ) : (
-                            <UploadCloud className="h-10 w-10 text-muted-foreground" />
+                            <UploadCloud className={`text-muted-foreground ${fill ? "h-8 w-8 sm:h-10 sm:w-10" : "h-10 w-10"}`} />
                         )}
                     </div>
                     <div className="space-y-1">
-                        <h3 className="font-semibold text-lg">
+                        <h3 className="text-base font-semibold sm:text-lg">
                             {isAnalyzing ? t.app.analyzing : t.upload.analyze}
                         </h3>
-                        <p className="text-sm text-muted-foreground">
+                        <p className="text-xs text-muted-foreground sm:text-sm">
                             {isAnalyzing ? t.app.analyzing : t.app.dragDrop}
                         </p>
-                        <p className="text-xs text-muted-foreground mt-2">
+                        <p className="mt-1 text-xs text-muted-foreground sm:mt-2">
                             {t.upload.support}
                         </p>
                     </div>
