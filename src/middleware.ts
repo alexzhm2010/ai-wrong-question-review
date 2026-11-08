@@ -48,6 +48,11 @@ export async function middleware(req: NextRequest) {
         return NextResponse.next();
     }
 
+    // 版本信息（/version.json）非敏感，供首页版本徽标展示，无需登录即可访问
+    if (path === '/version.json') {
+        return NextResponse.next();
+    }
+
     try {
         const token = await readToken(req);
         const isAuth = !!token;
