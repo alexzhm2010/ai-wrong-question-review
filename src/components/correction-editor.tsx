@@ -2,13 +2,11 @@
 
 import { useState, useEffect } from "react";
 import { ParsedQuestion } from "@/lib/ai";
-import { calculateGrade } from "@/lib/grade-calculator";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Save, RefreshCw, Loader2, Box } from "lucide-react";
+import { Save, RefreshCw, Loader2, Box, ChevronDown, ChevronUp } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { frontendLogger } from "@/lib/frontend-logger";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
@@ -23,6 +21,8 @@ import type { ReanswerQuestionResult } from "@/lib/ai/types";
 import { buildReanswerRequestBody } from "@/lib/reanswer-request";
 import { GeogebraDemo } from "@/components/geogebra-demo";
 import { toast } from "@/lib/toast";
+import { GRADE_SEMESTER_OPTIONS, GRADE_SEMESTER_UNSET } from "@/lib/grade-options";
+import { fetchLastGradeSemester } from "@/lib/last-grade";
 
 interface ParsedQuestionWithSubject extends ParsedQuestion {
     subjectId?: string;
@@ -62,29 +62,34 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
     const [isSaving, setIsSaving] = useState(false);
     const [isAnalyzingGeogebra, setIsAnalyzingGeogebra] = useState(false);
     const [geogebraError, setGeogebraError] = useState<string | null>(null);
+    const [imageExpanded, setImageExpanded] = useState(false);
 
     const [educationStage, setEducationStage] = useState<string | undefined>(undefined);
     const [notebooks, setNotebooks] = useState<Notebook[]>([]);
 
-
-
-    // Fetch user info and calculate grade on mount
+    // 错题本列表（学科推断）、学段（标签建议）、上次保存时用的年级
     useEffect(() => {
-        // Fetch notebooks for mapping
         apiClient.get<Notebook[]>("/api/notebooks")
             .then(setNotebooks)
             .catch(err => console.error("Failed to fetch notebooks:", err));
 
         apiClient.get<UserProfile>("/api/user")
             .then(user => {
-                if (user && user.educationStage && user.enrollmentYear) {
-                    const grade = calculateGrade(user.educationStage, user.enrollmentYear, new Date(), language);
-                    setData(prev => ({ ...prev, gradeSemester: grade }));
-                    setEducationStage(user.educationStage);
-                }
+                if (user?.educationStage) setEducationStage(user.educationStage);
             })
-            .catch(err => console.error("Failed to fetch user info for grade calculation:", err));
-    }, [language]);
+            .catch(err => console.error("Failed to fetch user info:", err));
+
+        // 默认年级：沿用数据库里最近一次手选的有效年级，不调用 AI、不按资料推算
+        fetchLastGradeSemester().then(last => {
+            if (last) setData(prev => ({ ...prev, gradeSemester: last }));
+        });
+    }, []);
+
+    // 自动建/选的错题本可能晚于挂载到达；只在尚未选择时补齐，不覆盖用户手选
+    useEffect(() => {
+        if (!initialSubjectId) return;
+        setData(prev => prev.subjectId ? prev : { ...prev, subjectId: initialSubjectId });
+    }, [initialSubjectId]);
 
     // 重新解题函数
     const handleReanswer = async () => {
@@ -194,82 +199,67 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
         }
     };
 
+    const handleSaveClick = async () => {
+        if (isSaving) return;
+        setIsSaving(true);
+        try {
+            const status = normalizeMistakeStatusForSave(
+                data.mistakeStatus,
+                data.wrongAnswerText
+            );
+            await onSave({
+                ...data,
+                mistakeStatus: status,
+                // 答对时不保留「错误解答 / 错因」，避免把正确答案误标为错误
+                wrongAnswerText: status === 'correct' ? '' : data.wrongAnswerText,
+                mistakeAnalysis: status === 'correct' ? '' : data.mistakeAnalysis,
+            });
+        } finally {
+            setIsSaving(false);
+        }
+    };
 
     return (
-        <div className="space-y-6">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <h2 className="text-xl font-bold sm:text-2xl">{t.editor.title}</h2>
-                <div className="flex w-full gap-2 sm:w-auto">
-                    <Button variant="outline" className="flex-1 sm:flex-none" onClick={onCancel}>
-                        {t.editor.cancel}
-                    </Button>
-                    <Button
-                        className="flex-1 sm:flex-none"
-                        onClick={async () => {
-                            if (!data.subjectId) {
-                                toast.info(t.editor.messages?.selectNotebook || "Please select a notebook");
-                                return;
-                            }
-                            if (isSaving) return; // 防止重复点击
-                            setIsSaving(true);
-                            try {
-                                const status = normalizeMistakeStatusForSave(
-                                    data.mistakeStatus,
-                                    data.wrongAnswerText
-                                );
-                                await onSave({
-                                    ...data,
-                                    mistakeStatus: status,
-                                    // 答对时不保留「错误解答 / 错因」，避免把正确答案误标为错误
-                                    wrongAnswerText: status === 'correct' ? '' : data.wrongAnswerText,
-                                    mistakeAnalysis: status === 'correct' ? '' : data.mistakeAnalysis,
-                                });
-                            } finally {
-                                setIsSaving(false);
-                            }
-                        }}
-                        disabled={isSaving}
-                    >
-                        {isSaving ? (
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : (
-                            <Save className="mr-2 h-4 w-4" />
-                        )}
-                        {isSaving ? (t.common?.pleaseWait || "Please wait...") : t.editor.save}
-                    </Button>
-                </div>
-            </div>
+        <div className="space-y-4 sm:space-y-6">
+            <h2 className="text-xl font-bold sm:text-2xl">{t.editor.title}</h2>
 
-            <div className="grid gap-6 lg:grid-cols-2">
-                {/* 左侧：编辑区 */}
-                <div className="space-y-6">
-                    {imagePreview && (
-                        <Card>
-                            <CardContent className="p-4">
-                                <img src={imagePreview} alt="Original" className="w-full rounded-md" />
-                            </CardContent>
-                        </Card>
-                    )}
-
+            {/* 归档信息：与保存按钮放在同一张卡里，避免被题目原图隔开 */}
+            <Card className="border-primary/30">
+                <CardHeader className="pb-3">
+                    <CardTitle className="text-base">归档信息</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
                     <div className="space-y-2">
-                        <Label>{t.editor.selectNotebook || "Select Notebook"}</Label>
+                        <Label>{t.editor.selectNotebook || "选择错题本"}</Label>
                         <NotebookSelector
                             value={data.subjectId}
                             onChange={(id) => setData({ ...data, subjectId: id })}
                         />
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                         <div className="space-y-2">
-                            <Label>{t.editor.gradeSemester || "Grade/Semester"}</Label>
-                            <Input
-                                value={data.gradeSemester || ""}
-                                onChange={(e) => setData({ ...data, gradeSemester: e.target.value })}
-                                placeholder="e.g. Junior High Grade 1, 1st Semester"
-                            />
+                            <Label>{t.editor.gradeSemester || "年级/学期"}</Label>
+                            <Select
+                                value={data.gradeSemester || GRADE_SEMESTER_UNSET}
+                                onValueChange={(val) => setData({
+                                    ...data,
+                                    gradeSemester: val === GRADE_SEMESTER_UNSET ? "" : val,
+                                })}
+                            >
+                                <SelectTrigger>
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value={GRADE_SEMESTER_UNSET}>未设置</SelectItem>
+                                    {GRADE_SEMESTER_OPTIONS.map(grade => (
+                                        <SelectItem key={grade} value={grade}>{grade}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
                         </div>
                         <div className="space-y-2">
-                            <Label>{t.editor.paperLevel || "Paper Level"}</Label>
+                            <Label>{t.editor.paperLevel || "所属卷等级"}</Label>
                             <Select
                                 value={data.paperLevel || "a"}
                                 onValueChange={(val) => setData({ ...data, paperLevel: val })}
@@ -278,13 +268,56 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                                     <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="a">{t.editor.paperLevels?.a || "Paper A"}</SelectItem>
-                                    <SelectItem value="b">{t.editor.paperLevels?.b || "Paper B"}</SelectItem>
-                                    <SelectItem value="other">{t.editor.paperLevels?.other || "Other"}</SelectItem>
+                                    <SelectItem value="a">{t.editor.paperLevels?.a || "A卷"}</SelectItem>
+                                    <SelectItem value="b">{t.editor.paperLevels?.b || "B卷"}</SelectItem>
+                                    <SelectItem value="other">{t.editor.paperLevels?.other || "其他"}</SelectItem>
                                 </SelectContent>
                             </Select>
                         </div>
                     </div>
+
+                    <div className="flex gap-2 border-t pt-4">
+                        <Button variant="outline" className="flex-1 sm:flex-none" onClick={onCancel}>
+                            {t.editor.cancel}
+                        </Button>
+                        <Button className="flex-1 sm:flex-none" onClick={handleSaveClick} disabled={isSaving}>
+                            {isSaving ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : (
+                                <Save className="mr-2 h-4 w-4" />
+                            )}
+                            {isSaving ? (t.common?.pleaseWait || "请稍候...") : t.editor.save}
+                        </Button>
+                    </div>
+                </CardContent>
+            </Card>
+
+            <div className="grid gap-6 lg:grid-cols-2">
+                {/* 左侧：编辑区 */}
+                <div className="space-y-6">
+                    {imagePreview && (
+                        <Card>
+                            <CardContent className="p-3">
+                                <button
+                                    type="button"
+                                    onClick={() => setImageExpanded(v => !v)}
+                                    className="flex w-full items-center gap-3 rounded-md text-left transition-colors hover:bg-accent/50"
+                                >
+                                    <img src={imagePreview} alt="Original" className="h-14 w-14 shrink-0 rounded object-cover" />
+                                    <span className="flex-1 text-sm font-medium">题目原图</span>
+                                    <span className="text-xs text-muted-foreground">
+                                        {imageExpanded ? "收起" : "展开"}
+                                    </span>
+                                    {imageExpanded
+                                        ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                                        : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                                </button>
+                                {imageExpanded && (
+                                    <img src={imagePreview} alt="Original" className="mt-3 w-full rounded-md" />
+                                )}
+                            </CardContent>
+                        </Card>
+                    )}
 
                     <Button
                         variant="default"
@@ -387,7 +420,7 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                 <div className="space-y-6">
                     <Card>
                         <CardHeader>
-                            <CardTitle>{t.editor.preview?.question || "Question Preview"}</CardTitle>
+                            <CardTitle>{t.editor.preview?.question || "题目内容"}</CardTitle>
                         </CardHeader>
                         <CardContent>
                             <MarkdownRenderer content={data.questionText} />
@@ -434,7 +467,7 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
 
                     <Card>
                         <CardHeader>
-                            <CardTitle>{t.editor.preview?.answer || "Answer Preview"}</CardTitle>
+                            <CardTitle>{t.editor.preview?.answer || "参考答案"}</CardTitle>
                         </CardHeader>
                         <CardContent>
                             <MarkdownRenderer content={data.answerText} />
@@ -443,7 +476,7 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
 
                     <Card>
                         <CardHeader>
-                            <CardTitle>{t.editor.preview?.analysis || "Analysis Preview"}</CardTitle>
+                            <CardTitle>{t.editor.preview?.analysis || "解析思路"}</CardTitle>
                         </CardHeader>
                         <CardContent>
                             <MarkdownRenderer content={data.analysis} />

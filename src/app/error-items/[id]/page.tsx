@@ -11,7 +11,7 @@ import Link from "next/link";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 import { TagInput } from "@/components/tag-input";
-import { Input } from "@/components/ui/input";
+import { GRADE_SEMESTER_OPTIONS, GRADE_SEMESTER_UNSET, normalizeGradeSemester } from "@/lib/grade-options";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { apiClient } from "@/lib/api-client";
 import { UserProfile, Notebook } from "@/types/api";
@@ -231,7 +231,7 @@ export default function ErrorDetailPage() {
     const startEditingMetadata = () => {
         if (item) {
             setNotebookInput(item.subjectId || null);
-            setGradeSemesterInput(item.gradeSemester || "");
+            setGradeSemesterInput(normalizeGradeSemester(item.gradeSemester));
             setPaperLevelInput(item.paperLevel || "a");
             setIsEditingMetadata(true);
         }
@@ -515,14 +515,14 @@ export default function ErrorDetailPage() {
                             {isEditingMetadata ? (
                                 <div className="space-y-3">
                                     <div className="space-y-2"><label className="text-sm text-muted-foreground">{t.notebooks?.title || "Notebook"}</label><NotebookSelector value={notebookInput || undefined} onChange={setNotebookInput} /></div>
-                                    <div className="space-y-2"><label className="text-sm text-muted-foreground">{t.filter.grade}</label><Input value={gradeSemesterInput} onChange={e => setGradeSemesterInput(e.target.value)} placeholder={t.notebook?.gradeSemesterPlaceholder || "e.g. Grade 7, Semester 1"} /></div>
+                                    <div className="space-y-2"><label className="text-sm text-muted-foreground">{t.filter.grade}</label><Select value={gradeSemesterInput || GRADE_SEMESTER_UNSET} onValueChange={val => setGradeSemesterInput(val === GRADE_SEMESTER_UNSET ? "" : val)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value={GRADE_SEMESTER_UNSET}>未设置</SelectItem>{GRADE_SEMESTER_OPTIONS.map(grade => <SelectItem key={grade} value={grade}>{grade}</SelectItem>)}</SelectContent></Select></div>
                                     <div className="space-y-2"><label className="text-sm text-muted-foreground">{t.filter.paperLevel}</label><Select value={paperLevelInput} onValueChange={setPaperLevelInput}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="a">{t.editor.paperLevels?.a || "Paper A"}</SelectItem><SelectItem value="b">{t.editor.paperLevels?.b || "Paper B"}</SelectItem><SelectItem value="other">{t.editor.paperLevels?.other || "Other"}</SelectItem></SelectContent></Select></div>
                                     <div className="flex gap-2"><Button size="sm" onClick={saveMetadataHandler}><Save className="h-4 w-4 mr-1" />{t.common?.save || "Save"}</Button><Button size="sm" variant="outline" onClick={cancelEditingMetadata}><X className="h-4 w-4 mr-1" />{t.common?.cancel || "Cancel"}</Button></div>
                                 </div>
                             ) : (
                                 <div className="space-y-2 text-sm">
                                     <div className="flex justify-between"><span className="text-muted-foreground">{t.notebooks?.title || "Notebook"}:</span><span className="font-medium">{item.subject?.name || (t.common?.notSet || "Not set")}</span></div>
-                                    <div className="flex justify-between"><span className="text-muted-foreground">{t.filter.grade}:</span><span className="font-medium">{item.gradeSemester || (t.common?.notSet || "Not set")}</span></div>
+                                    <div className="flex justify-between"><span className="text-muted-foreground">{t.filter.grade}:</span><span className="font-medium">{normalizeGradeSemester(item.gradeSemester) || (t.common?.notSet || "未设置")}</span></div>
                                     <div className="flex justify-between"><span className="text-muted-foreground">{t.filter.paperLevel}:</span><span className="font-medium">{item.paperLevel ? (t.editor.paperLevels?.[item.paperLevel as "a" | "b" | "other"] || item.paperLevel) : (t.common?.notSet || "Not set")}</span></div>
                                 </div>
                             )}

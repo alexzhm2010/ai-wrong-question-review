@@ -28,6 +28,7 @@ import { toast } from "@/lib/toast";
 import { TextInputZone } from "@/components/text-input-zone";
 import { DirectTextEditor } from "@/components/direct-text-editor";
 import { streamAnalyze } from "@/lib/stream-analyze";
+import { inferSubjectFromName } from "@/lib/knowledge-tags";
 
 function HomeContent() {
     const [step, setStep] = useState<"upload" | "review">("upload");
@@ -55,6 +56,8 @@ function HomeContent() {
     const abortControllerRef = useRef<AbortController | null>(null);
     const abortTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const cancelRequestedRef = useRef(false);
+    // 本次分析自动创建的错题本 id，用户取消校对时回收，避免留下空本
+    const createdNotebookIdRef = useRef<string | null>(null);
 
     // Input mode: "image" for photo upload, "text" for AI solve, "direct" for manual entry
     const [inputMode, setInputMode] = useState<"image" | "text" | "direct">("image");
@@ -258,18 +261,9 @@ function HomeContent() {
 
             frontendLogger.info('[HomeAnalyze]', 'Step 4/5: Setting parsed data and auto-selecting notebook');
             const dataSize = JSON.stringify(data).length;
-            // Auto-select notebook based on subject
+            // 识别到学科就自动复用/新建对应错题本并选中
             if (data.subject) {
-                const matchedNotebook = notebooks.find(n =>
-                    n.name.includes(data.subject!) || data.subject!.includes(n.name)
-                );
-                if (matchedNotebook) {
-                    setAutoSelectedNotebookId(matchedNotebook.id);
-                    frontendLogger.info('[HomeAnalyze]', 'Auto-selected notebook', {
-                        notebook: matchedNotebook.name,
-                        subject: data.subject
-                    });
-                }
+                await ensureNotebookForSubject(data.subject);
             }
             const setDataStart = Date.now();
             setParsedData(data);
@@ -364,6 +358,68 @@ function HomeContent() {
         }
     };
 
+    /**
+     * 按 AI 识别出的学科自动选中或创建错题本。
+     * 已有相近名称（如「高中物理」）时复用，不重复创建。
+     */
+    const ensureNotebookForSubject = async (subject?: string | null): Promise<string | undefined> => {
+        if (!subject) return undefined;
+        // URL 里指定了错题本时尊重用户选择，不自动改
+        if (initialNotebookId) return initialNotebookId;
+
+        const findMatch = (list: { id: string; name: string }[]) => {
+            const byName = list.find(n => n.name.includes(subject) || subject.includes(n.name));
+            if (byName) return byName;
+            const key = inferSubjectFromName(subject);
+            if (!key) return undefined;
+            return list.find(n => inferSubjectFromName(n.name) === key);
+        };
+
+        const existing = findMatch(notebooks);
+        if (existing) {
+            setAutoSelectedNotebookId(existing.id);
+            return existing.id;
+        }
+
+        try {
+            const created = await apiClient.post<Notebook>("/api/notebooks", { name: subject });
+            createdNotebookIdRef.current = created.id;
+            setNotebooks(prev => [{ id: created.id, name: created.name }, ...prev]);
+            setAutoSelectedNotebookId(created.id);
+            frontendLogger.info('[HomeAnalyze]', 'Auto-created notebook', { subject, id: created.id });
+            return created.id;
+        } catch (error: any) {
+            // 同名冲突：并发或另一端已创建，重新拉列表复用
+            if (error?.status === 409) {
+                try {
+                    const fresh = await apiClient.get<Notebook[]>("/api/notebooks");
+                    setNotebooks(fresh);
+                    const again = findMatch(fresh);
+                    if (again) {
+                        setAutoSelectedNotebookId(again.id);
+                        return again.id;
+                    }
+                } catch { /* 走兜底，允许保存为未归档 */ }
+            }
+            frontendLogger.error('[HomeAnalyze]', 'Failed to auto-create notebook', { subject, error: String(error) });
+            return undefined;
+        }
+    };
+
+    /** 取消校对：回到上传页，并回收本次自动创建、尚未使用的空错题本 */
+    const handleCancelReview = () => {
+        const createdId = createdNotebookIdRef.current;
+        createdNotebookIdRef.current = null;
+        setAutoSelectedNotebookId(null);
+        setParsedData(null);
+        setCurrentImage(null);
+        setStep("upload");
+        if (createdId) {
+            // DELETE 接口自带「含错题不可删」保护，不会误删已有数据
+            apiClient.delete(`/api/notebooks/${createdId}`).catch(() => {});
+        }
+    };
+
     const handleSave = async (finalData: ParsedQuestion & { subjectId?: string }): Promise<void> => {
         frontendLogger.info('[HomeSave]', 'Starting save process', {
             hasQuestionText: !!finalData.questionText,
@@ -386,6 +442,8 @@ function HomeContent() {
             }
 
             frontendLogger.info('[HomeSave]', 'Save successful');
+            // 本已被使用，取消逻辑不再回收它
+            createdNotebookIdRef.current = null;
             setStep("upload");
             setParsedData(null);
             setCurrentImage(null);
@@ -453,6 +511,11 @@ function HomeContent() {
                 subject: "数学", // Default, will be overridden by notebook selection
                 requiresImage: false,
             };
+
+            // 文字输入路径同样自动选好对应错题本，避免保存时卡在「请选择错题本」
+            if (parsed.subject) {
+                await ensureNotebookForSubject(parsed.subject);
+            }
 
             setCurrentImage(null); // No image for text input
             setIsStreaming(false);
@@ -763,7 +826,7 @@ function HomeContent() {
                         <CorrectionEditor
                             initialData={parsedData}
                             onSave={handleSave}
-                            onCancel={() => setStep("upload")}
+                            onCancel={handleCancelReview}
                             imagePreview={currentImage}
                             initialSubjectId={initialNotebookId || autoSelectedNotebookId || undefined}
                             aiTimeout={aiTimeout}

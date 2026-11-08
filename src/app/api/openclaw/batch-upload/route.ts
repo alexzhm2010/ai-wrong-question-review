@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { createLogger } from "@/lib/logger";
 import { createErrorResponse, ErrorCode } from "@/lib/api-errors";
 import { calculateGrade } from "@/lib/grade-calculator";
+import { normalizeGradeSemester } from "@/lib/grade-options";
 import { inferSubjectFromName } from "@/lib/knowledge-tags";
 import { findParentTagIdForGrade } from "@/lib/tag-recognition";
 import { compare } from "bcryptjs";
@@ -151,7 +152,9 @@ async function createErrorItem(
 
     let finalGradeSemester: string | null = null;
     if (user?.educationStage && user?.enrollmentYear) {
-        finalGradeSemester = calculateGrade(user.educationStage, user.enrollmentYear);
+        finalGradeSemester = normalizeGradeSemester(
+            calculateGrade(user.educationStage, user.enrollmentYear, new Date(), 'zh')
+        ) || null;
     }
 
     for (const tagName of tagNames) {

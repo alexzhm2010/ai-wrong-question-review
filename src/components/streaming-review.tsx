@@ -64,9 +64,14 @@ export function StreamingReview({ data, imagePreview }: StreamingReviewProps) {
                 <div className="space-y-3">
                     {imagePreview && (
                         <Card>
-                            <CardContent className="p-2">
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img src={imagePreview} alt="Original" className="w-full rounded-md" />
+                            <CardContent className="p-3">
+                                {/* 与校对页的折叠原图条保持一致的视觉，切换时不跳变 */}
+                                <div className="flex items-center gap-3">
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img src={imagePreview} alt="Original" className="h-14 w-14 shrink-0 rounded object-cover" />
+                                    <span className="text-sm font-medium">题目原图</span>
+                                    <span className="ml-auto text-xs text-muted-foreground">解析中…</span>
+                                </div>
                             </CardContent>
                         </Card>
                     )}

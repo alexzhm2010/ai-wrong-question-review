@@ -8,6 +8,7 @@ import { createLogger } from "@/lib/logger";
 import { findParentTagIdForGrade } from "@/lib/tag-recognition";
 import { inferSubjectFromName } from "@/lib/knowledge-tags";
 import { normalizeMistakeStatusForSave } from "@/lib/mistake-status";
+import { normalizeGradeSemester } from "@/lib/grade-options";
 
 const logger = createLogger('api:error-items');
 
@@ -102,9 +103,12 @@ export async function POST(req: Request) {
         }
 
         // 计算年级
-        let finalGradeSemester = gradeSemester;
+        // 年级只接受用户手选的 12 个标准值；旧资料推算出的「已毕业上」等脏值一律丢弃。
+        let finalGradeSemester = normalizeGradeSemester(gradeSemester);
         if (!finalGradeSemester && user.educationStage && user.enrollmentYear) {
-            finalGradeSemester = calculateGrade(user.educationStage, user.enrollmentYear);
+            finalGradeSemester = normalizeGradeSemester(
+                calculateGrade(user.educationStage, user.enrollmentYear, new Date(), 'zh')
+            );
             logger.debug({ finalGradeSemester, educationStage: user.educationStage, enrollmentYear: user.enrollmentYear }, 'Grade calculated');
         }
 

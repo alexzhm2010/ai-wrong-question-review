@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { getServerSession } from "next-auth";
 import { calculateGradeNumber, inferSubjectFromName } from "@/lib/knowledge-tags";
 import { calculateGrade } from "@/lib/grade-calculator";
+import { normalizeGradeSemester } from "@/lib/grade-options";
 import { prisma } from "@/lib/prisma";
 import { badRequest, createErrorResponse, ErrorCode } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
@@ -90,7 +91,10 @@ export async function POST(req: Request) {
                 if (user) {
                     userGrade = calculateGradeNumber(user.educationStage, user.enrollmentYear);
                     if (user.educationStage && user.enrollmentYear) {
-                        userGradeSemester = calculateGrade(user.educationStage, user.enrollmentYear, new Date(), 'zh');
+                        // 只把标准年级注入提示词，避免「已毕业上」这类脏值干扰模型
+                        userGradeSemester = normalizeGradeSemester(
+                            calculateGrade(user.educationStage, user.enrollmentYear, new Date(), 'zh')
+                        ) || null;
                     }
                     logger.debug({ userGrade, userGradeSemester }, 'Calculated user grade');
                 }

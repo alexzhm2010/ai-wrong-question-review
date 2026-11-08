@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -14,6 +14,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { inferSubjectFromName } from "@/lib/knowledge-tags";
 import type { MistakeStatus } from "@/lib/mistake-status";
 import { toast } from "@/lib/toast";
+import { GRADE_SEMESTER_OPTIONS, GRADE_SEMESTER_UNSET } from "@/lib/grade-options";
+import { fetchLastGradeSemester } from "@/lib/last-grade";
 
 interface DirectTextEditorProps {
     onSubmit: (data: {
@@ -47,6 +49,13 @@ export function DirectTextEditor({ onSubmit, defaultNotebookId, defaultNotebookN
     const [subjectId, setSubjectId] = useState(defaultNotebookId || "");
     const [gradeSemester, setGradeSemester] = useState("");
     const [paperLevel, setPaperLevel] = useState("a");
+
+    // 默认年级沿用数据库里最近一次手选的值，用户可随时下拉修改
+    useEffect(() => {
+        fetchLastGradeSemester().then(last => {
+            if (last) setGradeSemester(last);
+        });
+    }, []);
 
     const handleSubmit = async () => {
         if (!questionText.trim()) return;
@@ -168,13 +177,20 @@ export function DirectTextEditor({ onSubmit, defaultNotebookId, defaultNotebookN
                     </div>
                     <div className="space-y-2">
                         <Label>{t.editor?.gradeSemester || "年级/学期"}</Label>
-                        <input
-                            type="text"
-                            value={gradeSemester}
-                            onChange={(e) => setGradeSemester(e.target.value)}
-                            placeholder="如：初二上学期"
-                            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                        />
+                        <Select
+                            value={gradeSemester || GRADE_SEMESTER_UNSET}
+                            onValueChange={(val) => setGradeSemester(val === GRADE_SEMESTER_UNSET ? "" : val)}
+                        >
+                            <SelectTrigger>
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value={GRADE_SEMESTER_UNSET}>未设置</SelectItem>
+                                {GRADE_SEMESTER_OPTIONS.map(grade => (
+                                    <SelectItem key={grade} value={grade}>{grade}</SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
                     </div>
                     <div className="space-y-2">
                         <Label>{t.editor?.paperLevel || "试卷难度"}</Label>
