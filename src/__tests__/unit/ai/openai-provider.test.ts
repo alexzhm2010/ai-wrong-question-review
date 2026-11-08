@@ -127,7 +127,7 @@ describe('OpenAI Provider 响应解析', () => {
             expect(result.mistakeStatus).toBe('unknown');
         });
 
-        it('有 wrongAnswerText 时应该强制返回 wrong_attempt 状态', () => {
+        it('未判断状态不应被错误解答文本强推为做错了', () => {
             const mockResponse = `
 <question_text>测试题目</question_text>
 <answer_text>测试答案</answer_text>
@@ -138,8 +138,9 @@ describe('OpenAI Provider 响应解析', () => {
 
             const result = asPrivateProvider(provider).parseResponse(mockResponse);
 
-            expect(result.wrongAnswerText).toBe('错误解答');
-            expect(result.mistakeStatus).toBe('wrong_attempt');
+            expect(result.mistakeStatus).toBe('unknown');
+            expect(result.wrongAnswerText).toBe('');
+            expect(result.mistakeAnalysis).toBe('');
         });
 
         it('缺少必需标签时应该抛出错误', () => {

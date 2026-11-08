@@ -23,6 +23,7 @@ import { GeogebraDemo } from "@/components/geogebra-demo";
 import { toast } from "@/lib/toast";
 import { GRADE_SEMESTER_OPTIONS, GRADE_SEMESTER_UNSET } from "@/lib/grade-options";
 import { fetchLastGradeSemester } from "@/lib/last-grade";
+import { reconcileMistakeFields, sanitizeMistakeText } from "@/lib/ai/response-guard";
 
 interface ParsedQuestionWithSubject extends ParsedQuestion {
     subjectId?: string;
@@ -48,14 +49,23 @@ type ReanswerErrorMessages = {
 };
 
 export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, initialSubjectId, aiTimeout }: CorrectionEditorProps) {
-    const [data, setData] = useState<ParsedQuestionWithSubject>({
-        ...initialData,
-        wrongAnswerText: initialData.wrongAnswerText || "",
-        mistakeAnalysis: initialData.mistakeAnalysis || "",
-        mistakeStatus: initialData.mistakeStatus || "unknown",
-        subjectId: initialSubjectId,
-        gradeSemester: "",
-        paperLevel: "a"
+    const [data, setData] = useState<ParsedQuestionWithSubject>(() => {
+        // 入口统一走判定裁决层，历史脏数据/自定义提示词产生的自我纠错文本在这里被清掉
+        const mistake = reconcileMistakeFields({
+            answerText: initialData.answerText,
+            wrongAnswerText: initialData.wrongAnswerText,
+            mistakeAnalysis: initialData.mistakeAnalysis,
+            mistakeStatus: initialData.mistakeStatus,
+        });
+        return {
+            ...initialData,
+            wrongAnswerText: mistake.wrongAnswerText,
+            mistakeAnalysis: mistake.mistakeAnalysis,
+            mistakeStatus: mistake.mistakeStatus,
+            subjectId: initialSubjectId,
+            gradeSemester: "",
+            paperLevel: "a"
+        };
     });
     const { t, language } = useLanguage();
     const [isReanswering, setIsReanswering] = useState(false);
@@ -63,6 +73,7 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
     const [isAnalyzingGeogebra, setIsAnalyzingGeogebra] = useState(false);
     const [geogebraError, setGeogebraError] = useState<string | null>(null);
     const [imageExpanded, setImageExpanded] = useState(false);
+    const [mistakePreviewExpanded, setMistakePreviewExpanded] = useState(false);
 
     const [educationStage, setEducationStage] = useState<string | undefined>(undefined);
     const [notebooks, setNotebooks] = useState<Notebook[]>([]);
@@ -118,18 +129,23 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
 
             const result = await apiClient.post<ReanswerQuestionResult>("/api/reanswer", requestBody, { timeout: aiTimeout || 180000 });
 
-            setData(prev => ({
-                ...prev,
-                answerText: result.answerText,
-                analysis: result.analysis,
-                knowledgePoints: result.knowledgePoints,
-                wrongAnswerText: result.wrongAnswerText || "",
-                mistakeAnalysis: result.mistakeAnalysis || "",
-                mistakeStatus: normalizeMistakeStatusForSave(
-                    result.mistakeStatus,
-                    result.wrongAnswerText
-                ),
-            }));
+            setData(prev => {
+                const mistake = reconcileMistakeFields({
+                    answerText: result.answerText,
+                    wrongAnswerText: result.wrongAnswerText,
+                    mistakeAnalysis: result.mistakeAnalysis,
+                    mistakeStatus: result.mistakeStatus,
+                });
+                return {
+                    ...prev,
+                    answerText: result.answerText,
+                    analysis: result.analysis,
+                    knowledgePoints: result.knowledgePoints,
+                    wrongAnswerText: mistake.wrongAnswerText,
+                    mistakeAnalysis: mistake.mistakeAnalysis,
+                    mistakeStatus: mistake.mistakeStatus,
+                };
+            });
 
             toast.success(t.editor.reanswerSuccess || '✅ Answer and analysis updated!');
         } catch (error: unknown) {
@@ -218,6 +234,11 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
             setIsSaving(false);
         }
     };
+
+    // 展示前再清洗一次，历史脏记录不会把标签和自我纠错文本渲染出来
+    const cleanWrongAnswerText = sanitizeMistakeText(data.wrongAnswerText);
+    const cleanMistakeAnalysis = sanitizeMistakeText(data.mistakeAnalysis);
+    const mistakeSummary = cleanMistakeAnalysis || cleanWrongAnswerText;
 
     return (
         <div className="space-y-4 sm:space-y-6">
@@ -358,8 +379,22 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                     </div>
 
                     <Card>
-                        <CardHeader>
+                        <CardHeader className="flex flex-row items-center justify-between space-y-0">
                             <CardTitle>{t.editor.mistakeAnalysisTitle || "错因分析"}</CardTitle>
+                            {(data.wrongAnswerText || data.mistakeAnalysis) && (
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setData(prev => ({
+                                        ...prev,
+                                        wrongAnswerText: "",
+                                        mistakeAnalysis: "",
+                                        mistakeStatus: "unknown",
+                                    }))}
+                                >
+                                    清空错因
+                                </Button>
+                            )}
                         </CardHeader>
                         <CardContent className="space-y-4">
                             <div className="space-y-2">
@@ -371,13 +406,16 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                                     <SelectTrigger>
                                         <SelectValue />
                                     </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="correct">{t.editor.mistakeStatuses?.correct || "答对了"}</SelectItem>
-                                            <SelectItem value="not_attempted">{t.editor.mistakeStatuses?.notAttempted || "不会做"}</SelectItem>
-                                            <SelectItem value="wrong_attempt">{t.editor.mistakeStatuses?.wrongAttempt || "做错了"}</SelectItem>
-                                            <SelectItem value="unknown">{t.editor.mistakeStatuses?.unknown || "未判断"}</SelectItem>
-                                        </SelectContent>
+                                    <SelectContent>
+                                        <SelectItem value="correct">{t.editor.mistakeStatuses?.correct || "答对了"}</SelectItem>
+                                        <SelectItem value="not_attempted">{t.editor.mistakeStatuses?.notAttempted || "不会做"}</SelectItem>
+                                        <SelectItem value="wrong_attempt">{t.editor.mistakeStatuses?.wrongAttempt || "做错了"}</SelectItem>
+                                        <SelectItem value="unknown">{t.editor.mistakeStatuses?.unknown || "未判断"}</SelectItem>
+                                    </SelectContent>
                                 </Select>
+                                <p className="text-xs text-muted-foreground">
+                                    AI 的判定只是建议，判不准请以你手选的为准。
+                                </p>
                             </div>
                             {data.mistakeStatus === 'correct' ? (
                                 <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
@@ -392,9 +430,8 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                                             onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setData({
                                                 ...data,
                                                 wrongAnswerText: e.target.value,
-                                                mistakeStatus: e.target.value.trim() ? "wrong_attempt" : data.mistakeStatus,
                                             })}
-                                            className="min-h-[100px] font-mono text-sm"
+                                            className="min-h-[80px] font-mono text-sm"
                                             placeholder={t.editor.wrongAnswerPlaceholder || "如果图片里没有错误解答，可留空"}
                                         />
                                     </div>
@@ -406,9 +443,15 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                                                 ...data,
                                                 mistakeAnalysis: e.target.value,
                                             })}
-                                            className="min-h-[140px] font-mono text-sm"
-                                            placeholder={t.editor.mistakeAnalysisPlaceholder || "分析错误可能发生在哪一步、为什么错、导致什么后果"}
+                                            className="min-h-[110px] font-mono text-sm"
+                                            placeholder={"错在第几步 / 原因类型 / 下次提醒（三行，≤150 字）"}
                                         />
+                                        <p className="text-xs text-muted-foreground">
+                                            建议三行：① 错在解析思路第几步 ② 原因类型（概念/计算/审题/方法/跳步）③ 下次提醒；不要复述解题过程。
+                                            {data.mistakeAnalysis && data.mistakeAnalysis.length > 150 && (
+                                                <span className="ml-1 text-amber-600">当前 {data.mistakeAnalysis.length} 字</span>
+                                            )}
+                                        </p>
                                     </div>
                                 </>
                             )}
@@ -483,28 +526,45 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                         </CardContent>
                     </Card>
 
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>{t.editor.preview?.mistakeAnalysis || "错因分析预览"}</CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-3 text-sm">
-                            <div className="text-muted-foreground">
-                                {t.editor.mistakeStatus || "作答状态"}：{getMistakeStatusLabel(data.mistakeStatus, language)}
-                            </div>
-                            {data.mistakeStatus !== 'correct' && data.wrongAnswerText && (
-                                <div>
-                                    <div className="font-medium mb-1">{t.editor.wrongAnswerText || "错误解答原文"}</div>
-                                    <MarkdownRenderer content={data.wrongAnswerText} />
+                    {data.mistakeStatus === 'wrong_attempt' && mistakeSummary && (
+                        <Card>
+                            <CardHeader className="flex flex-row items-center justify-between space-y-0">
+                                <CardTitle>{t.editor.preview?.mistakeAnalysis || "错因分析预览"}</CardTitle>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setMistakePreviewExpanded(v => !v)}
+                                >
+                                    {mistakePreviewExpanded ? "收起" : "展开"}
+                                </Button>
+                            </CardHeader>
+                            <CardContent className="space-y-3 text-sm">
+                                <div className="text-muted-foreground">
+                                    {t.editor.mistakeStatus || "作答状态"}：{getMistakeStatusLabel(data.mistakeStatus, language)}
                                 </div>
-                            )}
-                            {data.mistakeStatus !== 'correct' && data.mistakeAnalysis && (
-                                <div>
-                                    <div className="font-medium mb-1">{t.editor.mistakeAnalysis || "错因分析"}</div>
-                                    <MarkdownRenderer content={data.mistakeAnalysis} />
-                                </div>
-                            )}
-                        </CardContent>
-                    </Card>
+                                {!mistakePreviewExpanded ? (
+                                    <div className="text-muted-foreground">
+                                        {mistakeSummary.slice(0, 60)}{mistakeSummary.length > 60 ? "…" : ""}
+                                    </div>
+                                ) : (
+                                    <>
+                                        {cleanWrongAnswerText && (
+                                            <div>
+                                                <div className="font-medium mb-1">{t.editor.wrongAnswerText || "错误解答原文"}</div>
+                                                <MarkdownRenderer content={cleanWrongAnswerText} />
+                                            </div>
+                                        )}
+                                        {cleanMistakeAnalysis && (
+                                            <div>
+                                                <div className="font-medium mb-1">{t.editor.mistakeAnalysis || "错因分析"}</div>
+                                                <MarkdownRenderer content={cleanMistakeAnalysis} />
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+                            </CardContent>
+                        </Card>
+                    )}
                 </div>
             </div>
         </div>

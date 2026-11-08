@@ -7,7 +7,7 @@ import { unauthorized, internalError, forbidden } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
 import { findParentTagIdForGrade } from "@/lib/tag-recognition";
 import { inferSubjectFromName } from "@/lib/knowledge-tags";
-import { normalizeMistakeStatusForSave } from "@/lib/mistake-status";
+import { sanitizeMistakeForPersistence } from "@/lib/ai/response-guard";
 import { normalizeGradeSemester } from "@/lib/grade-options";
 
 const logger = createLogger('api:error-items');
@@ -179,6 +179,14 @@ export async function POST(req: Request) {
 
         logger.info({ tagNames, tagConnectionsCount: tagConnections.length }, 'Creating ErrorItem with tags');
 
+        // 落库前统一清洗：剥离自我纠错文本/残留标签，并裁决作答状态
+        const mistake = sanitizeMistakeForPersistence({
+            answerText,
+            wrongAnswerText,
+            mistakeAnalysis,
+            mistakeStatus,
+        });
+
         // 创建错题记录
         try {
             const errorItem = await prisma.errorItem.create({
@@ -189,9 +197,9 @@ export async function POST(req: Request) {
                     questionText,
                     answerText,
                     analysis,
-                    wrongAnswerText: wrongAnswerText || null,
-                    mistakeAnalysis: mistakeAnalysis || null,
-                    mistakeStatus: normalizeMistakeStatusForSave(mistakeStatus, wrongAnswerText),
+                    wrongAnswerText: mistake.wrongAnswerText || null,
+                    mistakeAnalysis: mistake.mistakeAnalysis || null,
+                    mistakeStatus: mistake.mistakeStatus,
                     knowledgePoints: JSON.stringify(tagNames),
                     gradeSemester: finalGradeSemester,
                     paperLevel: paperLevel,

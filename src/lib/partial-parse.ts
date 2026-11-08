@@ -1,7 +1,12 @@
 /**
  * 流式增量解析：在 AI 还在输出 XML 标签时，尽可能提前取出已完成/正在生成的字段。
  * 用于「边接收边填充」的界面，不保证字段完整或合法。
+ *
+ * 注意：题目/答案/解析需要逐字呈现，所以允许未闭合时读到当前末尾；
+ * 但会截断到下一个已知开标签之前，避免模型跑偏时把后续字段吞进来。
  */
+import { AI_TAG_NAMES, containsMetaTalk, stripLeakedTags } from './ai/response-guard';
+
 export interface PartialParsed {
     subject?: string;
     knowledgePoints?: string[];
@@ -14,7 +19,16 @@ export interface PartialParsed {
     mistakeStatus?: string;
 }
 
-/** 取出某个标签的内容；若闭合标签还没到，返回从开标签到末尾的未完成内容 */
+function findNextOpenTag(tail: string): number {
+    let earliest = -1;
+    for (const tag of AI_TAG_NAMES) {
+        const idx = tail.indexOf(`<${tag}>`);
+        if (idx !== -1 && (earliest === -1 || idx < earliest)) earliest = idx;
+    }
+    return earliest;
+}
+
+/** 取出某个标签的内容；若闭合标签还没到，返回从开标签到下一个开标签之前的未完成内容 */
 function extractPartial(text: string, tag: string): string | undefined {
     const open = `<${tag}>`;
     const start = text.indexOf(open);
@@ -22,9 +36,21 @@ function extractPartial(text: string, tag: string): string | undefined {
     const contentStart = start + open.length;
     const close = `</${tag}>`;
     const end = text.indexOf(close, contentStart);
-    const raw = end === -1 ? text.slice(contentStart) : text.slice(contentStart, end);
-    // 去掉开标签后紧跟的空行，避免出现大片空白
-    return raw.replace(/^\s*\n+/, "");
+
+    let raw = end === -1 ? text.slice(contentStart) : text.slice(contentStart, end);
+    if (end === -1) {
+        // 未闭合时只取到下一个已知开标签之前，防止吞掉后续字段
+        const nextOpen = findNextOpenTag(raw);
+        if (nextOpen !== -1) raw = raw.slice(0, nextOpen);
+    }
+    raw = raw.replace(/^\s*\n+/, '');
+
+    // 错因类字段一旦出现自我纠错独白或裸标签，流式阶段直接不展示
+    if (tag === 'mistake_analysis' || tag === 'wrong_answer_text') {
+        if (containsMetaTalk(raw)) return '';
+        return stripLeakedTags(raw);
+    }
+    return raw;
 }
 
 export function parsePartialXml(text: string): PartialParsed {

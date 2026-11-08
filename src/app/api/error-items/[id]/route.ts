@@ -6,7 +6,7 @@ import { getServerSession } from "next-auth";
 import { unauthorized, forbidden, notFound, internalError } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
 import { findParentTagIdForGrade } from "@/lib/tag-recognition";
-import { normalizeMistakeStatusForSave } from "@/lib/mistake-status";
+import { sanitizeMistakeForPersistence, sanitizeMistakeText } from "@/lib/ai/response-guard";
 
 const logger = createLogger('api:error-items:id');
 
@@ -48,7 +48,19 @@ export async function GET(
             return forbidden("Not authorized to access this item");
         }
 
-        return NextResponse.json(errorItem);
+        // 存量脏数据在读取时先自愈展示：不把标签和自我纠错文本渲染给用户
+        const mistake = sanitizeMistakeForPersistence({
+            answerText: errorItem.answerText,
+            wrongAnswerText: errorItem.wrongAnswerText,
+            mistakeAnalysis: errorItem.mistakeAnalysis,
+            mistakeStatus: errorItem.mistakeStatus,
+        });
+        return NextResponse.json({
+            ...errorItem,
+            wrongAnswerText: mistake.wrongAnswerText || null,
+            mistakeAnalysis: mistake.mistakeAnalysis || null,
+            mistakeStatus: mistake.mistakeStatus,
+        });
     } catch (error) {
         logger.error({ error }, 'Error fetching item');
         return internalError("Failed to fetch error item");
@@ -97,8 +109,8 @@ export async function PUT(
         if (questionText !== undefined) updateData.questionText = questionText;
         if (answerText !== undefined) updateData.answerText = answerText;
         if (analysis !== undefined) updateData.analysis = analysis;
-        if (wrongAnswerText !== undefined) updateData.wrongAnswerText = wrongAnswerText || null;
-        if (mistakeAnalysis !== undefined) updateData.mistakeAnalysis = mistakeAnalysis || null;
+        if (wrongAnswerText !== undefined) updateData.wrongAnswerText = sanitizeMistakeText(wrongAnswerText) || null;
+        if (mistakeAnalysis !== undefined) updateData.mistakeAnalysis = sanitizeMistakeText(mistakeAnalysis) || null;
         if (subjectId !== undefined) {
             // 验证目标错题本存在且属于该用户
             const targetSubject = await prisma.subject.findUnique({ where: { id: subjectId } });
@@ -108,12 +120,15 @@ export async function PUT(
             updateData.subject = subjectId === "" ? { disconnect: true } : { connect: { id: subjectId } };
         }
         if (mistakeStatus !== undefined || wrongAnswerText !== undefined || mistakeAnalysis !== undefined) {
-            const nextWrongAnswerText = wrongAnswerText !== undefined ? wrongAnswerText : errorItem.wrongAnswerText;
-            const nextMistakeAnalysis = mistakeAnalysis !== undefined ? mistakeAnalysis : errorItem.mistakeAnalysis;
-            updateData.mistakeStatus = normalizeMistakeStatusForSave(
-                mistakeStatus,
-                nextWrongAnswerText
-            );
+            const mistake = sanitizeMistakeForPersistence({
+                answerText: answerText !== undefined ? answerText : errorItem.answerText,
+                wrongAnswerText: wrongAnswerText !== undefined ? wrongAnswerText : errorItem.wrongAnswerText,
+                mistakeAnalysis: mistakeAnalysis !== undefined ? mistakeAnalysis : errorItem.mistakeAnalysis,
+                mistakeStatus: mistakeStatus !== undefined ? mistakeStatus : errorItem.mistakeStatus,
+            });
+            updateData.wrongAnswerText = mistake.wrongAnswerText || null;
+            updateData.mistakeAnalysis = mistake.mistakeAnalysis || null;
+            updateData.mistakeStatus = mistake.mistakeStatus;
         }
         if (geogebraCommands !== undefined) updateData.geogebraCommands = geogebraCommands || null;
 

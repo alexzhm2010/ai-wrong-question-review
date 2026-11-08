@@ -46,4 +46,15 @@ describe('parsePartialXml', () => {
         expect(data.questionText).toBeUndefined();
         expect(data.answerText).toBeUndefined();
     });
+
+    it('未闭合字段在下一个开标签处截断，不吞后续字段', () => {
+        const data = parsePartialXml('<question_text>题干尚未写完<answer_text>B</answer_text>');
+        expect(data.questionText).toBe('题干尚未写完');
+        expect(data.answerText).toBe('B');
+    });
+
+    it('错因字段出现自我纠错独白时流式阶段不展示', () => {
+        const data = parsePartialXml('<mistake_analysis>重新审视规则第3条：这是误判！</mistake_analysis>');
+        expect(data.mistakeAnalysis).toBe('');
+    });
 });

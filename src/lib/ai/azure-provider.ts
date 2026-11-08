@@ -5,7 +5,11 @@ import { getAppConfig } from '../config';
 import { safeParseParsedQuestion } from './schema';
 import { getMathTagsFromDB, getTagsFromDB } from './tag-service';
 import { createLogger } from '../logger';
-import { normalizeMistakeStatusForSave } from '../mistake-status';
+import {
+    extractTagSafe,
+    sanitizeBodyText,
+    reconcileMistakeFields,
+} from './response-guard';
 
 const logger = createLogger('ai:azure');
 
@@ -67,36 +71,34 @@ export class AzureOpenAIProvider implements AIService {
     }
 
     private extractTag(text: string, tagName: string): string | null {
-        const startTag = `<${tagName}>`;
-        const endTag = `</${tagName}>`;
-        const startIndex = text.indexOf(startTag);
-        const endIndex = text.lastIndexOf(endTag);
-
-        if (startIndex === -1 || endIndex === -1 || startIndex >= endIndex) {
-            return null;
-        }
-
-        return text.substring(startIndex + startTag.length, endIndex).trim();
+        return extractTagSafe(text, tagName, tagName === 'analysis');
     }
 
     private parseResponse(text: string): ParsedQuestion {
         logger.debug({ textLength: text.length }, 'Parsing AI response');
 
-        const questionText = this.extractTag(text, "question_text");
-        const answerText = this.extractTag(text, "answer_text");
-        const analysis = this.extractTag(text, "analysis");
+        const rawQuestionText = this.extractTag(text, "question_text");
+        const rawAnswerText = this.extractTag(text, "answer_text");
+        const rawAnalysis = this.extractTag(text, "analysis");
         const subjectRaw = this.extractTag(text, "subject");
         const knowledgePointsRaw = this.extractTag(text, "knowledge_points");
         const requiresImageRaw = this.extractTag(text, "requires_image");
-        const wrongAnswerText = this.extractTag(text, "wrong_answer_text") || "";
-        const mistakeAnalysis = this.extractTag(text, "mistake_analysis") || "";
-        const mistakeStatusRaw = this.extractTag(text, "mistake_status");
 
         // Basic Validation
-        if (!questionText || !answerText || !analysis) {
+        if (!rawQuestionText || !rawAnswerText || !rawAnalysis) {
             logger.error({ rawTextSample: text.substring(0, 500) }, 'Missing critical XML tags');
             throw new Error("Invalid AI response: Missing critical XML tags (<question_text>, <answer_text>, or <analysis>)");
         }
+
+        const questionText = sanitizeBodyText(rawQuestionText);
+        const answerText = sanitizeBodyText(rawAnswerText);
+        const analysis = sanitizeBodyText(rawAnalysis);
+        const mistake = reconcileMistakeFields({
+            answerText,
+            wrongAnswerText: this.extractTag(text, "wrong_answer_text"),
+            mistakeAnalysis: this.extractTag(text, "mistake_analysis"),
+            mistakeStatus: this.extractTag(text, "mistake_status"),
+        });
 
         // Process Subject
         let subject: ParsedQuestion['subject'] = '其他';
@@ -113,16 +115,15 @@ export class AzureOpenAIProvider implements AIService {
 
         // Process requiresImage
         const requiresImage = requiresImageRaw?.toLowerCase().trim() === 'true';
-        const mistakeStatus = normalizeMistakeStatusForSave(mistakeStatusRaw, wrongAnswerText);
 
         // Construct Result
         const result: ParsedQuestion = {
             questionText,
             answerText,
             analysis,
-            wrongAnswerText,
-            mistakeAnalysis,
-            mistakeStatus,
+            wrongAnswerText: mistake.wrongAnswerText,
+            mistakeAnalysis: mistake.mistakeAnalysis,
+            mistakeStatus: mistake.mistakeStatus,
             subject,
             knowledgePoints,
             requiresImage
@@ -370,20 +371,27 @@ Knowledge Points: ${knowledgePoints.join(", ")}
             if (!text) throw new Error("Empty response from AI");
 
             // 解析响应
-            const answerText = this.extractTag(text, "answer_text") || "";
-            const analysis = this.extractTag(text, "analysis") || "";
+            const answerText = sanitizeBodyText(this.extractTag(text, "answer_text") || "");
+            const analysis = sanitizeBodyText(this.extractTag(text, "analysis") || "");
             const knowledgePointsRaw = this.extractTag(text, "knowledge_points") || "";
             const knowledgePoints = knowledgePointsRaw.split(/[,，\n]/).map(k => k.trim()).filter(k => k.length > 0);
-            const wrongAnswerText = this.extractTag(text, "wrong_answer_text") || "";
-            const mistakeAnalysis = this.extractTag(text, "mistake_analysis") || "";
-            const mistakeStatus = normalizeMistakeStatusForSave(
-                this.extractTag(text, "mistake_status"),
-                wrongAnswerText
-            );
+            const mistake = reconcileMistakeFields({
+                answerText,
+                wrongAnswerText: this.extractTag(text, "wrong_answer_text"),
+                mistakeAnalysis: this.extractTag(text, "mistake_analysis"),
+                mistakeStatus: this.extractTag(text, "mistake_status"),
+            });
 
             logger.info('Reanswer parsed successfully');
 
-            return { answerText, analysis, knowledgePoints, wrongAnswerText, mistakeAnalysis, mistakeStatus };
+            return {
+                answerText,
+                analysis,
+                knowledgePoints,
+                wrongAnswerText: mistake.wrongAnswerText,
+                mistakeAnalysis: mistake.mistakeAnalysis,
+                mistakeStatus: mistake.mistakeStatus,
+            };
 
         } catch (error) {
             logger.error({ error, stack: error instanceof Error ? error.stack : undefined }, 'Error during reanswer');

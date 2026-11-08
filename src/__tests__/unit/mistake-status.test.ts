@@ -14,8 +14,10 @@ describe('mistake status helpers', () => {
         expect(normalizeMistakeStatus(null)).toBe('unknown');
     });
 
-    it('保存时有错误解答应自动归为做错了', () => {
-        expect(normalizeMistakeStatusForSave('unknown', 'x = 4')).toBe('wrong_attempt');
+    it('保存时不再因错误解答文本把状态强推为做错了', () => {
+        // 学生答对却被摘录 (B) 时，旧逻辑会误判为 wrong_attempt
+        expect(normalizeMistakeStatusForSave('unknown', 'x = 4')).toBe('unknown');
+        expect(normalizeMistakeStatusForSave('correct', '(B)')).toBe('correct');
     });
 
     it('保存时不应仅因为错因分析有内容就覆盖作答状态', () => {

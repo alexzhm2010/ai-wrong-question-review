@@ -2,7 +2,6 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { getMistakeStatusLabel } from "@/lib/mistake-status";
 import type { PartialParsed } from "@/lib/partial-parse";
 
 interface StreamingReviewProps {
@@ -56,8 +55,8 @@ export function StreamingReview({ data, imagePreview }: StreamingReviewProps) {
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
                 {language === "zh"
-                    ? "AI 正在解析，内容会逐段填充（可继续等待，也可点右上角取消）"
-                    : "AI is analyzing — content fills in progressively (you can cancel at top right)"}
+                    ? "AI 正在逐段填充题目、答案与解析；作答判定会在完成后显示（可点右上角取消）"
+                    : "AI is filling in the question, answer and analysis; the verdict appears when done"}
             </div>
 
             <div className="grid gap-3 lg:grid-cols-2">
@@ -111,23 +110,6 @@ export function StreamingReview({ data, imagePreview }: StreamingReviewProps) {
                         </CardContent>
                     </Card>
 
-                    {data.mistakeStatus && (
-                        <Card>
-                            <CardHeader className="py-3">
-                                <CardTitle className="text-base">
-                                    {t.editor.mistakeStatus || "作答状态"}
-                                </CardTitle>
-                            </CardHeader>
-                            <CardContent className="space-y-2 text-sm">
-                                <div className="text-muted-foreground">
-                                    {getMistakeStatusLabel(data.mistakeStatus, language)}
-                                </div>
-                                {data.mistakeStatus !== "correct" && data.mistakeAnalysis && (
-                                    <div className="whitespace-pre-wrap break-words">{data.mistakeAnalysis}</div>
-                                )}
-                            </CardContent>
-                        </Card>
-                    )}
                 </div>
             </div>
         </div>

@@ -5,7 +5,11 @@ import { getAppConfig } from '../config';
 import { safeParseParsedQuestion } from './schema';
 import { getMathTagsFromDB, getTagsFromDB } from './tag-service';
 import { createLogger } from '../logger';
-import { normalizeMistakeStatusForSave } from '../mistake-status';
+import {
+    extractTagSafe,
+    sanitizeBodyText,
+    reconcileMistakeFields,
+} from './response-guard';
 
 const logger = createLogger('ai:openai');
 
@@ -77,49 +81,41 @@ export class OpenAIProvider implements AIService {
     }
 
     private extractTag(text: string, tagName: string): string | null {
-        const startTag = `<${tagName}>`;
-        const endTag = `</${tagName}>`;
-        const startIndex = text.indexOf(startTag);
-
-        // 如果找不到开始标签，返回 null
-        if (startIndex === -1) {
-            return null;
-        }
-
-        const contentStartIndex = startIndex + startTag.length;
-        const endIndex = text.lastIndexOf(endTag);
-
-        // 特殊处理：如果闭合标签丢失（通常主要发生在最后的 analysis 标签被截断时）
-        // 我们尝试读取到字符串末尾
-        if (endIndex === -1 && tagName === 'analysis') {
-            logger.warn({ tagName }, 'Tag was verified unclosed, treating as truncated and reading to end');
-            return text.substring(contentStartIndex).trim();
-        }
-
-        if (endIndex === -1 || contentStartIndex >= endIndex) {
-            return null;
-        }
-
-        return text.substring(contentStartIndex, endIndex).trim();
+        // 只认第一组完整标签；analysis 允许截断容错，但也不会吞掉后续字段。
+        // 详见 ./response-guard.ts 的说明。
+        return extractTagSafe(text, tagName, tagName === 'analysis');
     }
 
     private parseResponse(text: string): ParsedQuestion {
         logger.debug({ textLength: text.length }, 'Parsing AI response');
 
-        const questionText = this.extractTag(text, "question_text");
-        const answerText = this.extractTag(text, "answer_text");
-        const analysis = this.extractTag(text, "analysis");
+        const rawQuestionText = this.extractTag(text, "question_text");
+        const rawAnswerText = this.extractTag(text, "answer_text");
+        const rawAnalysis = this.extractTag(text, "analysis");
         const subjectRaw = this.extractTag(text, "subject");
         const knowledgePointsRaw = this.extractTag(text, "knowledge_points");
         const requiresImageRaw = this.extractTag(text, "requires_image");
-        const wrongAnswerText = this.extractTag(text, "wrong_answer_text") || "";
-        const mistakeAnalysis = this.extractTag(text, "mistake_analysis") || "";
-        const mistakeStatusRaw = this.extractTag(text, "mistake_status");
 
         // Basic Validation
-        if (!questionText || !answerText || !analysis) {
+        if (!rawQuestionText || !rawAnswerText || !rawAnalysis) {
             logger.error({ rawTextSample: text.substring(0, 500) }, 'Missing critical XML tags');
             throw new Error("Invalid AI response: Missing critical XML tags (<question_text>, <answer_text>, or <analysis>)");
+        }
+
+        // 剥离误写进正文的标签，并截掉自我纠错段落
+        const questionText = sanitizeBodyText(rawQuestionText);
+        const answerText = sanitizeBodyText(rawAnswerText);
+        const analysis = sanitizeBodyText(rawAnalysis);
+
+        // 判定层独立裁决，AI 输出只作为候选
+        const mistake = reconcileMistakeFields({
+            answerText,
+            wrongAnswerText: this.extractTag(text, "wrong_answer_text"),
+            mistakeAnalysis: this.extractTag(text, "mistake_analysis"),
+            mistakeStatus: this.extractTag(text, "mistake_status"),
+        });
+        if (mistake.repaired) {
+            logger.warn({ repaired: mistake.repaired }, 'Cleaned up polluted mistake fields');
         }
 
         // Process Subject
@@ -138,16 +134,15 @@ export class OpenAIProvider implements AIService {
 
         // Process requiresImage (default to false if not present or unrecognized)
         const requiresImage = requiresImageRaw?.toLowerCase().trim() === 'true';
-        const mistakeStatus = normalizeMistakeStatusForSave(mistakeStatusRaw, wrongAnswerText);
 
         // Construct Result
         const result: ParsedQuestion = {
             questionText,
             answerText,
             analysis,
-            wrongAnswerText,
-            mistakeAnalysis,
-            mistakeStatus,
+            wrongAnswerText: mistake.wrongAnswerText,
+            mistakeAnalysis: mistake.mistakeAnalysis,
+            mistakeStatus: mistake.mistakeStatus,
             subject,
             knowledgePoints,
             requiresImage
@@ -468,20 +463,27 @@ export class OpenAIProvider implements AIService {
             if (!text) throw new Error("Empty response from AI");
 
             // 解析响应
-            const answerText = this.extractTag(text, "answer_text") || "";
-            const analysis = this.extractTag(text, "analysis") || "";
+            const answerText = sanitizeBodyText(this.extractTag(text, "answer_text") || "");
+            const analysis = sanitizeBodyText(this.extractTag(text, "analysis") || "");
             const knowledgePointsRaw = this.extractTag(text, "knowledge_points") || "";
             const knowledgePoints = knowledgePointsRaw.split(/[,，\n]/).map(k => k.trim()).filter(k => k.length > 0);
-            const wrongAnswerText = this.extractTag(text, "wrong_answer_text") || "";
-            const mistakeAnalysis = this.extractTag(text, "mistake_analysis") || "";
-            const mistakeStatus = normalizeMistakeStatusForSave(
-                this.extractTag(text, "mistake_status"),
-                wrongAnswerText
-            );
+            const mistake = reconcileMistakeFields({
+                answerText,
+                wrongAnswerText: this.extractTag(text, "wrong_answer_text"),
+                mistakeAnalysis: this.extractTag(text, "mistake_analysis"),
+                mistakeStatus: this.extractTag(text, "mistake_status"),
+            });
 
             logger.info('Reanswer parsed successfully');
 
-            return { answerText, analysis, knowledgePoints, wrongAnswerText, mistakeAnalysis, mistakeStatus };
+            return {
+                answerText,
+                analysis,
+                knowledgePoints,
+                wrongAnswerText: mistake.wrongAnswerText,
+                mistakeAnalysis: mistake.mistakeAnalysis,
+                mistakeStatus: mistake.mistakeStatus,
+            };
 
         } catch (error) {
             logger.error({ error, stack: error instanceof Error ? error.stack : undefined }, 'Error during reanswer');

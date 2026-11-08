@@ -139,6 +139,7 @@ export interface AppConfig {
         enableThinking?: boolean;
         mathThinking?: boolean;
         maxTokens?: number;
+        enableMistakeAnalysis?: boolean;
     };
 }
 

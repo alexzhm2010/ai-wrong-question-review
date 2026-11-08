@@ -17,6 +17,7 @@ import { apiClient } from "@/lib/api-client";
 import { UserProfile, Notebook } from "@/types/api";
 import { inferSubjectFromName } from "@/lib/knowledge-tags";
 import { getMistakeStatusLabel, normalizeMistakeStatusForSave } from "@/lib/mistake-status";
+import { sanitizeMistakeText } from "@/lib/ai/response-guard";
 import { NotebookSelector } from "@/components/notebook-selector";
 import { GeogebraDemo } from "@/components/geogebra-demo";
 import { toast } from "@/lib/toast";
@@ -353,10 +354,34 @@ export default function ErrorDetailPage() {
     // --- Mistake Analysis Handlers ---
     const startEditingMistake = () => {
         if (item) {
-            setWrongAnswerInput(item.wrongAnswerText || "");
-            setMistakeAnalysisInput(item.mistakeAnalysis || "");
+            setWrongAnswerInput(sanitizeMistakeText(item.wrongAnswerText));
+            setMistakeAnalysisInput(sanitizeMistakeText(item.mistakeAnalysis));
             setMistakeStatusInput(item.mistakeStatus || "unknown");
             setIsEditingMistake(true);
+        }
+    };
+
+    // 存量脏数据一键清空：不展示自我纠错文本，也不把它继续留在库里
+    const clearMistakeHandler = async () => {
+        try {
+            await apiClient.put(`/api/error-items/${item?.id}`, {
+                wrongAnswerText: "",
+                mistakeAnalysis: "",
+                mistakeStatus: "unknown",
+            });
+            setIsEditingMistake(false);
+            if (item) {
+                setItem({
+                    ...item,
+                    wrongAnswerText: "",
+                    mistakeAnalysis: "",
+                    mistakeStatus: "unknown",
+                });
+            }
+            toast.success(t.common?.messages?.saveSuccess || 'Saved successfully');
+        } catch (error) {
+            console.error(error);
+            toast.error(t.common?.messages?.saveFailed || 'Save failed');
         }
     };
 
@@ -555,13 +580,13 @@ export default function ErrorDetailPage() {
                             {isEditingMistake ? (
                                 <div className="space-y-4">
                                     <div className="space-y-2"><label className="text-sm text-muted-foreground">{t.editor?.mistakeStatus || "作答状态"}</label><Select value={mistakeStatusInput} onValueChange={setMistakeStatusInput}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="correct">{t.editor?.mistakeStatuses?.correct || "答对了"}</SelectItem><SelectItem value="not_attempted">{t.editor?.mistakeStatuses?.notAttempted || "不会做"}</SelectItem><SelectItem value="wrong_attempt">{t.editor?.mistakeStatuses?.wrongAttempt || "做错了"}</SelectItem><SelectItem value="unknown">{t.editor?.mistakeStatuses?.unknown || "未判断"}</SelectItem></SelectContent></Select></div>
-                                    <div className="space-y-2"><label className="text-sm text-muted-foreground">{t.editor?.wrongAnswerText || "错误解答原文"}</label><Textarea value={wrongAnswerInput} onChange={e => { setWrongAnswerInput(e.target.value); if (e.target.value.trim()) setMistakeStatusInput("wrong_attempt"); }} rows={5} className="w-full font-mono text-sm" /></div>
+                                    <div className="space-y-2"><label className="text-sm text-muted-foreground">{t.editor?.wrongAnswerText || "错误解答原文"}</label><Textarea value={wrongAnswerInput} onChange={e => setWrongAnswerInput(e.target.value)} rows={5} className="w-full font-mono text-sm" /></div>
                                     <div className="flex gap-2"><Button size="sm" onClick={saveMistakeHandler}><Save className="h-4 w-4 mr-1" />{t.common?.save || "Save"}</Button><Button size="sm" variant="outline" onClick={cancelEditingMistake}><X className="h-4 w-4 mr-1" />{t.common?.cancel || "Cancel"}</Button></div>
                                 </div>
                             ) : (
                                 <div className="space-y-4">
                                     <Badge variant={item.mistakeStatus === "wrong_attempt" ? "default" : "secondary"}>{getMistakeStatusLabel(item.mistakeStatus, language)}</Badge>
-                                    {item.mistakeStatus === "correct" ? <p className="text-sm text-emerald-600">✅ {getMistakeStatusLabel("correct", language)}，无错因</p> : item.wrongAnswerText ? <MarkdownRenderer content={item.wrongAnswerText} /> : <p className="text-sm text-muted-foreground italic">{t.detail?.noMistakeAnalysis || "暂无错误解答"}</p>}
+                                    {item.mistakeStatus === "correct" ? <p className="text-sm text-emerald-600">✅ {getMistakeStatusLabel("correct", language)}，无错因</p> : sanitizeMistakeText(item.wrongAnswerText) ? <MarkdownRenderer content={sanitizeMistakeText(item.wrongAnswerText)} /> : <p className="text-sm text-muted-foreground italic">{t.detail?.noMistakeAnalysis || "暂无错误解答"}</p>}
                                     {item.wrongAnswerImageUrl && <div className="pt-3"><Button variant="ghost" size="sm" onClick={() => setShowOwnImage(!showOwnImage)} className="flex items-center gap-2 text-muted-foreground">{showOwnImage ? <><EyeOff className="h-4 w-4" />隐藏图片</> : <><ImageIcon className="h-4 w-4" />查看图片</>}</Button>{showOwnImage && <div className="mt-4"><img src={item.wrongAnswerImageUrl} alt="我的答案图片" className="w-full rounded-lg border cursor-pointer hover:opacity-90 transition-opacity" onClick={() => setIsImageViewerOpen(true)} /><p className="text-xs text-muted-foreground mt-1 text-center">{t.detail?.clickToEnlarge || "Click to enlarge"}</p></div>}</div>}
                                 </div>
                             )}
@@ -570,8 +595,18 @@ export default function ErrorDetailPage() {
                 </div>
 
                 <div className="grid gap-6 lg:grid-cols-2">
-                    <Card><CardHeader><div className="flex justify-between items-center"><CardTitle>{t.detail.analysis}</CardTitle>{!isEditingAnalysis && <Button variant="ghost" size="sm" onClick={startEditingAnalysis}><Edit className="h-4 w-4 mr-1" />{t.common?.edit || "Edit"}</Button>}</div></CardHeader><CardContent>{isEditingAnalysis ? (<div className="space-y-3"><Textarea value={analysisInput} onChange={e => setAnalysisInput(e.target.value)} placeholder="Enter analysis..." rows={12} className="w-full font-mono text-sm" /><div className="flex gap-2"><Button size="sm" onClick={saveAnalysisHandler}><Save className="h-4 w-4 mr-1" />{t.common?.save || "Save"}</Button><Button size="sm" variant="outline" onClick={cancelEditingAnalysis}><X className="h-4 w-4 mr-1" />{t.common?.cancel || "Cancel"}</Button></div></div>) : <MarkdownRenderer content={item.analysis} />}</CardContent></Card>
-                    <Card><CardHeader><div className="flex justify-between items-center"><CardTitle>{t.detail?.mistakeAnalysis || "错因分析"}</CardTitle>{!isEditingMistake && <Button variant="ghost" size="sm" onClick={startEditingMistake}><Edit className="h-4 w-4 mr-1" />{t.common?.edit || "Edit"}</Button>}</div></CardHeader><CardContent>{isEditingMistake ? (<div className="space-y-4"><div className="space-y-2"><label className="text-sm text-muted-foreground">{t.editor?.mistakeAnalysis || "错因分析"}</label><Textarea value={mistakeAnalysisInput} onChange={e => setMistakeAnalysisInput(e.target.value)} rows={8} className="w-full font-mono text-sm" /></div><div className="flex gap-2"><Button size="sm" onClick={saveMistakeHandler}><Save className="h-4 w-4 mr-1" />{t.common?.save || "Save"}</Button><Button size="sm" variant="outline" onClick={cancelEditingMistake}><X className="h-4 w-4 mr-1" />{t.common?.cancel || "Cancel"}</Button></div></div>) : item.mistakeAnalysis ? <MarkdownRenderer content={item.mistakeAnalysis} /> : <p className="text-sm text-muted-foreground italic">{t.detail?.noMistakeAnalysis || "暂无错因分析"}</p>}</CardContent></Card>
+                    <Card className={item.mistakeStatus === "wrong_attempt" ? "" : "lg:col-span-2"}><CardHeader><div className="flex justify-between items-center"><CardTitle>{t.detail.analysis}</CardTitle>{!isEditingAnalysis && <Button variant="ghost" size="sm" onClick={startEditingAnalysis}><Edit className="h-4 w-4 mr-1" />{t.common?.edit || "Edit"}</Button>}</div></CardHeader><CardContent>{isEditingAnalysis ? (<div className="space-y-3"><Textarea value={analysisInput} onChange={e => setAnalysisInput(e.target.value)} placeholder="Enter analysis..." rows={12} className="w-full font-mono text-sm" /><div className="flex gap-2"><Button size="sm" onClick={saveAnalysisHandler}><Save className="h-4 w-4 mr-1" />{t.common?.save || "Save"}</Button><Button size="sm" variant="outline" onClick={cancelEditingAnalysis}><X className="h-4 w-4 mr-1" />{t.common?.cancel || "Cancel"}</Button></div></div>) : <MarkdownRenderer content={item.analysis} />}</CardContent></Card>
+                    {item.mistakeStatus === "wrong_attempt" && (
+                    <Card>
+                        <CardHeader><div className="flex justify-between items-center"><CardTitle>{t.detail?.mistakeAnalysis || "错因分析"}</CardTitle><div className="flex items-center gap-1">{!isEditingMistake && sanitizeMistakeText(item.mistakeAnalysis) && <Button variant="ghost" size="sm" onClick={clearMistakeHandler}>清空错因</Button>}{!isEditingMistake && <Button variant="ghost" size="sm" onClick={startEditingMistake}><Edit className="h-4 w-4 mr-1" />{t.common?.edit || "Edit"}</Button>}</div></div></CardHeader>
+                        <CardContent>{isEditingMistake ? (
+                            <div className="space-y-4">
+                                <div className="space-y-2"><label className="text-sm text-muted-foreground">{t.editor?.mistakeAnalysis || "错因分析"}</label><Textarea value={mistakeAnalysisInput} onChange={e => setMistakeAnalysisInput(e.target.value)} rows={5} className="w-full font-mono text-sm" placeholder="错在第几步 / 原因类型 / 下次提醒（三行，≤150 字）" /><p className="text-xs text-muted-foreground">建议三行，不要复述解题过程；AI 判定仅供参考。</p></div>
+                                <div className="flex gap-2"><Button size="sm" onClick={saveMistakeHandler}><Save className="h-4 w-4 mr-1" />{t.common?.save || "Save"}</Button><Button size="sm" variant="outline" onClick={cancelEditingMistake}><X className="h-4 w-4 mr-1" />{t.common?.cancel || "Cancel"}</Button></div>
+                            </div>
+                        ) : sanitizeMistakeText(item.mistakeAnalysis) ? <MarkdownRenderer content={sanitizeMistakeText(item.mistakeAnalysis)} /> : <p className="text-sm text-muted-foreground italic">{t.detail?.noMistakeAnalysis || "暂无错因分析"}</p>}</CardContent>
+                    </Card>
+                    )}
                 </div>
 
                 <div className="space-y-6">

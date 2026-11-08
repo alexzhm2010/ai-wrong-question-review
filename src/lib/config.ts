@@ -45,6 +45,7 @@ export interface AppConfig {
         enableThinking?: boolean; // AI 思考/推理模式，默认 false（关闭以提速）
         mathThinking?: boolean;   // 数学题是否自动开启深度思考，默认 true（更准但更慢）
         maxTokens?: number;      // 单次分析最大输出 token，默认 4096
+        enableMistakeAnalysis?: boolean; // 是否让 AI 生成作答判定/错因，默认 true；关闭后只归档题目/答案/解析
     };
 }
 
@@ -131,6 +132,7 @@ const DEFAULT_CONFIG: AppConfig = {
         enableThinking: false,
         mathThinking: true,
         maxTokens: 4096,
+        enableMistakeAnalysis: true,
     },
 };
 
@@ -206,6 +208,7 @@ export async function updateAppConfig(newConfig: Partial<AppConfig>): Promise<Ap
         azure: { ...currentConfig.azure, ...newConfig.azure },
         prompts: { ...currentConfig.prompts, ...newConfig.prompts },
         timeouts: { ...currentConfig.timeouts, ...newConfig.timeouts },
+        aiOptions: { ...currentConfig.aiOptions, ...newConfig.aiOptions },
     };
 
     try {

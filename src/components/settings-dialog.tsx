@@ -796,11 +796,7 @@ export function SettingsDialog() {
                                         onCheckedChange={(val: boolean) =>
                                             setConfig((prev) => ({
                                                 ...prev,
-                                                aiOptions: {
-                                                    enableThinking: val,
-                                                    mathThinking: prev.aiOptions?.mathThinking ?? true,
-                                                    maxTokens: prev.aiOptions?.maxTokens ?? 4096,
-                                                },
+                                                aiOptions: { ...prev.aiOptions, enableThinking: val },
                                             }))
                                         }
                                         aria-label={(t.settings?.general as any)?.enableThinking || "AI 思考/推理模式"}
@@ -821,11 +817,7 @@ export function SettingsDialog() {
                                         onCheckedChange={(val: boolean) =>
                                             setConfig((prev) => ({
                                                 ...prev,
-                                                aiOptions: {
-                                                    enableThinking: prev.aiOptions?.enableThinking ?? false,
-                                                    mathThinking: val,
-                                                    maxTokens: prev.aiOptions?.maxTokens ?? 4096,
-                                                },
+                                                aiOptions: { ...prev.aiOptions, mathThinking: val },
                                             }))
                                         }
                                         aria-label={(t.settings?.general as any)?.mathThinking || "数学题深度思考"}
@@ -840,11 +832,7 @@ export function SettingsDialog() {
                                     onValueChange={(val: string) =>
                                         setConfig((prev) => ({
                                             ...prev,
-                                            aiOptions: {
-                                                enableThinking: prev.aiOptions?.enableThinking ?? false,
-                                                mathThinking: prev.aiOptions?.mathThinking ?? true,
-                                                maxTokens: parseInt(val, 10),
-                                            },
+                                            aiOptions: { ...prev.aiOptions, maxTokens: parseInt(val, 10) },
                                         }))
                                     }
                                 >
@@ -862,6 +850,27 @@ export function SettingsDialog() {
                                 <p className="text-xs text-muted-foreground">
                                     {(t.settings?.general as any)?.maxTokensDesc || "控制模型单次作答长度上限，越小响应越快。默认 4096。"}
                                 </p>
+                            </div>
+
+                            <div className="space-y-2 pt-4 border-t">
+                                <div className="flex items-center justify-between gap-4">
+                                    <div className="space-y-1">
+                                        <Label>{(t.settings?.general as any)?.enableMistakeAnalysis || "AI 错因分析"}</Label>
+                                        <p className="text-xs text-muted-foreground">
+                                            {(t.settings?.general as any)?.enableMistakeAnalysisDesc || "关闭后 AI 只给出题目、答案与解析，不再生成作答判定和错因分析；适合只做快速归档。"}
+                                        </p>
+                                    </div>
+                                    <Switch
+                                        checked={config.aiOptions?.enableMistakeAnalysis ?? true}
+                                        onCheckedChange={(val: boolean) =>
+                                            setConfig((prev) => ({
+                                                ...prev,
+                                                aiOptions: { ...prev.aiOptions, enableMistakeAnalysis: val },
+                                            }))
+                                        }
+                                        aria-label="AI 错因分析"
+                                    />
+                                </div>
                             </div>
                         </div>
                         <Button onClick={handleSaveSettings} disabled={saving} className="w-full">

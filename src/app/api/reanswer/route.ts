@@ -4,6 +4,8 @@ import { authOptions } from "@/lib/auth";
 import { getServerSession } from "next-auth";
 import { badRequest, createErrorResponse, ErrorCode } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
+import { getAppConfig } from "@/lib/config";
+import { withoutMistakeAnalysis } from "@/lib/ai/response-guard";
 
 const logger = createLogger('api:reanswer');
 
@@ -45,7 +47,12 @@ export async function POST(req: Request) {
 
         logger.info('Reanswer successful');
 
-        return NextResponse.json(result);
+        const config = await getAppConfig();
+        const finalResult = withoutMistakeAnalysis(
+            result,
+            config.aiOptions?.enableMistakeAnalysis !== false
+        );
+        return NextResponse.json(finalResult);
     } catch (error: unknown) {
         const errorMessageFromError = error instanceof Error ? error.message : String(error);
         const stack = error instanceof Error ? error.stack : undefined;

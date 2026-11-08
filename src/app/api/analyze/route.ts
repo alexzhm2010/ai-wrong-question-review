@@ -8,6 +8,8 @@ import { normalizeGradeSemester } from "@/lib/grade-options";
 import { prisma } from "@/lib/prisma";
 import { badRequest, createErrorResponse, ErrorCode } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
+import { getAppConfig } from "@/lib/config";
+import { withoutMistakeAnalysis } from "@/lib/ai/response-guard";
 
 const logger = createLogger('api:analyze');
 
@@ -155,7 +157,13 @@ export async function POST(req: Request) {
                         userGradeSemester,
                         (delta) => send({ type: 'delta', content: delta })
                     );
-                    send({ type: 'done', result });
+                    // 关闭「AI 错因分析」后只归档题目/答案/解析
+                    const config = await getAppConfig();
+                    const finalResult = withoutMistakeAnalysis(
+                        result,
+                        config.aiOptions?.enableMistakeAnalysis !== false
+                    );
+                    send({ type: 'done', result: finalResult });
                 } catch (error: any) {
                     const errorMessage = normalizeAIErrorMessage(error);
                     logger.error({ errorMessage }, 'Streaming analysis failed');

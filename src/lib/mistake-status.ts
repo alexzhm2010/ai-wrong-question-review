@@ -14,15 +14,11 @@ export function normalizeMistakeStatus(status?: unknown): MistakeStatus {
 
 export function normalizeMistakeStatusForSave(
     status?: unknown,
-    wrongAnswerText?: string | null
+    _wrongAnswerText?: string | null
 ): MistakeStatus {
-    // 明确判定为「答对了」时，不被残留的学生作答文本覆盖
-    if (status === 'correct') {
-        return 'correct';
-    }
-    if ((wrongAnswerText || '').trim()) {
-        return 'wrong_attempt';
-    }
+    // 状态只由判定结果决定。旧逻辑会在「错误解答原文」非空时无条件改成
+    // wrong_attempt，导致学生答对却被误判为做错了，且 AI 事后改口 correct
+    // 也覆盖不回来。保留参数仅为兼容既有调用点。
     return normalizeMistakeStatus(status);
 }
 
