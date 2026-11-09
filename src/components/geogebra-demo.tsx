@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
-import { Loader2, Maximize2, Minimize2, RotateCcw, RefreshCw } from "lucide-react";
+import { Loader2, Maximize2, Minimize2, RotateCcw, RefreshCw, AlertTriangle } from "lucide-react";
+import { parseCommands, runCommands, buildErrorFeedback } from "@/lib/geogebra-commands";
 
 interface GeogebraDemoProps {
     commands: string;
@@ -38,88 +39,6 @@ function loadGeoGebraScript(): Promise<void> {
     return ggbScriptPromise;
 }
 
-// ── Command helpers ─────────────────────────────────────────────────────
-function parseCommands(raw: string): string[] {
-    if (!raw?.trim()) return [];
-    const t = raw.trim();
-    if (t.startsWith("[")) {
-        try {
-            const a = JSON.parse(t);
-            if (Array.isArray(a))
-                return a.filter((c): c is string => typeof c === "string" && c.trim() !== "");
-        } catch { /* fall through */ }
-    }
-    return t.split("\n").map((c) => c.trim()).filter((c) => c && !c.startsWith("//"));
-}
-
-const API_PREFIXES = [
-    "setcoordsystem", "setaxesvisible", "setgridvisible", "setcolor",
-    "setlinethickness", "setlinestyle", "setpointsize", "setpointstyle",
-    "setlabelvisible", "setcaption", "setvisible", "setfilling",
-    "setvalue", "setfixed", "setbackgroundcolor",
-];
-
-function isApiCall(cmd: string): boolean {
-    const l = cmd.toLowerCase().trim();
-    return API_PREFIXES.some((p) => l.startsWith(p + "("));
-}
-
-function parseApiArgs(cmd: string): { m: string; a: unknown[] } | null {
-    const m = cmd.match(/^(\w+)\(([\s\S]+)\)$/);
-    if (!m) return null;
-    try {
-        // Safe parsing: only allow numbers, booleans, strings, and arrays
-        const argsStr = m[2].trim();
-        // Simple JSON-like array: [1, 2, 3] or ["a", "b"]
-        if (argsStr.startsWith('[') && argsStr.endsWith(']')) {
-            return { m: m[1], a: JSON.parse(argsStr) };
-        }
-        // Single value: number, boolean, or quoted string
-        if (/^-?\d+(\.\d+)?$/.test(argsStr)) {
-            return { m: m[1], a: [Number(argsStr)] };
-        }
-        if (argsStr === 'true' || argsStr === 'false') {
-            return { m: m[1], a: [argsStr === 'true'] };
-        }
-        if ((argsStr.startsWith('"') && argsStr.endsWith('"')) ||
-            (argsStr.startsWith("'") && argsStr.endsWith("'"))) {
-            return { m: m[1], a: [argsStr.slice(1, -1)] };
-        }
-        // Multiple comma-separated values
-        const parts = argsStr.split(',').map(s => s.trim());
-        const parsed: unknown[] = parts.map(p => {
-            if (/^-?\d+(\.\d+)?$/.test(p)) return Number(p);
-            if (p === 'true' || p === 'false') return p === 'true';
-            if ((p.startsWith('"') && p.endsWith('"')) ||
-                (p.startsWith("'") && p.endsWith("'"))) return p.slice(1, -1);
-            return p; // Keep as string for object names etc.
-        });
-        return { m: m[1], a: parsed };
-    }
-    catch { return null; }
-}
-
-function runCommands(api: any, cmds: string[]) {
-    for (const cmd of cmds) {
-        try {
-            if (isApiCall(cmd)) {
-                const p = parseApiArgs(cmd);
-                if (p && typeof api[p.m] === 'function') api[p.m](...p.a);
-            } else {
-                // Basic command validation: only allow safe characters
-                const sanitized = cmd.trim();
-                if (sanitized && !/[<>'"]/.test(sanitized)) {
-                    api.evalCommand(sanitized);
-                } else {
-                    console.warn(`[GGB] Blocked potentially unsafe command: ${cmd.substring(0, 50)}`);
-                }
-            }
-        } catch (e) {
-            console.warn(`[GGB] Failed: ${cmd}`, e);
-        }
-    }
-}
-
 // ── Component ───────────────────────────────────────────────────────────
 export function GeogebraDemo({
     commands,
@@ -141,6 +60,7 @@ export function GeogebraDemo({
     const [error, setError] = useState<string | null>(null);
     const [expanded, setExpanded] = useState(true);
     const [regenerating, setRegenerating] = useState(false);
+    const [failedCommands, setFailedCommands] = useState<string[]>([]);
 
     const cmds = useMemo(() => parseCommands(commands), [commands]);
 
@@ -183,7 +103,9 @@ export function GeogebraDemo({
                             const w = ggbHostRef.current?.offsetWidth || ggbDiv.offsetWidth || 800;
                             api.setSize(w, height);
                         }
-                        runCommands(api, cmds);
+                        // 先关闭 GeoGebra 原生错误弹窗，再逐条检查执行结果
+                        const result = runCommands(api, cmds);
+                        setFailedCommands(result.failed);
                         setLoading(false);
                     },
                 }, true);
@@ -238,20 +160,26 @@ export function GeogebraDemo({
         if (!api) return;
         try {
             api.resetConstruction();
-            setTimeout(() => { if (apiRef.current) runCommands(apiRef.current, cmds); }, 300);
+            setTimeout(() => {
+                if (apiRef.current) {
+                    const result = runCommands(apiRef.current, cmds);
+                    setFailedCommands(result.failed);
+                }
+            }, 300);
         } catch (e) { console.warn("[GGB] Reset failed", e); }
     }, [cmds]);
 
-    // ── Regenerate ──────────────────────────────────────────────────────
+    // ── Regenerate (把执行失败的命令回传给 AI 做定向修正) ─────────────────
     const handleRegenerate = useCallback(async () => {
         if (!onRegenerate || regenerating) return;
         setRegenerating(true);
         try {
-            await onRegenerate();
+            const feedback = buildErrorFeedback(failedCommands);
+            await onRegenerate(feedback || undefined);
         } finally {
             setRegenerating(false);
         }
-    }, [onRegenerate, regenerating]);
+    }, [onRegenerate, regenerating, failedCommands]);
 
     if (cmds.length === 0) return null;
 
@@ -295,6 +223,32 @@ export function GeogebraDemo({
              * tries to reconcile DOM nodes inside this div.
              */}
             <div ref={ggbHostRef} style={{ width: '100%' }} />
+
+            {/* 失败命令提示 —— 取代 GeoGebra 自带的原生错误弹窗 */}
+            {!loading && failedCommands.length > 0 && (
+                <div className="border-t px-3 py-2 text-xs">
+                    <div className="flex flex-wrap items-center gap-2 text-amber-700 dark:text-amber-300">
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                        <span className="min-w-0 flex-1">
+                            {failedCommands.length} 条绘图命令未能执行，图形可能不完整
+                        </span>
+                        {onRegenerate && (
+                            <Button variant="outline" size="sm" className="h-6 shrink-0 px-2 text-xs"
+                                onClick={handleRegenerate} disabled={regenerating}>
+                                {regenerating
+                                    ? <Loader2 className="h-3 w-3 animate-spin" />
+                                    : "让 AI 修正"}
+                            </Button>
+                        )}
+                    </div>
+                    <details className="mt-1 text-muted-foreground">
+                        <summary className="cursor-pointer">查看失败命令</summary>
+                        <ul className="mt-1 space-y-0.5 break-all font-mono text-[11px]">
+                            {failedCommands.slice(0, 12).map((c, i) => <li key={i}>{c}</li>)}
+                        </ul>
+                    </details>
+                </div>
+            )}
 
             {/* Loading overlay — sibling, not child of ggbHost */}
             {loading && (

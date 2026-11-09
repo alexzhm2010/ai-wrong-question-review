@@ -176,7 +176,8 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
     const geogebraSubjectName = notebooks.find(n => n.id === data.subjectId)?.name || null;
     const showGeogebraEntry = shouldShowGeogebra(geogebraSubjectName, data.subject);
 
-    const handleAnalyzeGeogebra = async () => {
+    // previousErrors 来自 <GeogebraDemo> 里执行失败的命令列表，用于让 AI 定向修正
+    const handleAnalyzeGeogebra = async (previousErrors?: string) => {
         if (!data.questionText.trim()) {
             toast.info(t.editor.enterQuestionFirst || '请先输入题目文本');
             return;
@@ -197,6 +198,7 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                     answerText: data.answerText,
                     analysis: data.analysis,
                     subjectName: geogebraSubjectName || data.subject || "",
+                    previousErrors: typeof previousErrors === "string" ? previousErrors : "",
                 }),
             });
 
@@ -463,7 +465,7 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                         <GeogebraDemo commands={data.geogebraCommands} height={350} onRegenerate={handleAnalyzeGeogebra} />
                     ) : showGeogebraEntry && data.questionText.trim() && data.answerText.trim() ? (
                         <GeogebraEntry
-                            onGenerate={handleAnalyzeGeogebra}
+                            onGenerate={() => handleAnalyzeGeogebra()}
                             isAnalyzing={isAnalyzingGeogebra}
                             error={geogebraError}
                         />

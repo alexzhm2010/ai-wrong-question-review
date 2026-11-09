@@ -25,7 +25,7 @@ export async function POST(req: Request) {
         }
 
         const body = await req.json();
-        const { questionText, answerText, analysis, subjectName } = body;
+        const { questionText, answerText, analysis, subjectName, previousErrors } = body;
 
         if (!questionText?.trim()) {
             return NextResponse.json(
@@ -48,7 +48,8 @@ export async function POST(req: Request) {
         const result = await aiService.analyzeForGeogebra(
             questionText,
             answerText || "",
-            analysis || ""
+            analysis || "",
+            typeof previousErrors === "string" ? previousErrors : ""
         );
 
         logger.info({ suitable: result.suitable, commandCount: result.commands.length }, 'GeoGebra analysis complete');

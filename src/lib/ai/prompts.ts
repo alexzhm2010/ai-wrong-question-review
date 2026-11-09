@@ -580,30 +580,32 @@ export const DEFAULT_GEOGEBRA_PROMPT = `【角色与核心任务 (ROLE AND CORE 
 6. 数列通项公式推导（无图形意义的）
 
 【GeoGebra 命令规范 (COMMAND SYNTAX)】
-如果适合演示，生成 GeoGebra 命令数组。每条命令一行，支持以下类型：
+如果适合演示，生成 GeoGebra 命令数组。每条命令一行，**全部使用英文命令名**（中文界面会把 Point 显示成「描点」，但命令里禁止写「描点(」「交点(」等中文名称）。
 
 **GeoGebra 绘图命令（通过 evalCommand 执行）：**
 - 函数：f(x) = x^2
-- 点：A = (1, 2)
-- 直线：line: y = 2x + 1  或  Line(A, B)
-- 线段：Segment(A, B)
+- 点：A = (1, 2)  ← 定义点首选这种写法
+- 描点：Point(f, 2) 或 Point({(1,2),(3,4)})  ← Point 只接受 1 或 2 个参数，禁止 Point(a, b, c) 三参数
+- 直线：line: y = 2x + 1  或  Line(A, B)；过 P 且平行于 l 用 Line(P, l)，**不要写 ParallelLine**
+- 垂线：PerpendicularLine(P, l)
+- 线段：Segment(A, B)  ← 恰好 2 个参数；需要命名写 s = Segment(A, B)，禁止第三个标签参数
 - 圆：Circle(A, 3)  或  c: (x-1)^2 + (y-2)^2 = 9
 - 椭圆：Ellipse(F1, F2, 5)
 - 多边形：Polygon(A, B, C)
-- 交点：Intersect(f, g, 1)  或  Intersect(f, g, x1, x2)
+- 交点：Intersect(f, g) / Intersect(f, g, 1) / Intersect(f, g, x1, x2)
 - 中点：Midpoint(A, B)
-- 垂线：PerpendicularLine(P, l)
-- 平行线：ParallelLine(P, l)
 - 角度：Angle(A, B, C)
-- 文本：Text("说明文字", (x, y))
-- 滑动条：a = Slider(-5, 5, 0.1)
+- 极值点：Extremum(f)
+- 文本：Text("说明文字", (x, y))  ← 引号是合法且必需的
 - 轨迹：Locus(P, Q)
-- 反射：Reflect(A, l)
-- 平移：Translate(A, v)
-- 旋转：Rotate(A, angle, center)
+- 反射 / 平移 / 旋转：Reflect(A, l) / Translate(A, v) / Rotate(A, angle, center)
 
-**Applet API 设置命令（通过 applet 方法直接调用）：**
-- setCoordSystem(-10, 10, -10, 10)  -- 设置坐标范围
+**参数与滑动条：**
+- GeoGebra **没有 Slider() 命令**。给变量赋一个数值就会自动生成可拖动的滑动条：a = 1
+- 【重要顺序】数值参数必须先定义，再定义依赖它的函数：先 a = 1，再 h(x) = a*x^2 - x + 1。顺序写反会导致函数创建失败。
+
+**Applet API 设置命令（方法名必须小写开头）：**
+- setCoordSystem(-10, 10, -10, 10)  -- 设置坐标范围（必须排在所有绘图命令之前）
 - setAxesVisible(true, true)  -- 显示/隐藏坐标轴
 - setGridVisible(true)  -- 显示/隐藏网格
 - setColor("对象名", R, G, B)  -- 设置颜色 (0-255)
@@ -614,6 +616,12 @@ export const DEFAULT_GEOGEBRA_PROMPT = `【角色与核心任务 (ROLE AND CORE 
 - setLabelVisible("对象名", true)  -- 显示/隐藏标签
 - setCaption("对象名", "LaTeX标签")  -- 设置标签文本
 - setFilling("对象名", 0.3)  -- 设置填充透明度 (0-1)
+- 禁止写成 SetColor / SetLineThickness（首字母大写会找不到方法）
+
+【命令数量与格式】
+- 最多 20 条命令；宁可少画几条，也不要输出没有把握的命令
+- 每条命令独占一行，末尾不要逗号或分号，不要写注释
+- 禁止输出 GeoGebra 不存在的命令（Slider、ParallelLine、中文命令名等）
 
 【输出格式 (OUTPUT FORMAT)】
 你的响应必须**只有以下 JSON 格式**，不要包含其他任何文字：
@@ -631,15 +639,16 @@ export const DEFAULT_GEOGEBRA_PROMPT = `【角色与核心任务 (ROLE AND CORE 
 4. 所有图形对象应设置合适的颜色和样式以便于观察
 5. 确保坐标范围能让所有关键图形和交点清晰可见
 6. description 用简体中文
-7. 如果题目涉及参数讨论（如讨论 a 的取值范围），用滑动条 (Slider) 展示参数变化效果
+7. 如果题目涉及参数讨论（如讨论 a 的取值范围），用 a = 1 生成可拖动的数值滑动条，再画依赖 a 的函数；禁止使用 Slider()
 8. 对于函数题，应画出函数图像并标注关键点（交点、顶点、渐近线等）
-9. 【!!! 命令语法检查 (COMMAND SYNTAX CHECK) !!!】在生成命令后，必须逐条检查以下内容：
-   a. 每个变量在使用前必须已被定义（例如如果使用 F = Intersect(f, g)，则 f 和 g 必须在之前已定义）
-   b. 所有命令名称必须是 GeoGebra 官方支持的指令（如平行线用 Line(P, l) 而非 ParallelLine(P, l)）
-   c. 命令顺序必须合理：先定义基础对象（点、线、函数），再定义派生对象（交点、轨迹、变换）
-   d. 每个命令的语法必须正确（参数数量、类型、顺序与 GeoGebra 官方文档一致）
-   e. 如果使用了循环或条件语句，确保语法正确
-   f. 坐标轴范围 (setCoordSystem) 必须在所有绘图命令之前设置`;
+9. 【!!! 命令语法检查 (COMMAND SYNTAX CHECK) !!!】生成后必须逐条检查以下内容：
+   a. 每个变量/对象在使用前必须已定义；数值参数（a = 1）必须写在依赖它的函数之前
+   b. 只使用上面列出的官方英文命令名；禁止 Slider()、ParallelLine()、中文命令名等不存在的指令
+   c. Point 最多 2 个参数、Segment 恰好 2 个参数、Intersect 只用上面列出的参数形式
+   d. 命令顺序：先基础对象（参数、点、线、函数），再派生对象（交点、极值、变换）
+   e. API 设置命令小写开头（setColor），每条命令末尾无逗号、无分号
+   f. 坐标轴范围 (setCoordSystem) 必须在所有绘图命令之前设置
+   g. 若某条命令无法确认语法，宁可删掉它，也不要输出后让执行失败`;
 
 /**
  * 生成 GeoGebra 分析提示词
@@ -660,7 +669,7 @@ export function generateGeogebraPrompt(
     if (previousErrors?.trim()) {
         prompt = prompt.replace(
             "{{error_feedback}}",
-            `【上次执行错误 (PREVIOUS ERRORS)】\n上次生成的 GeoGebra 命令执行时出现了以下错误，请分析错误原因并在这次生成中修正：\n${previousErrors}\n\n【错误修正要求 (ERROR FIX RULES)】\n请严格按以下步骤修正：\n1. 检查每条失败命令，确认是语法错误、变量未定义还是命令名称错误\n2. 如果是"未定义变量X"，在命令之前添加定义该变量的命令，或调整命令顺序\n3. 如果是"未知的指令"，替换为 GeoGebra 官方支持的等效命令（如 Line(P, l) 替代 ParallelLine(P, l)）\n4. 重新排列所有命令的顺序，确保每个对象在使用前已定义\n5. 生成后再次逐条检查：每条命令的语法、变量引用、依赖关系是否正确`
+            `【上次执行错误 (PREVIOUS ERRORS)】\n以下命令已由程序在真实 GeoGebra 中逐条执行并判定失败，请据此修正：\n${previousErrors}\n\n【错误修正要求 (ERROR FIX RULES)】\n请按以下步骤修正，并输出修正后的完整命令列表（不是只输出改动的那几条）：\n1. 检查每条失败命令，确认是命令不存在、参数个数不对、变量未定义还是方法名大小写错误\n2. 如果是"未定义变量X"，在命令之前添加定义该变量的命令，或调整命令顺序\n3. 如果是命令不存在（如 Slider()、ParallelLine()），换成上面列出的官方等效写法（a = 1 / Line(P, l)）\n4. 如果是参数个数不对（如 Point 三参数、Segment 三参数），改成合法参数形式\n5. 重新排列所有命令的顺序，确保每个对象在使用前已定义\n6. 生成后再次逐条检查：每条命令的语法、变量引用、依赖关系是否正确`
         );
     } else {
         prompt = prompt.replace("{{error_feedback}}", "");

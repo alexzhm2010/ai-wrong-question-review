@@ -109,7 +109,8 @@ export default function ErrorDetailPage() {
     // 非理科错题不再常驻展示 GeoGebra 卡片；学科未知时仍给一行折叠入口
     const showGeogebraEntry = shouldShowGeogebra(item?.subject?.name ?? null);
 
-    const handleAnalyzeGeogebra = async () => {
+    // previousErrors 来自 <GeogebraDemo> 里执行失败的命令列表，用于让 AI 定向修正
+    const handleAnalyzeGeogebra = async (previousErrors?: string) => {
         if (!item) return;
         setIsAnalyzingGeogebra(true);
         setGeogebraError(null);
@@ -118,7 +119,9 @@ export default function ErrorDetailPage() {
                 suitable: boolean;
                 commands: string[];
                 description: string;
-            }>(`/api/error-items/${item.id}/geogebra`, {});
+            }>(`/api/error-items/${item.id}/geogebra`, {
+                previousErrors: typeof previousErrors === "string" ? previousErrors : "",
+            });
 
             if (result.suitable && result.commands.length > 0) {
                 setItem({ ...item, geogebraCommands: JSON.stringify(result.commands) });
