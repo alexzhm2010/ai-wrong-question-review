@@ -335,7 +335,7 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                         ) : (
                             <>
                                 <RefreshCw className="mr-2 h-4 w-4" />
-                                {t.editor.reanswer || '🔄 Reanswer (based on corrected question)'}
+                                {t.editor.reanswer || 'Reanswer (based on corrected question)'}
                             </>
                         )}
                     </Button>
