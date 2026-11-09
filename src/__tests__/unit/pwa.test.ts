@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import manifest from '@/app/manifest';
+import { awaitInstallChoice, getInstallSteps, getOccludedBottom } from '@/lib/pwa-install';
 
 const projectRoot = process.cwd();
 const readSource = (relative: string) =>
@@ -62,5 +63,61 @@ describe('所属卷等级已从界面移除', () => {
         expect(readSource('src/app/api/error-items/route.ts')).toMatch(/paperLevel/);
         expect(readSource('src/app/api/import/route.ts')).toMatch(/paperLevel/);
         expect(readSource('prisma/schema.prisma')).toMatch(/paperLevel/);
+    });
+});
+
+describe('安装弹窗无响应时的降级', () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('系统弹窗永不返回 userChoice 时按超时降级为 unknown', async () => {
+        vi.useFakeTimers();
+        const never = new Promise<{ outcome?: string }>(() => {});
+        const pending = awaitInstallChoice(never, 6000);
+        await vi.advanceTimersByTimeAsync(6000);
+        expect(await pending).toBe('unknown');
+    });
+
+    it('正常返回 accepted / dismissed 时原样分类', async () => {
+        expect(await awaitInstallChoice(Promise.resolve({ outcome: 'accepted' }))).toBe('accepted');
+        expect(await awaitInstallChoice(Promise.resolve({ outcome: 'dismissed' }))).toBe('dismissed');
+    });
+
+    it('弹窗拒绝、事件缺失或结果异常时都不会卡住', async () => {
+        expect(await awaitInstallChoice(undefined)).toBe('unknown');
+        expect(await awaitInstallChoice(Promise.reject(new Error('denied')))).toBe('unknown');
+        expect(await awaitInstallChoice(Promise.resolve({ outcome: 'weird' }))).toBe('unknown');
+    });
+
+    it('计算被浏览器底部工具栏遮住的高度', () => {
+        expect(getOccludedBottom(800, 700, 0)).toBe(100);
+        expect(getOccludedBottom(800, 700, 60)).toBe(40);
+        expect(getOccludedBottom(800, 800, 0)).toBe(0);
+        expect(getOccludedBottom(Number.NaN, 700, 0)).toBe(0);
+    });
+
+    it('手动步骤包含桌面快捷方式权限与同名图标排查', () => {
+        const zh = getInstallSteps(true, false).join(' ');
+        expect(zh).toContain('创建桌面快捷方式');
+        expect(zh).toContain('同名图标');
+        expect(getInstallSteps(true, true).join(' ')).toContain('Safari');
+        expect(getInstallSteps(false, false).join(' ')).toContain('Permissions');
+    });
+
+    it('组件不再 await prompt()，并接入超时降级、视口避让与重新打开入口', () => {
+        const src = readSource('src/components/pwa-installer.tsx');
+        expect(src).toContain('awaitInstallChoice');
+        expect(src).not.toMatch(/await\s+\w+\.prompt\(\)/);
+        expect(src).toContain('getOccludedBottom');
+        expect(src).toContain('PWA_OPEN_EVENT');
+        expect(src).toContain('改用手动添加');
+    });
+
+    it('设置页提供重新打开安装引导的常驻入口', () => {
+        const src = readSource('src/components/settings-dialog.tsx');
+        expect(src).toContain('PWA_OPEN_EVENT');
+        expect(src).toContain('查看安装引导');
+        expect(src).toContain('setOpen(false)');
     });
 });

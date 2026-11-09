@@ -33,6 +33,7 @@ import { ModelSelector } from "@/components/ui/model-selector";
 import { PromptSettings } from "@/components/settings/prompt-settings";
 import { PROVIDER_PRESETS, findPresetByBaseUrl } from "@/lib/ai/presets";
 import { toast } from "@/lib/toast";
+import { PWA_DISMISS_KEY, PWA_LATER_KEY, PWA_OPEN_EVENT } from "@/lib/pwa-install";
 
 import { MessageSquareText, Info, ExternalLink, Github, ScrollText } from "lucide-react";
 const MAX_OPENAI_INSTANCES = 10;
@@ -871,6 +872,32 @@ export function SettingsDialog() {
                                         aria-label="AI 错因分析"
                                     />
                                 </div>
+                            </div>
+
+                            <div className="space-y-2 pt-4 border-t">
+                                <Label>{language === "zh" ? "全屏使用 / 添加到主屏幕" : "Full screen / Add to Home Screen"}</Label>
+                                <p className="text-xs text-muted-foreground">
+                                    {language === "zh"
+                                        ? "关闭过安装引导，或系统弹窗点「保存」没反应时，可在这里重新打开引导并查看手动添加步骤。"
+                                        : "Reopen the install guide here if you dismissed it or the system dialog did not respond."}
+                                </p>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                        try {
+                                            localStorage.removeItem(PWA_DISMISS_KEY);
+                                            sessionStorage.removeItem(PWA_LATER_KEY);
+                                        } catch {
+                                            // ignore
+                                        }
+                                        window.dispatchEvent(new Event(PWA_OPEN_EVENT));
+                                        setOpen(false);
+                                    }}
+                                >
+                                    <Download className="h-4 w-4" />
+                                    {language === "zh" ? "查看安装引导" : "Show install guide"}
+                                </Button>
                             </div>
                         </div>
                         <Button onClick={handleSaveSettings} disabled={saving} className="w-full">
