@@ -126,12 +126,6 @@ export const translations = {
             messages: {
                 selectNotebook: "Please select a notebook",
             },
-            paperLevel: "Paper Level",
-            paperLevels: {
-                a: "Paper A",
-                b: "Paper B",
-                other: "Other",
-            },
             reanswerSuccess: "✅ Answer and analysis updated!",
             enterQuestionFirst: "Please enter question text first",
             reanswering: "AI solving...",
@@ -332,7 +326,6 @@ export const translations = {
             lastMonth: "Last Month",
             filteringByTag: "Filtering by tag",
             grade: "Grade/Semester",
-            paperLevel: "Paper Level",
         },
         stats: {
             title: "Practice Statistics",
@@ -609,7 +602,6 @@ export const translations = {
             showTags: "Show Tags",
             printButton: "Print / Save PDF",
             questionNumber: "Question {num}",
-            paperLevel: "Paper Level",
             knowledgePoints: "Knowledge Points",
             selectItems: "Select Items",
             selectAll: "Select All",
@@ -768,12 +760,6 @@ export const translations = {
             createTagHint: "按回车键创建新标签",
             messages: {
                 selectNotebook: "请选择一个错题本",
-            },
-            paperLevel: "所属卷等级",
-            paperLevels: {
-                a: "A卷",
-                b: "B卷",
-                other: "其他",
             },
             reanswerSuccess: "✅ 答案和解析已更新！",
             enterQuestionFirst: "请先输入题目内容",
@@ -975,7 +961,6 @@ export const translations = {
             lastMonth: "最近一个月",
             filteringByTag: "按标签筛选",
             grade: "年级/学期",
-            paperLevel: "所属卷等级",
         },
         stats: {
             title: "练习统计",
@@ -1251,7 +1236,6 @@ export const translations = {
             showTags: "显示知识点",
             printButton: "打印 / 保存 PDF",
             questionNumber: "题目 {num}",
-            paperLevel: "试卷等级",
             knowledgePoints: "知识点",
             selectItems: "选择题目",
             selectAll: "全选",

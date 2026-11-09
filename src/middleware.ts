@@ -53,6 +53,21 @@ export async function middleware(req: NextRequest) {
         return NextResponse.next();
     }
 
+    /**
+     * PWA 资源必须匿名可取：浏览器在安装阶段请求 manifest / 图标 / SW 时不保证带登录态，
+     * 若被重定向到 /login，应用就无法安装，standalone 全屏也永远不会生效。
+     */
+    const PWA_PUBLIC_PATHS = [
+        '/manifest.webmanifest',
+        '/manifest.json',
+        '/sw.js',
+        '/favicon.ico',
+        '/apple-touch-icon.png',
+    ];
+    if (PWA_PUBLIC_PATHS.includes(path) || path.startsWith('/icons/')) {
+        return NextResponse.next();
+    }
+
     try {
         const token = await readToken(req);
         const isAuth = !!token;

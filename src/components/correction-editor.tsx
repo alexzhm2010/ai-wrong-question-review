@@ -28,7 +28,6 @@ import { reconcileMistakeFields, sanitizeMistakeText } from "@/lib/ai/response-g
 interface ParsedQuestionWithSubject extends ParsedQuestion {
     subjectId?: string;
     gradeSemester?: string;
-    paperLevel?: string;
     geogebraCommands?: string;
 }
 
@@ -63,8 +62,7 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
             mistakeAnalysis: mistake.mistakeAnalysis,
             mistakeStatus: mistake.mistakeStatus,
             subjectId: initialSubjectId,
-            gradeSemester: "",
-            paperLevel: "a"
+            gradeSemester: ""
         };
     });
     const { t, language } = useLanguage();
@@ -258,43 +256,25 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                         />
                     </div>
 
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                        <div className="space-y-2">
-                            <Label>{t.editor.gradeSemester || "年级/学期"}</Label>
-                            <Select
-                                value={data.gradeSemester || GRADE_SEMESTER_UNSET}
-                                onValueChange={(val) => setData({
-                                    ...data,
-                                    gradeSemester: val === GRADE_SEMESTER_UNSET ? "" : val,
-                                })}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value={GRADE_SEMESTER_UNSET}>未设置</SelectItem>
-                                    {GRADE_SEMESTER_OPTIONS.map(grade => (
-                                        <SelectItem key={grade} value={grade}>{grade}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className="space-y-2">
-                            <Label>{t.editor.paperLevel || "所属卷等级"}</Label>
-                            <Select
-                                value={data.paperLevel || "a"}
-                                onValueChange={(val) => setData({ ...data, paperLevel: val })}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="a">{t.editor.paperLevels?.a || "A卷"}</SelectItem>
-                                    <SelectItem value="b">{t.editor.paperLevels?.b || "B卷"}</SelectItem>
-                                    <SelectItem value="other">{t.editor.paperLevels?.other || "其他"}</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
+                    <div className="space-y-2">
+                        <Label>{t.editor.gradeSemester || "年级/学期"}</Label>
+                        <Select
+                            value={data.gradeSemester || GRADE_SEMESTER_UNSET}
+                            onValueChange={(val) => setData({
+                                ...data,
+                                gradeSemester: val === GRADE_SEMESTER_UNSET ? "" : val,
+                            })}
+                        >
+                            <SelectTrigger>
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value={GRADE_SEMESTER_UNSET}>未设置</SelectItem>
+                                {GRADE_SEMESTER_OPTIONS.map(grade => (
+                                    <SelectItem key={grade} value={grade}>{grade}</SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
                     </div>
 
                     <div className="flex gap-2 border-t pt-4">

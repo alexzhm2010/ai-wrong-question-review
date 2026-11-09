@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/components/providers";
+import { PwaInstaller } from "@/components/pwa-installer";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -17,6 +18,8 @@ export const viewport: Viewport = {
   themeColor: '#f97316',
   width: 'device-width',
   initialScale: 1,
+  // standalone / 全面屏下让内容延伸到刘海与状态栏区域，避免顶部出现白边
+  viewportFit: 'cover',
 };
 
 export const metadata: Metadata = {
@@ -49,6 +52,7 @@ export default function RootLayout({
       >
         <Providers>
           {children}
+          <PwaInstaller />
         </Providers>
       </body>
     </html>

@@ -575,7 +575,6 @@ function HomeContent() {
         knowledgePoints: string[];
         subjectId: string;
         gradeSemester?: string;
-        paperLevel?: string;
     }): Promise<void> => {
         frontendLogger.info('[HomeDirectSave]', 'Starting direct save', {
             hasQuestionText: !!data.questionText,
@@ -595,7 +594,6 @@ function HomeContent() {
                 knowledgePoints: data.knowledgePoints,
                 subjectId: data.subjectId,
                 gradeSemester: data.gradeSemester,
-                paperLevel: data.paperLevel,
                 originalImageUrl: "",
             });
 

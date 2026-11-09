@@ -28,7 +28,6 @@ interface DirectTextEditorProps {
         knowledgePoints: string[];
         subjectId: string;
         gradeSemester?: string;
-        paperLevel?: string;
     }) => Promise<void>;
     defaultNotebookId?: string;
     defaultNotebookName?: string;
@@ -48,7 +47,6 @@ export function DirectTextEditor({ onSubmit, defaultNotebookId, defaultNotebookN
     const [knowledgePoints, setKnowledgePoints] = useState<string[]>([]);
     const [subjectId, setSubjectId] = useState(defaultNotebookId || "");
     const [gradeSemester, setGradeSemester] = useState("");
-    const [paperLevel, setPaperLevel] = useState("a");
 
     // 默认年级沿用数据库里最近一次手选的值，用户可随时下拉修改
     useEffect(() => {
@@ -74,7 +72,6 @@ export function DirectTextEditor({ onSubmit, defaultNotebookId, defaultNotebookN
             knowledgePoints,
             subjectId,
             gradeSemester: gradeSemester || undefined,
-            paperLevel,
         });
     };
 
@@ -87,7 +84,6 @@ export function DirectTextEditor({ onSubmit, defaultNotebookId, defaultNotebookN
         setMistakeStatus("unknown");
         setKnowledgePoints([]);
         setGradeSemester("");
-        setPaperLevel("a");
     };
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -167,7 +163,7 @@ export function DirectTextEditor({ onSubmit, defaultNotebookId, defaultNotebookN
                 </div>
 
                 {/* Notebook & Grade Selection */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-2">
                         <Label>{t.editor?.selectNotebook || "选择错题本"} *</Label>
                         <NotebookSelector
@@ -189,22 +185,6 @@ export function DirectTextEditor({ onSubmit, defaultNotebookId, defaultNotebookN
                                 {GRADE_SEMESTER_OPTIONS.map(grade => (
                                     <SelectItem key={grade} value={grade}>{grade}</SelectItem>
                                 ))}
-                            </SelectContent>
-                        </Select>
-                    </div>
-                    <div className="space-y-2">
-                        <Label>{t.editor?.paperLevel || "试卷难度"}</Label>
-                        <Select
-                            value={paperLevel}
-                            onValueChange={setPaperLevel}
-                        >
-                            <SelectTrigger>
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="a">{t.editor?.paperLevels?.a || "A卷/基础"}</SelectItem>
-                                <SelectItem value="b">{t.editor?.paperLevels?.b || "B卷/提高"}</SelectItem>
-                                <SelectItem value="other">{t.editor?.paperLevels?.other || "其他"}</SelectItem>
                             </SelectContent>
                         </Select>
                     </div>

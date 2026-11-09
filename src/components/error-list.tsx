@@ -47,7 +47,6 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
     const [timeFilter, setTimeFilter] = useState<"all" | "week" | "month">("all");
     const [gradeFilter, setGradeFilter] = useState("");
     const [chapterFilter, setChapterFilter] = useState("");
-    const [paperLevelFilter, setPaperLevelFilter] = useState<"all" | "a" | "b" | "other">("all");
     const [selectedTag, setSelectedTag] = useState<string | null>(null);
     const [expandedTags, setExpandedTags] = useState<Set<string>>(new Set());
     // 分页状态
@@ -84,7 +83,6 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
         }
         if (gradeFilter) params.append("gradeSemester", gradeFilter);
         if (chapterFilter) params.append("chapter", chapterFilter); // 章节筛选
-        if (paperLevelFilter !== "all") params.append("paperLevel", paperLevelFilter);
 
         router.push(`/print-preview?${params.toString()}`);
     };
@@ -176,7 +174,7 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
     };
 
     // 追踪筛选条件是否变化（用于判断是否需要重置页码）
-    const prevFiltersRef = useRef({ search, masteryFilter, timeFilter, selectedTag, subjectId, gradeFilter, chapterFilter, paperLevelFilter });
+    const prevFiltersRef = useRef({ search, masteryFilter, timeFilter, selectedTag, subjectId, gradeFilter, chapterFilter });
 
     useEffect(() => {
         // 250ms 防抖：避免输入每个字符都触发一次列表请求
@@ -189,11 +187,10 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
                 prevFilters.selectedTag !== selectedTag ||
                 prevFilters.subjectId !== subjectId ||
                 prevFilters.gradeFilter !== gradeFilter ||
-                prevFilters.chapterFilter !== chapterFilter ||
-                prevFilters.paperLevelFilter !== paperLevelFilter;
+                prevFilters.chapterFilter !== chapterFilter;
 
             // 更新 ref
-            prevFiltersRef.current = { search, masteryFilter, timeFilter, selectedTag, subjectId, gradeFilter, chapterFilter, paperLevelFilter };
+            prevFiltersRef.current = { search, masteryFilter, timeFilter, selectedTag, subjectId, gradeFilter, chapterFilter };
 
             if (filtersChanged && page !== 1) {
                 // 筛选条件变化且不在第一页，重置到第一页（会再次触发此 effect）
@@ -206,7 +203,7 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
         }, 250);
 
         return () => clearTimeout(timer);
-    }, [page, search, masteryFilter, timeFilter, selectedTag, subjectId, gradeFilter, chapterFilter, paperLevelFilter]);
+    }, [page, search, masteryFilter, timeFilter, selectedTag, subjectId, gradeFilter, chapterFilter]);
 
     const fetchItems = async () => {
         const seq = ++requestSeqRef.current;
@@ -231,8 +228,7 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
             }
             if (gradeFilter) params.append("gradeSemester", gradeFilter);
             if (chapterFilter) params.append("chapter", chapterFilter); // 章节筛选
-            if (paperLevelFilter !== "all") params.append("paperLevel", paperLevelFilter);
-            // 分页参数
+                // 分页参数
             params.append("page", page.toString());
             params.append("pageSize", pageSize.toString());
 
@@ -321,36 +317,6 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
                         onFilterChange={handleFilterChange}
                         subjectName={subjectName}
                     />
-                </div>
-                <div className="flex flex-wrap gap-2">
-                    <Button
-                        variant={paperLevelFilter === "all" ? "secondary" : "outline"}
-                        size="sm"
-                        onClick={() => setPaperLevelFilter("all")}
-                    >
-                        {t.filter.all || "All"}
-                    </Button>
-                    <Button
-                        variant={paperLevelFilter === "a" ? "secondary" : "outline"}
-                        size="sm"
-                        onClick={() => setPaperLevelFilter("a")}
-                    >
-                        {t.editor.paperLevels?.a || "Paper A"}
-                    </Button>
-                    <Button
-                        variant={paperLevelFilter === "b" ? "secondary" : "outline"}
-                        size="sm"
-                        onClick={() => setPaperLevelFilter("b")}
-                    >
-                        {t.editor.paperLevels?.b || "Paper B"}
-                    </Button>
-                    <Button
-                        variant={paperLevelFilter === "other" ? "secondary" : "outline"}
-                        size="sm"
-                        onClick={() => setPaperLevelFilter("other")}
-                    >
-                        {t.editor.paperLevels?.other || "Other"}
-                    </Button>
                 </div>
             </div>
 
