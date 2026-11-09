@@ -5,6 +5,7 @@ import { getServerSession } from "next-auth";
 import { unauthorized, forbidden, notFound, internalError } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
 import { getAIService } from "@/lib/ai";
+import { isNonGeogebraSubject } from "@/lib/geogebra-subject";
 
 const logger = createLogger('api:error-items:geogebra');
 
@@ -43,15 +44,10 @@ export async function POST(
             return forbidden("Not authorized to access this item");
         }
 
-        // Only analyze math-related subjects
+        // 与 /api/geogebra-analyze 共用同一套学科门禁：明确非理科才拒绝。
+        // 学科未设置（未归档）时放行，由 AI 判断，避免误拒几何题。
         const subjectName = errorItem.subject?.name || "";
-        const isMathRelated =
-            subjectName.includes("数学") ||
-            subjectName.toLowerCase().includes("math") ||
-            subjectName.includes("物理") ||
-            subjectName.toLowerCase().includes("physics");
-
-        if (!isMathRelated) {
+        if (isNonGeogebraSubject(subjectName)) {
             return NextResponse.json({
                 suitable: false,
                 commands: [],

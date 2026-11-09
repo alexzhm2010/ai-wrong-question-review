@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Save, RefreshCw, Loader2, Box, ChevronDown, ChevronUp } from "lucide-react";
+import { Save, RefreshCw, Loader2, ChevronDown, ChevronUp } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { frontendLogger } from "@/lib/frontend-logger";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
@@ -20,6 +20,8 @@ import { getMistakeStatusLabel, normalizeMistakeStatusForSave, type MistakeStatu
 import type { ReanswerQuestionResult } from "@/lib/ai/types";
 import { buildReanswerRequestBody } from "@/lib/reanswer-request";
 import { GeogebraDemo } from "@/components/geogebra-demo";
+import { GeogebraEntry } from "@/components/geogebra-entry";
+import { shouldShowGeogebra } from "@/lib/geogebra-subject";
 import { toast } from "@/lib/toast";
 import { GRADE_SEMESTER_OPTIONS, GRADE_SEMESTER_UNSET } from "@/lib/grade-options";
 import { fetchLastGradeSemester } from "@/lib/last-grade";
@@ -169,6 +171,11 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
         }
     };
 
+    // 学科以错题本名优先：文字录入 / AI 解题路径会把 subject 硬编码成「数学」。
+    // 非理科直接不渲染入口，避免每次识别完都占一块无用的版面。
+    const geogebraSubjectName = notebooks.find(n => n.id === data.subjectId)?.name || null;
+    const showGeogebraEntry = shouldShowGeogebra(geogebraSubjectName, data.subject);
+
     const handleAnalyzeGeogebra = async () => {
         if (!data.questionText.trim()) {
             toast.info(t.editor.enterQuestionFirst || '请先输入题目文本');
@@ -189,6 +196,7 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                     questionText: data.questionText,
                     answerText: data.answerText,
                     analysis: data.analysis,
+                    subjectName: geogebraSubjectName || data.subject || "",
                 }),
             });
 
@@ -450,42 +458,15 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                         </CardContent>
                     </Card>
 
-                    {/* GeoGebra Dynamic Demo */}
+                    {/* GeoGebra Dynamic Demo：已生成的演示照常展示；未生成时只给一行折叠小入口，非理科直接隐藏 */}
                     {data.geogebraCommands ? (
                         <GeogebraDemo commands={data.geogebraCommands} height={350} onRegenerate={handleAnalyzeGeogebra} />
-                    ) : data.questionText.trim() && data.answerText.trim() ? (
-                        <div className="rounded-lg border border-dashed p-4">
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                                    <Box className="h-4 w-4" />
-                                    <span>GeoGebra 动态演示</span>
-                                </div>
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={handleAnalyzeGeogebra}
-                                    disabled={isAnalyzingGeogebra}
-                                >
-                                    {isAnalyzingGeogebra ? (
-                                        <>
-                                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                            AI 分析中...
-                                        </>
-                                    ) : (
-                                        <>
-                                            <Box className="mr-2 h-4 w-4" />
-                                            生成演示
-                                        </>
-                                    )}
-                                </Button>
-                            </div>
-                            {geogebraError && (
-                                <p className="text-xs text-muted-foreground mt-2">{geogebraError}</p>
-                            )}
-                            <p className="text-xs text-muted-foreground mt-2">
-                                AI 将判断本题是否可以用 GeoGebra 进行动态演示
-                            </p>
-                        </div>
+                    ) : showGeogebraEntry && data.questionText.trim() && data.answerText.trim() ? (
+                        <GeogebraEntry
+                            onGenerate={handleAnalyzeGeogebra}
+                            isAnalyzing={isAnalyzingGeogebra}
+                            error={geogebraError}
+                        />
                     ) : null}
 
                     <Card>
