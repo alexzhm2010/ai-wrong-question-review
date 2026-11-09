@@ -10,6 +10,7 @@ import { badRequest, createErrorResponse, ErrorCode } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
 import { getAppConfig } from "@/lib/config";
 import { withoutMistakeAnalysis } from "@/lib/ai/response-guard";
+import { checkAiAvailability } from "@/lib/quota-guard";
 
 const logger = createLogger('api:analyze');
 
@@ -65,6 +66,29 @@ export async function POST(req: Request) {
         if (!imageBase64) {
             logger.warn('Missing image data');
             return badRequest("Missing image data");
+        }
+
+        // 防欠费：免费额度到期即停（fail-safe）。被拦截时以 SSE 错误事件告知前端。
+        const availability = await checkAiAvailability();
+        if (!availability.allowed) {
+            logger.warn({ code: availability.code }, 'AI call blocked by quota guard (analyze)');
+            const encoder = new TextEncoder();
+            const blockedStream = new ReadableStream({
+                start(controller) {
+                    controller.enqueue(
+                        encoder.encode(`data: ${JSON.stringify({ type: "error", message: "AI_QUOTA_BLOCKED" })}\n\n`)
+                    );
+                    controller.close();
+                },
+            });
+            return new Response(blockedStream, {
+                headers: {
+                    "Content-Type": "text/event-stream; charset=utf-8",
+                    "Cache-Control": "no-cache, no-transform",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            });
         }
 
         // Parse Data URL if present

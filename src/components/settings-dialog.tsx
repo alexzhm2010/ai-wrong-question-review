@@ -31,6 +31,7 @@ import { frontendLogger } from "@/lib/frontend-logger";
 import { AppConfig, UserProfile, UpdateUserProfileRequest, OpenAIInstance } from "@/types/api";
 import { ModelSelector } from "@/components/ui/model-selector";
 import { PromptSettings } from "@/components/settings/prompt-settings";
+import { AiQuotaCard } from "@/components/ai-quota-card";
 import { PROVIDER_PRESETS, findPresetByBaseUrl } from "@/lib/ai/presets";
 import { toast } from "@/lib/toast";
 import { PWA_DISMISS_KEY, PWA_LATER_KEY, PWA_OPEN_EVENT } from "@/lib/pwa-install";
@@ -1030,6 +1031,7 @@ export function SettingsDialog() {
 
                     {/* AI Tab */}
                     <TabsContent value="ai" className="space-y-4 py-4">
+                        <AiQuotaCard />
                         {loading ? (
                             <div className="flex justify-center py-4">
                                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />

@@ -39,6 +39,11 @@ services:
         value: "https://dashscope.aliyuncs.com/compatible-mode/v1"
       - key: OPENAI_MODEL
         value: "qwen3-vl-plus"
+      # AI 额度看板：RAM 子用户的只读 AccessKey（控制台手动填写，不写入仓库）
+      - key: ALIBABA_CLOUD_ACCESS_KEY_ID
+        sync: false
+      - key: ALIBABA_CLOUD_ACCESS_KEY_SECRET
+        sync: false
       # 保活：进程内定时自请求，防止免费实例 15 分钟无访问后休眠
       # 600000ms = 10 分钟；如需更快可改为 15000（实际触发 11–19 秒）
       - key: KEEPALIVE_INTERVAL_MS

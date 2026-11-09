@@ -158,6 +158,8 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
 
             if (msg.includes('AI_AUTH_ERROR')) {
                 errorText = reanswerErrors.authError || t.errors?.AI_AUTH_ERROR || errorText;
+            } else if (msg.includes('AI_QUOTA_BLOCKED')) {
+                errorText = t.errors?.AI_QUOTA_BLOCKED || errorText;
             } else if (msg.includes('AI_CONNECTION_FAILED')) {
                 errorText = reanswerErrors.connectionFailed || t.errors?.AI_CONNECTION_FAILED || errorText;
             } else if (msg.includes('AI_RESPONSE_ERROR')) {

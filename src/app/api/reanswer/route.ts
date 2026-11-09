@@ -6,6 +6,7 @@ import { badRequest, createErrorResponse, ErrorCode } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
 import { getAppConfig } from "@/lib/config";
 import { withoutMistakeAnalysis } from "@/lib/ai/response-guard";
+import { checkAiAvailability } from "@/lib/quota-guard";
 
 const logger = createLogger('api:reanswer');
 
@@ -40,6 +41,13 @@ export async function POST(req: Request) {
             return badRequest("Missing question text");
         }
 
+        // 防欠费：免费额度到期即停（fail-safe）。
+        const availability = await checkAiAvailability();
+        if (!availability.allowed) {
+            logger.warn({ code: availability.code }, 'AI call blocked by quota guard (reanswer)');
+            return createErrorResponse('AI_QUOTA_BLOCKED', 402, ErrorCode.AI_ERROR);
+        }
+
         const aiService = await getAIService();
 
         // 根据是否有图片选择不同的重新解题方式
@@ -65,6 +73,7 @@ export async function POST(req: Request) {
             'AI_CONNECTION_FAILED',
             'AI_TIMEOUT_ERROR',
             'AI_QUOTA_EXCEEDED',
+            'AI_QUOTA_BLOCKED',
             'AI_RESPONSE_ERROR',
         ] as const;
         const matchedCode = KNOWN_AI_CODES.find(code => errorMessageFromError.includes(code));

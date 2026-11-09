@@ -6,6 +6,7 @@ import { unauthorized, forbidden, notFound, internalError } from "@/lib/api-erro
 import { createLogger } from "@/lib/logger";
 import { getAIService } from "@/lib/ai";
 import { isNonGeogebraSubject } from "@/lib/geogebra-subject";
+import { checkAiAvailability } from "@/lib/quota-guard";
 
 const logger = createLogger('api:error-items:geogebra');
 
@@ -61,6 +62,13 @@ export async function POST(
                 commands: [],
                 description: "题目文本为空，无法分析",
             });
+        }
+
+        // 防欠费：免费额度到期即停（fail-safe）。
+        const availability = await checkAiAvailability();
+        if (!availability.allowed) {
+            logger.warn({ code: availability.code }, 'AI call blocked by quota guard (error-item geogebra)');
+            return NextResponse.json({ message: "AI_QUOTA_BLOCKED" }, { status: 402 });
         }
 
         const aiService = await getAIService();

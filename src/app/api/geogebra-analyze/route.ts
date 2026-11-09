@@ -5,6 +5,7 @@ import { unauthorized } from "@/lib/api-errors";
 import { createLogger } from "@/lib/logger";
 import { getAIService } from "@/lib/ai";
 import { isNonGeogebraSubject } from "@/lib/geogebra-subject";
+import { checkAiAvailability } from "@/lib/quota-guard";
 
 const logger = createLogger('api:geogebra-analyze');
 
@@ -32,6 +33,13 @@ export async function POST(req: Request) {
                 { suitable: false, commands: [], description: "题目文本为空" },
                 { status: 400 }
             );
+        }
+
+        // 防欠费：免费额度到期即停（fail-safe）。
+        const availability = await checkAiAvailability();
+        if (!availability.allowed) {
+            logger.warn({ code: availability.code }, 'AI call blocked by quota guard (geogebra-analyze)');
+            return NextResponse.json({ message: "AI_QUOTA_BLOCKED" }, { status: 402 });
         }
 
         // 明确是非理科时直接短路：语文 / 英语 / 化学等题不必白跑一次 AI 调用。

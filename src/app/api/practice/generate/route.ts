@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { getServerSession } from "next-auth";
 import { getAIService } from "@/lib/ai";
 import { notFound, internalError, unauthorized, badRequest } from "@/lib/api-errors";
+import { checkAiAvailability } from "@/lib/quota-guard";
 import { createLogger } from "@/lib/logger";
 
 const logger = createLogger('api:practice:generate');
@@ -41,6 +42,13 @@ export async function POST(req: Request) {
             tags = JSON.parse(errorItemWithSubject.knowledgePoints || "[]");
         } catch (e) {
             tags = [];
+        }
+
+        // 防欠费：免费额度到期即停（fail-safe）。
+        const availability = await checkAiAvailability();
+        if (!availability.allowed) {
+            logger.warn({ code: availability.code }, 'AI call blocked by quota guard (practice generate)');
+            return NextResponse.json({ message: "AI_QUOTA_BLOCKED" }, { status: 402 });
         }
 
         const aiService = await getAIService();

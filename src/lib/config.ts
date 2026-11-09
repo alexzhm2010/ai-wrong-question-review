@@ -47,6 +47,12 @@ export interface AppConfig {
         maxTokens?: number;      // 单次分析最大输出 token，默认 4096
         enableMistakeAnalysis?: boolean; // 是否让 AI 生成作答判定/错因，默认 true；关闭后只归档题目/答案/解析
     };
+    /** AI 额度看板设置。注意：只读 AccessKey 只能放环境变量，绝不放这里。 */
+    quota?: {
+        warnThreshold?: number;      // 低余额告警阈值（元）
+        freeQuotaExpireAt?: string;  // 免费额度到期日 YYYY-MM-DD，官方无公开 API，手动维护
+        stopWhenFreeExpired?: boolean; // 免费额度到期后即停 AI（fail-safe，默认 true）
+    };
 }
 
 // 旧版 OpenAI 配置格式（用于迁移检测）
@@ -134,6 +140,11 @@ const DEFAULT_CONFIG: AppConfig = {
         maxTokens: 4096,
         enableMistakeAnalysis: true,
     },
+    quota: {
+        warnThreshold: 20,
+        freeQuotaExpireAt: '',
+        stopWhenFreeExpired: true,
+    },
 };
 
 // 合并数据库配置与默认值，保证字段完整
@@ -150,6 +161,7 @@ function mergeConfig(userConfig: Partial<AppConfig>): AppConfig {
         prompts: { ...DEFAULT_CONFIG.prompts, ...userConfig.prompts },
         timeouts: { ...DEFAULT_CONFIG.timeouts, ...userConfig.timeouts },
         aiOptions: { ...DEFAULT_CONFIG.aiOptions, ...userConfig.aiOptions },
+        quota: { ...DEFAULT_CONFIG.quota, ...userConfig.quota },
     };
 }
 

@@ -133,6 +133,8 @@ export default function ErrorDetailPage() {
             const msg = error?.data?.message || error?.message || "";
             if (msg.includes("AI_AUTH_ERROR")) {
                 setGeogebraError("AI 认证失败，请检查设置");
+            } else if (msg.includes("AI_QUOTA_BLOCKED")) {
+                setGeogebraError("AI 服务已暂停：免费额度已到期且无可用付费余额，请前往「设置 → AI 提供商」处理");
             } else if (msg.includes("AI_CONNECTION")) {
                 setGeogebraError("AI 连接失败，请检查网络");
             } else {

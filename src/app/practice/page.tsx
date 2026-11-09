@@ -78,6 +78,8 @@ function PracticeContent() {
 
             if (msg.includes('AI_CONNECTION_FAILED')) {
                 errorMessage = t.errors?.aiConnectionFailed || errorMessage;
+            } else if (msg.includes('AI_QUOTA_BLOCKED')) {
+                errorMessage = t.errors?.AI_QUOTA_BLOCKED || errorMessage;
             } else if (msg.includes('AI_RESPONSE_ERROR')) {
                 errorMessage = t.errors?.aiResponseError || errorMessage;
             } else if (msg.includes('AI_AUTH_ERROR')) {

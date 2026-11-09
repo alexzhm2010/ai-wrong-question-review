@@ -141,6 +141,47 @@ export interface AppConfig {
         maxTokens?: number;
         enableMistakeAnalysis?: boolean;
     };
+    quota?: {
+        warnThreshold?: number;
+        freeQuotaExpireAt?: string;
+        stopWhenFreeExpired?: boolean;
+    };
+}
+
+/** GET /api/ai-quota 的响应（仅管理员可读，不含任何 AccessKey）。 */
+export interface AiQuotaResponse {
+    configured: boolean;
+    status: 'ok' | 'unconfigured' | 'error';
+    balance?: {
+        currency: string;
+        availableAmount: number;
+        availableCashAmount: number;
+        creditAmount: number;
+    };
+    monthSpend?: {
+        billingCycle: string;
+        amount: number;
+        currency: string;
+        itemCount: number;
+    };
+    fetchedAt?: string;
+    message?: string;
+    settings?: {
+        warnThreshold: number;
+        freeQuotaExpireAt: string;
+        stopWhenFreeExpired: boolean;
+    };
+    /** 防欠费拦截的实时可用性：前端据此展示「AI 已停用」等预警。不含任何密钥或精确余额。 */
+    availability?: {
+        allowed: boolean;
+        code?: string;
+        freeQuotaExpired?: boolean;
+        daysLeft?: number | null;
+    };
+    provider?: {
+        name: string;
+        model: string;
+    };
 }
 
 
