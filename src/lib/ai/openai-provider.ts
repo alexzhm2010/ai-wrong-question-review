@@ -9,6 +9,7 @@ import {
     extractTagSafe,
     sanitizeBodyText,
     parseMistakeFieldsFromResponse,
+    shouldStopGeneration,
 } from './response-guard';
 
 const logger = createLogger('ai:openai');
@@ -228,6 +229,8 @@ export class OpenAIProvider implements AIService {
         const enableThinking = (config.aiOptions?.enableThinking ?? false) || (isMath && mathThinking);
         // 4096 会让开启深度思考的长解析被截断，</analysis> 缺失时后续字段会被一起吞掉。
         const maxTokens = config.aiOptions?.maxTokens ?? 8192;
+        // 隐藏思考链的 token 预算：该部分不展示但照样按输出 token 计费。
+        const thinkingBudget = config.aiOptions?.thinkingBudget ?? 4096;
 
         const { systemPrompt, messages } = await this.buildAnalyzeMessages(imageBase64, mimeType, language, grade, subject, gradeSemester);
 
@@ -240,6 +243,7 @@ export class OpenAIProvider implements AIService {
             language,
             grade: grade || 'all',
             enableThinking,
+            thinkingBudget: enableThinking ? thinkingBudget : null,
             maxTokens,
         });
         logger.box('📝 Full System Prompt', systemPrompt);
@@ -247,11 +251,17 @@ export class OpenAIProvider implements AIService {
         try {
             const startedAt = Date.now();
             let fullText = '';
+            let earlyStopped = false;
+            let finishReason: string | null = null;
+            let usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null = null;
 
-            // 仅对支持思考的模型（百炼 Qwen3）下发 enable_thinking，避免其它模型报错
+            // 仅对支持思考的模型（百炼 Qwen3）下发思考参数，避免其它模型报错。
+            // thinking_budget 给隐藏思考链封顶：该部分不展示却按输出 token 计费，
+            // 不设时模型可一路思考到最大思维链长度，费用不可控。
             const extraBody: Record<string, unknown> = {};
             if (this.supportsThinking()) {
                 extraBody.enable_thinking = enableThinking;
+                if (enableThinking) extraBody.thinking_budget = thinkingBudget;
             }
 
             if (this.isLongCat) {
@@ -291,15 +301,34 @@ export class OpenAIProvider implements AIService {
                     messages,
                     max_tokens: maxTokens,
                     stream: true,
+                    // 百炼 OpenAI 兼容模式：末尾数据块返回真实 token 用量，便于核算成本
+                    stream_options: { include_usage: true },
                     ...(Object.keys(extraBody).length ? { extra_body: extraBody } : {}),
                 });
 
                 for await (const chunk of stream) {
-                    const delta = chunk?.choices?.[0]?.delta?.content || '';
+                    // include_usage 时最后一个 chunk 的 choices 为空，usage 单独返回
+                    if (chunk?.usage) usage = chunk.usage;
+                    const choice = chunk?.choices?.[0];
+                    if (choice?.finish_reason) finishReason = choice.finish_reason;
+                    const delta = choice?.delta?.content || '';
                     if (delta) {
                         fullText += delta;
                         onDelta?.(delta);
                     }
+                    // 只在写完一句话时检测：检查次数 ≈ 句数，终止点精确到刚写完那句怀疑。
+                    // 已给出结论却又开始自我怀疑 / 无限重算时提前结束生成；百炼按
+                    // 「中断前已生成部分」计费，这里 break 能实打实省下后续整段重算；
+                    // 已生成的正文随后仍会经 sanitizeBodyText 清洗掉怀疑句。
+                    if (delta && /[。！？；\n]/.test(delta) && shouldStopGeneration(fullText)) {
+                        earlyStopped = true;
+                        break;
+                    }
+                }
+
+                // 显式断开底层连接，确保服务端停止继续生成（SDK 迭代器 return 通常已做，这里双保险）
+                if (earlyStopped) {
+                    try { stream?.controller?.abort?.(); } catch { /* noop */ }
                 }
             }
 
@@ -309,7 +338,19 @@ export class OpenAIProvider implements AIService {
             const parsedResult = this.parseResponse(fullText);
 
             logger.box('✅ Parsed & Validated Result', JSON.stringify(parsedResult, null, 2));
-            logger.info({ durationMs: Date.now() - startedAt, model: this.model, enableThinking, maxTokens }, 'Image analysis duration (stream)');
+            logger.info({
+                durationMs: Date.now() - startedAt,
+                model: this.model,
+                enableThinking,
+                thinkingBudget: enableThinking ? thinkingBudget : null,
+                maxTokens,
+                promptTokens: usage?.prompt_tokens ?? null,
+                completionTokens: usage?.completion_tokens ?? null,
+                totalTokens: usage?.total_tokens ?? null,
+                finishReason,
+                earlyStopped,
+                outputChars: fullText.length,
+            }, 'Image analysis duration & token usage (stream)');
 
             return parsedResult;
 

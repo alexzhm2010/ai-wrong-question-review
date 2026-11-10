@@ -47,6 +47,7 @@ export interface AppConfig {
         maxTokens?: number;      // 单次分析最大输出 token，默认 8192
         /** 内部迁移标记：旧版默认 4096 已升级过一次，之后用户可自由改回 4096 */
         maxTokensMigrated?: boolean;
+        thinkingBudget?: number; // 深度思考的 token 预算上限，默认 4096；仅 enable_thinking=true 时生效
         enableMistakeAnalysis?: boolean; // 是否让 AI 生成作答判定/错因，默认 true；关闭后只归档题目/答案/解析
     };
     /** AI 额度看板设置。注意：只读 AccessKey 只能放环境变量，绝不放这里。 */
@@ -105,6 +106,13 @@ function migrateOpenAIConfig(legacy: LegacyOpenAIConfig): AppConfig['openai'] {
 const DEFAULT_MAX_TOKENS = 8192;
 const LEGACY_MAX_TOKENS = 4096;
 
+/**
+ * 深度思考的 token 预算。百炼 qwen3-vl-plus 开启 enable_thinking 后，
+ * 思考过程会产生 reasoning_content（前端不展示，但按输出 token 计费）；
+ * 不设 thinking_budget 时模型可一路思考到最大思维链长度，费用不可控。
+ */
+const DEFAULT_THINKING_BUDGET = 4096;
+
 const DEFAULT_CONFIG: AppConfig = {
     aiProvider: (process.env.AI_PROVIDER as 'gemini' | 'openai' | 'azure') || 'openai',
     // H-04：出厂默认关闭注册（fail-closed）。首个管理员由 `npm run db:seed`
@@ -144,6 +152,7 @@ const DEFAULT_CONFIG: AppConfig = {
         enableThinking: false,
         mathThinking: true,
         maxTokens: DEFAULT_MAX_TOKENS,
+        thinkingBudget: DEFAULT_THINKING_BUDGET,
         enableMistakeAnalysis: true,
     },
     quota: {

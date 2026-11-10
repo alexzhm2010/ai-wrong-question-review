@@ -91,6 +91,15 @@ describe('config module', () => {
             expect(config.aiOptions?.maxTokens).toBe(8192);
         });
 
+        it('默认深度思考预算为 4096，避免隐藏思考链无限烧 token', async () => {
+            findUniqueMock.mockResolvedValue(null);
+
+            const { getAppConfig } = await import('@/lib/config');
+            const config = await getAppConfig();
+
+            expect(config.aiOptions?.thinkingBudget).toBe(4096);
+        });
+
         it('数据库里旧默认 4096 会一次性升级为 8192 并写回标记', async () => {
             findUniqueMock.mockResolvedValue({
                 key: 'app_config',

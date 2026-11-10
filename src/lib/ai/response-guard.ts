@@ -42,10 +42,34 @@ const COT_SIGNAL_RES: RegExp[] = [
     /为何答案写成|但为什么|为什么.{0,12}答案写成|为何.{0,12}答案/,
 ];
 
+/**
+ * 「结论后自我怀疑」信号：解析已经写出结论（或中途算出结果），
+ * 却又追加转折、警示，宣称与直觉/预期矛盾，要求回头重算方向。
+ * 这类是模型写给自己看的元话语，不会出现在规范解析里——
+ * 规范的边界核验会说「代入端点验证」，不会说「与直觉矛盾，再检查方向」。
+ * 与 COT_SIGNAL_RES 不同：每条都是强否定信号，单条命中即可处理。
+ */
+const SELF_DOUBT_RES: RegExp[] = [
+    /与[^。；\n]{0,6}(?:直觉|预期|常识)[^。；\n]{0,10}(?:矛盾|相反|不符|冲突|对不上)/,
+    /(?:这个|上述|前面(?:的)?)?(?:结果|结论)[^。；\n]{0,14}(?:与[^。；\n]{0,10}(?:相反|矛盾)|(?:可能|似乎|好像)[^。；\n]{0,8}(?:相反|有误|不对|有问题|错了))/,
+    /(?:可能|似乎|好像)[^。；\n]{0,6}(?:相反|搞反|弄反|有问题|有误)/,
+    /(?:然而|但是|但|不过)[^。；\n]{0,36}(?:再|重新)[^。；\n]{0,10}(?:检查|审视|验算|核对|推导|求解|考虑)/,
+    /(?:再|重新)(?:仔细)?(?:检查|审视|验算|核对|推导)[^。；\n]{0,12}(?:方向|单调性|是否|一遍|一下|有没有|对不对)/,
+    /(?:需|要|得)(?:重新|再)[^。；\n]{0,8}(?:检查|审视|验算|核对|推导|求解)/,
+    /[⚠❗][^。；\n]{0,8}(?:注意|小心|警告)[^。；\n]{0,36}(?:相反|矛盾|可能|是否|遗漏|有误|不对)/,
+    /(?:推翻|否定|怀疑)[^。；\n]{0,10}(?:前面|上述|自己|刚(?:才)?|已(?:经)?)[^。；\n]{0,10}(?:结论|推导|结果)/,
+];
+
 /** 是否出现了成段的解题式思维链（≥2 类信号才算，避免误伤） */
 export function containsChainOfThought(text?: string | null): boolean {
     if (!text) return false;
     return COT_SIGNAL_RES.filter((re) => re.test(text as string)).length >= 2;
+}
+
+/** 是否出现了零散的自我怀疑 / 要求回头重算的元话语 */
+export function containsSelfDoubt(text?: string | null): boolean {
+    if (!text) return false;
+    return SELF_DOUBT_RES.some((re) => re.test(text as string));
 }
 
 /** 最早一处思维链信号的位置，用于保留前面已经正确的推导 */
@@ -56,6 +80,29 @@ function firstChainOfThoughtIndex(text: string): number {
         if (idx !== -1 && (earliest === -1 || idx < earliest)) earliest = idx;
     }
     return earliest;
+}
+
+/**
+ * 逐句剔除自我怀疑句，而不是从该处整体截断。
+ * 这类警告常出现在推导中途（例如刚解出 m<1/2 就插一句「与预期相反」），
+ * 若直接截断会把它后面正确的定义域推导与最终结论一起砍掉。
+ * 按行 + 句末标点切分，只丢命中的那一句，保留其余有效推导。
+ */
+function stripSelfDoubtSentences(text: string): string {
+    return text
+        .split('\n')
+        .flatMap((line) => {
+            if (line.trim() === '') return ['']; // 保留原本就有的分段空行
+            const sentences = line.match(/[^。；]*[。；]+|[^。；]+$/g) || [line];
+            const kept = sentences
+                .filter((sentence) => !SELF_DOUBT_RES.some((re) => re.test(sentence)))
+                .join('');
+            // 整行都是污染句时整行丢掉，避免留下孤立空行
+            return kept.trim() === '' ? [] : [kept];
+        })
+        .join('\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trimEnd();
 }
 
 /** 形如 <tag> / </tag> 的残留标签；不匹配数学不等式里的裸 < 和 > */
@@ -75,19 +122,27 @@ export function stripLeakedTags(text: string): string {
 
 /**
  * 清洗主体内容（题目/答案/解析）：剥离残留标签，
- * 若出现自我纠错段落或成段的解题式思维链，则从该处截断，
- * 保留前面已经正确的解题内容。
+ * 按污染形态分三级处理，始终保留前面/后面已经正确的解题内容：
+ * 1) 规则复述与自我纠错独白 —— 从这里起都是污染，直接截断；
+ * 2) 成段思维链（≥2 类信号） —— 从第一处改口截断；
+ * 3) 零散的自我怀疑句 —— 逐句剔除，不截断（它常夹在正确推导中间）。
  */
 export function sanitizeBodyText(text: string): string {
     if (!text) return text;
     const stripped = stripLeakedTags(text);
-    let idx = stripped.search(META_TALK_RE);
-    if (idx === -1 && containsChainOfThought(stripped)) {
+
+    const metaIdx = stripped.search(META_TALK_RE);
+    if (metaIdx !== -1) return stripped.slice(0, metaIdx).trimEnd();
+
+    if (containsChainOfThought(stripped)) {
         const cotIdx = firstChainOfThoughtIndex(stripped);
         // 前面已有实质推导时才截断，避免把整段解析砍成空串
-        if (cotIdx > 0) idx = cotIdx;
+        if (cotIdx > 0) return stripped.slice(0, cotIdx).trimEnd();
     }
-    return (idx === -1 ? stripped : stripped.slice(0, idx)).trimEnd();
+
+    if (containsSelfDoubt(stripped)) return stripSelfDoubtSentences(stripped);
+
+    return stripped.trimEnd();
 }
 
 /** 错因类字段：整体被污染时宁可留空，也不带病展示 */
@@ -273,4 +328,26 @@ export function withoutMistakeAnalysis<T extends {
         mistakeAnalysis: '',
         mistakeStatus: 'unknown',
     };
+}
+
+/**
+ * 流式生成是否应提前终止（token 经济性）。
+ *
+ * 百炼计费规则：请求中断时，输出 Token 只计算服务端收到终止请求前已生成的部分，
+ * 所以掐断「结论已给出却又开始自我怀疑、无限重算」的循环能实打实省下预算。
+ *
+ * 触发条件刻意收紧为「解析里已有明确结论」+「出现自我怀疑 / 成段思维链」：
+ * 中途那句警告之后往往还有正确的定义域推导与最终答案，过早中断反而会丢内容。
+ * 本次实测样本正是在写完 m∈[-1,1/2) 之后才出现「然而，这与直觉矛盾」，
+ * 在这一刻停止，既保住正确答案，又省掉后续整段重算。
+ */
+export function shouldStopGeneration(text: string): boolean {
+    if (!text) return false;
+    const analysis = extractTagSafe(text, 'analysis', true);
+    if (!analysis || analysis.length < 40) return false;
+
+    const hasConclusion = /(?:∈\s*\[|取值范围(?:是|为)|综上|故答案为|最终答案|所以[^。；\n]{0,24}得)/.test(analysis);
+    if (!hasConclusion) return false;
+
+    return containsSelfDoubt(analysis) || containsChainOfThought(analysis);
 }

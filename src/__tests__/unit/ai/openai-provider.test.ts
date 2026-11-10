@@ -232,6 +232,49 @@ describe('OpenAI Provider 重新解题错因同步', () => {
     });
 });
 
+describe('token 经济性：流式请求参数与提前终止', () => {
+    let streamProvider: OpenAIProvider;
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        streamProvider = new OpenAIProvider({
+            apiKey: 'test-key',
+            model: 'qwen3-vl-plus',
+            baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        });
+    });
+
+    it('下发思考预算与用量统计，并在结论后自我怀疑时掐断生成', async () => {
+        let wasteEmitted = false;
+        function* fakeStream(): Generator<any> {
+            const emit = (content: string) => ({ choices: [{ delta: { content }, finish_reason: null }] });
+            yield emit('<subject>数学</subject>\n');
+            yield emit('<question_text>已知 g(x) 是定义在 [-2,2] 上的偶函数，求 m 的取值范围。</question_text>\n');
+            yield emit('<answer_text>m∈[-1,1/2)</answer_text>\n');
+            yield emit('<analysis>由平方得 m<1/2。\n');
+            yield emit('结合定义域取交集得 m∈[-1,1/2)。\n');
+            yield emit('然而，这与直觉矛盾——我们再仔细检查单调性方向！\n');
+            wasteEmitted = true;
+            yield emit('这里本该是无限重算的废话，不应被消费。</analysis>\n');
+            yield { choices: [], usage: { prompt_tokens: 1200, completion_tokens: 800, total_tokens: 2000 } };
+        }
+
+        mockCompletionCreate.mockResolvedValueOnce(fakeStream());
+        const result = await streamProvider.analyzeImageStream(
+            'aW1hZ2U=', 'image/jpeg', 'zh', 10, '数学', null, () => {}
+        );
+
+        const body = mockCompletionCreate.mock.calls[0][0];
+        expect(body.stream_options).toEqual({ include_usage: true });
+        expect(body.extra_body).toMatchObject({ enable_thinking: true, thinking_budget: 4096 });
+
+        // 后续整段重算没有被生成/消费，正确答案仍完整保留
+        expect(wasteEmitted).toBe(false);
+        expect(result.analysis).toContain('m∈[-1,1/2)');
+        expect(result.analysis).not.toContain('与直觉矛盾');
+    });
+});
+
 describe('OpenAI Provider 错误处理', () => {
     let provider: OpenAIProvider;
 

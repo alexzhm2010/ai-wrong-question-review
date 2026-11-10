@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
     containsChainOfThought,
+    containsSelfDoubt,
     containsMetaTalk,
+    shouldStopGeneration,
     extractTagSafe,
     parseMistakeFieldsFromResponse,
     reconcileMistakeFields,
@@ -275,5 +277,81 @@ describe('回归：空白题整段跳过作答判定', () => {
         expect(mistake.mistakeStatus).toBe('wrong_attempt');
         expect(mistake.wrongAnswerText).toBe('(-1/2,1/2]');
         expect(mistake.mistakeAnalysis).toContain('审题遗漏');
+    });
+});
+
+describe('回归：空白题解析中途插入自我怀疑句（v1.17.0 线上实测样本）', () => {
+    // 原图只有印刷题干 + 空白横线。模型前三步与结论 m∈[-1,1/2) 全对，
+    // 却在推导中途插入「与预期相反」，并在正确答案之后又来一句「与直觉矛盾」。
+    // 旧词表（COT_SIGNAL_RES）一个信号都没命中，所以整段原样放行。
+    const raw = [
+        '第三步：解不等式 |1-m|>|m|',
+        '方法一：平方法（安全，无增根）',
+        '|1-m|²>|m|² ⇒ (1-m)²>m² ⇒ 1-2m+m²>m² ⇒ 1-2m>0 ⇒ m<1/2',
+        '⚠️ 注意！这个结果与我们预期可能相反——需检查是否遗漏定义域限制！',
+        '但这里有个关键点：g 只定义在 [-2,2] 上，所以要求：',
+        '1-m∈[-2,2]，m∈[-2,2]',
+        '取交集得 m∈[-1,2]',
+        '但上面推导出 m<1/2，结合定义域得 m∈[-1,1/2)',
+        '然而，这与直觉矛盾——我们再仔细检查单调性方向！',
+    ].join('\n');
+
+    it('旧思维链词表确实漏判，新自我怀疑检测能命中', () => {
+        expect(containsChainOfThought(raw)).toBe(false);
+        expect(containsMetaTalk(raw)).toBe(false);
+        expect(containsSelfDoubt(raw)).toBe(true);
+    });
+
+    it('只剔除两句怀疑，完整保留其余七行推导与结论', () => {
+        const expected = [
+            '第三步：解不等式 |1-m|>|m|',
+            '方法一：平方法（安全，无增根）',
+            '|1-m|²>|m|² ⇒ (1-m)²>m² ⇒ 1-2m+m²>m² ⇒ 1-2m>0 ⇒ m<1/2',
+            '但这里有个关键点：g 只定义在 [-2,2] 上，所以要求：',
+            '1-m∈[-2,2]，m∈[-2,2]',
+            '取交集得 m∈[-1,2]',
+            '但上面推导出 m<1/2，结合定义域得 m∈[-1,1/2)',
+        ].join('\n');
+        expect(sanitizeBodyText(raw)).toBe(expected);
+    });
+
+    it('结论后的成段思维链仍按旧规则截断，不受逐句剔除影响', () => {
+        const mixed = '解得 m∈[-1,1/2)。\n但等等！为何答案写成 (-1/2,1/2]？说明我们漏了关键点！\n查权威解法：标准答案确为 (-1/2,1/2]。';
+        expect(sanitizeBodyText(mixed)).toBe('解得 m∈[-1,1/2)。');
+    });
+
+    it('正常的边界验证讲解不被误删', () => {
+        const normal = '解得 m∈[-1,1/2)。注意：此处需验证边界点';
+        expect(containsSelfDoubt(normal)).toBe(false);
+        expect(sanitizeBodyText(normal)).toBe(normal);
+    });
+});
+
+describe('token 经济性：结论后自我怀疑时提前终止生成', () => {
+    it('中途警告（结论未出）不终止，避免砍掉后面的正确推导', () => {
+        const mid = [
+            '<analysis>第三步：由平方得 m<1/2。',
+            '⚠️ 注意！这个结果与我们预期可能相反——需检查是否遗漏定义域限制！',
+        ].join('\n');
+        expect(shouldStopGeneration(mid)).toBe(false);
+    });
+
+    it('结论已给出又出现自我怀疑时终止', () => {
+        const done = [
+            '<analysis>第三步：由平方得 m<1/2。',
+            '⚠️ 注意！这个结果与我们预期可能相反——需检查是否遗漏定义域限制！',
+            '结合定义域取交集得 m∈[-1,1/2)。',
+            '然而，这与直觉矛盾——我们再仔细检查单调性方向！',
+        ].join('\n');
+        expect(shouldStopGeneration(done)).toBe(true);
+    });
+
+    it('正常解析（含边界验证）不终止', () => {
+        const normal = '<analysis>解得 m∈[-1,1/2)。注意：此处需验证边界点，m=-1 时 g(2)<g(1) 成立。</analysis>';
+        expect(shouldStopGeneration(normal)).toBe(false);
+    });
+
+    it('尚无 analysis 内容时不终止', () => {
+        expect(shouldStopGeneration('<question_text>题目</question_text>')).toBe(false);
     });
 });

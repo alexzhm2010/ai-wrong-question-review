@@ -383,6 +383,16 @@ describe('AI Prompts', () => {
             });
         });
 
+        it('输出纪律禁止结论后的自我怀疑、警示与回头重算', () => {
+            templates.forEach(tpl => {
+                expect(tpl).toContain('与预期相反');
+                expect(tpl).toContain('与直觉矛盾');
+                expect(tpl).toContain('再仔细检查方向');
+                expect(tpl).toContain('解析一次成型');
+                expect(tpl).toContain('结论写出后立即收尾');
+            });
+        });
+
         it('空白题整段跳过作答判定输出，不补写空标签', () => {
             templates.forEach(tpl => {
                 expect(tpl).toContain('整段跳过作答判定输出');

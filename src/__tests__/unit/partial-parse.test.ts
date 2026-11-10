@@ -72,4 +72,17 @@ describe('parsePartialXml', () => {
         const data = parsePartialXml('<analysis>我们再看第二步，把端点代入验证。</analysis>');
         expect(data.analysis).toBe('我们再看第二步，把端点代入验证。');
     });
+
+    it('中途的自我怀疑句被剔除，但其后的正确结论仍保留', () => {
+        const raw = [
+            '<analysis>由平方得 m<1/2。',
+            '⚠️ 注意！这个结果与我们预期可能相反——需检查是否遗漏定义域限制！',
+            '结合定义域得 m∈[-1,1/2)。',
+            '然而，这与直觉矛盾——我们再仔细检查单调性方向！</analysis>',
+        ].join('\n');
+        const data = parsePartialXml(raw);
+        expect(data.analysis).toContain('m∈[-1,1/2)');
+        expect(data.analysis).not.toContain('与直觉矛盾');
+        expect(data.analysis).not.toContain('与预期可能相反');
+    });
 });

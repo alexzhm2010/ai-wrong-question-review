@@ -850,7 +850,34 @@ export function SettingsDialog() {
                                     </SelectContent>
                                 </Select>
                                 <p className="text-xs text-muted-foreground">
-                                    {(t.settings?.general as any)?.maxTokensDesc || "控制模型单次作答长度上限，越小响应越快。默认 8192；调低可能导致长解析被截断。"}
+                                    {(t.settings?.general as any)?.maxTokensDesc || "控制模型单次作答长度上限，越小响应越快。默认 8192；调低可能导致长解析被截断。上限本身不计费，按实际生成量计费。"}
+                                </p>
+                            </div>
+
+                            <div className="space-y-2 pt-4 border-t">
+                                <Label>{(t.settings?.general as any)?.thinkingBudget || "深度思考 Token 预算"}</Label>
+                                <Select
+                                    value={String(config.aiOptions?.thinkingBudget ?? 4096)}
+                                    onValueChange={(val: string) =>
+                                        setConfig((prev) => ({
+                                            ...prev,
+                                            aiOptions: { ...prev.aiOptions, thinkingBudget: parseInt(val, 10) },
+                                        }))
+                                    }
+                                >
+                                    <SelectTrigger>
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {[1024, 2048, 4096, 8192].map((v) => (
+                                            <SelectItem key={v} value={String(v)}>
+                                                {v.toLocaleString()} token{v === 4096 ? "（推荐）" : ""}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                                <p className="text-xs text-muted-foreground">
+                                    {(t.settings?.general as any)?.thinkingBudgetDesc || "限制模型隐藏思考链的长度（该部分不展示但照样计费）。仅在深度思考开启时生效；越小越省钱，过小可能影响难题正确率。"}
                                 </p>
                             </div>
 
