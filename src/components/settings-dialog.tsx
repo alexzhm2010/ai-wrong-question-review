@@ -830,7 +830,7 @@ export function SettingsDialog() {
                             <div className="space-y-2 pt-4 border-t">
                                 <Label>{(t.settings?.general as any)?.maxTokens || "单次分析最大输出 Token"}</Label>
                                 <Select
-                                    value={String(config.aiOptions?.maxTokens ?? 4096)}
+                                    value={String(config.aiOptions?.maxTokens ?? 8192)}
                                     onValueChange={(val: string) =>
                                         setConfig((prev) => ({
                                             ...prev,
@@ -844,13 +844,13 @@ export function SettingsDialog() {
                                     <SelectContent>
                                         {[2048, 3072, 4096, 5120, 6144, 8192].map((v) => (
                                             <SelectItem key={v} value={String(v)}>
-                                                {v.toLocaleString()} token{v >= 8192 ? "（原始上限）" : ""}
+                                                {v.toLocaleString()} token{v >= 8192 ? "（推荐）" : ""}
                                             </SelectItem>
                                         ))}
                                     </SelectContent>
                                 </Select>
                                 <p className="text-xs text-muted-foreground">
-                                    {(t.settings?.general as any)?.maxTokensDesc || "控制模型单次作答长度上限，越小响应越快。默认 4096。"}
+                                    {(t.settings?.general as any)?.maxTokensDesc || "控制模型单次作答长度上限，越小响应越快。默认 8192；调低可能导致长解析被截断。"}
                                 </p>
                             </div>
 

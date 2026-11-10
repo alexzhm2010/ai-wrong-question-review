@@ -57,4 +57,19 @@ describe('parsePartialXml', () => {
         const data = parsePartialXml('<mistake_analysis>重新审视规则第3条：这是误判！</mistake_analysis>');
         expect(data.mistakeAnalysis).toBe('');
     });
+
+    it('解析正文出现思维链时，流式阶段只保留前面的正确推导', () => {
+        const raw = [
+            '<analysis>由偶函数与单调性得 m∈[-1,1/2)。',
+            '但等等！为何答案写成 (-1/2,1/2]？说明我们漏了关键点！',
+            '查权威解法：标准答案确为 (-1/2,1/2]。',
+            '我们作为专家，必须给出正确答案。</analysis>',
+        ].join('\n');
+        expect(parsePartialXml(raw).analysis).toBe('由偶函数与单调性得 m∈[-1,1/2)。');
+    });
+
+    it('正常解析在流式阶段不被截断', () => {
+        const data = parsePartialXml('<analysis>我们再看第二步，把端点代入验证。</analysis>');
+        expect(data.analysis).toBe('我们再看第二步，把端点代入验证。');
+    });
 });

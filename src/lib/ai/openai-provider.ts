@@ -8,7 +8,7 @@ import { createLogger } from '../logger';
 import {
     extractTagSafe,
     sanitizeBodyText,
-    reconcileMistakeFields,
+    parseMistakeFieldsFromResponse,
 } from './response-guard';
 
 const logger = createLogger('ai:openai');
@@ -108,12 +108,11 @@ export class OpenAIProvider implements AIService {
         const analysis = sanitizeBodyText(rawAnalysis);
 
         // 判定层独立裁决，AI 输出只作为候选
-        const mistake = reconcileMistakeFields({
-            answerText,
-            wrongAnswerText: this.extractTag(text, "wrong_answer_text"),
-            mistakeAnalysis: this.extractTag(text, "mistake_analysis"),
-            mistakeStatus: this.extractTag(text, "mistake_status"),
-        });
+        const mistake = parseMistakeFieldsFromResponse(
+            text,
+            (tag) => this.extractTag(text, tag),
+            answerText
+        );
         if (mistake.repaired) {
             logger.warn({ repaired: mistake.repaired }, 'Cleaned up polluted mistake fields');
         }
@@ -222,12 +221,13 @@ export class OpenAIProvider implements AIService {
         onDelta?: (text: string) => void
     ): Promise<ParsedQuestion> {
         const config = await getAppConfig();
-        // P0：思考/推理开关，默认关闭（提速）；P1：输出 token 上限，默认 4096
+        // P0：思考/推理开关，默认关闭（提速）；P1：输出 token 上限，默认 8192
         // P2：数学题默认开启深度思考（可在设置中单独关闭），以提高解答正确率
         const mathThinking = config.aiOptions?.mathThinking !== false;
         const isMath = !!subject && subject.includes('数学');
         const enableThinking = (config.aiOptions?.enableThinking ?? false) || (isMath && mathThinking);
-        const maxTokens = config.aiOptions?.maxTokens ?? 4096;
+        // 4096 会让开启深度思考的长解析被截断，</analysis> 缺失时后续字段会被一起吞掉。
+        const maxTokens = config.aiOptions?.maxTokens ?? 8192;
 
         const { systemPrompt, messages } = await this.buildAnalyzeMessages(imageBase64, mimeType, language, grade, subject, gradeSemester);
 
@@ -467,12 +467,11 @@ export class OpenAIProvider implements AIService {
             const analysis = sanitizeBodyText(this.extractTag(text, "analysis") || "");
             const knowledgePointsRaw = this.extractTag(text, "knowledge_points") || "";
             const knowledgePoints = knowledgePointsRaw.split(/[,，\n]/).map(k => k.trim()).filter(k => k.length > 0);
-            const mistake = reconcileMistakeFields({
-                answerText,
-                wrongAnswerText: this.extractTag(text, "wrong_answer_text"),
-                mistakeAnalysis: this.extractTag(text, "mistake_analysis"),
-                mistakeStatus: this.extractTag(text, "mistake_status"),
-            });
+            const mistake = parseMistakeFieldsFromResponse(
+                text,
+                (tag) => this.extractTag(text, tag),
+                answerText
+            );
 
             logger.info('Reanswer parsed successfully');
 

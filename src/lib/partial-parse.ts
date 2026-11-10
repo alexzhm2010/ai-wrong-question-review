@@ -5,7 +5,7 @@
  * 注意：题目/答案/解析需要逐字呈现，所以允许未闭合时读到当前末尾；
  * 但会截断到下一个已知开标签之前，避免模型跑偏时把后续字段吞进来。
  */
-import { AI_TAG_NAMES, containsMetaTalk, stripLeakedTags } from './ai/response-guard';
+import { AI_TAG_NAMES, containsMetaTalk, sanitizeBodyText, stripLeakedTags } from './ai/response-guard';
 
 export interface PartialParsed {
     subject?: string;
@@ -44,6 +44,10 @@ function extractPartial(text: string, tag: string): string | undefined {
         if (nextOpen !== -1) raw = raw.slice(0, nextOpen);
     }
     raw = raw.replace(/^\s*\n+/, '');
+
+    // 解析正文：流式阶段同样剥离标签，并在出现自我纠错/思维链处截断，
+    // 避免整段独白实时灌进解析卡（最终结果会再经 sanitizeBodyText 覆盖）
+    if (tag === 'analysis') return sanitizeBodyText(raw);
 
     // 错因类字段一旦出现自我纠错独白或裸标签，流式阶段直接不展示
     if (tag === 'mistake_analysis' || tag === 'wrong_answer_text') {

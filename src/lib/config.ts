@@ -44,7 +44,9 @@ export interface AppConfig {
     aiOptions?: {
         enableThinking?: boolean; // AI 思考/推理模式，默认 false（关闭以提速）
         mathThinking?: boolean;   // 数学题是否自动开启深度思考，默认 true（更准但更慢）
-        maxTokens?: number;      // 单次分析最大输出 token，默认 4096
+        maxTokens?: number;      // 单次分析最大输出 token，默认 8192
+        /** 内部迁移标记：旧版默认 4096 已升级过一次，之后用户可自由改回 4096 */
+        maxTokensMigrated?: boolean;
         enableMistakeAnalysis?: boolean; // 是否让 AI 生成作答判定/错因，默认 true；关闭后只归档题目/答案/解析
     };
     /** AI 额度看板设置。注意：只读 AccessKey 只能放环境变量，绝不放这里。 */
@@ -99,6 +101,10 @@ function migrateOpenAIConfig(legacy: LegacyOpenAIConfig): AppConfig['openai'] {
     };
 }
 
+/** 单次分析输出上限。旧值 4096 会让长解析被截断，导致末尾标签缺失。 */
+const DEFAULT_MAX_TOKENS = 8192;
+const LEGACY_MAX_TOKENS = 4096;
+
 const DEFAULT_CONFIG: AppConfig = {
     aiProvider: (process.env.AI_PROVIDER as 'gemini' | 'openai' | 'azure') || 'openai',
     // H-04：出厂默认关闭注册（fail-closed）。首个管理员由 `npm run db:seed`
@@ -137,7 +143,7 @@ const DEFAULT_CONFIG: AppConfig = {
     aiOptions: {
         enableThinking: false,
         mathThinking: true,
-        maxTokens: 4096,
+        maxTokens: DEFAULT_MAX_TOKENS,
         enableMistakeAnalysis: true,
     },
     quota: {
@@ -185,6 +191,23 @@ export async function getAppConfig(): Promise<AppConfig> {
             const migrated = mergeConfig({ ...userConfig, openai: openaiConfig });
             await saveConfig(migrated);
             logger.info('Legacy OpenAI config migrated successfully');
+            return migrated;
+        }
+
+        // 旧版默认 4096 容易截断长解析。对数据库里已持久化的旧默认值做一次性升级，
+        // 写回标记后，用户之后在设置页主动改回 4096 不会再被覆盖。
+        if (userConfig.aiOptions?.maxTokens === LEGACY_MAX_TOKENS &&
+            !userConfig.aiOptions?.maxTokensMigrated) {
+            logger.info('Upgrading legacy maxTokens 4096 -> 8192');
+            const migrated = mergeConfig({
+                ...userConfig,
+                aiOptions: {
+                    ...userConfig.aiOptions,
+                    maxTokens: DEFAULT_MAX_TOKENS,
+                    maxTokensMigrated: true,
+                },
+            });
+            await saveConfig(migrated);
             return migrated;
         }
 

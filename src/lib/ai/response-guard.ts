@@ -28,6 +28,36 @@ export const AI_TAG_NAMES = [
  */
 const META_TALK_RE = /mistake_status|wrong_answer_text|mistake_analysis|answer_text|wrong_attempt|not_attempted|【最重要的工作顺序】|判定规则|重新审视规则|这是误判|必须修正|重新输出|重新判定|此前(?:的)?分析|经重新严格对照|应为\s*correct|判\s*correct|[⚠!❗][\s\ufe0f]*修正/i;
 
+/**
+ * 「解题式思维链」信号：模型把反复验算、自我怀疑、揣测标准答案、
+ * 评论学生作答的过程写进 <analysis> 正文。这类表述单独出现时可能只是
+ * 正常讲解（如「我们再看第二步」「对照标准答案验证端点」），因此要求
+ * 同时命中 ≥2 类信号才判定为污染，避免把合法解析误截断。
+ */
+const COT_SIGNAL_RES: RegExp[] = [
+    /但等等|等等[！!]|哦[！!]关键|重新审视|犯了一个错误|漏了关键|说明我们|这矛盾|可能.{0,12}有误/,
+    /标准答案|权威解法|许多资料|多份.{0,8}(?:模拟题|高考题|试卷)|常见答案/,
+    /我们作为专家|我意识到|我们再(?:查|仔细验算)|查权威|再查多份|然而，很多/,
+    /学生填的是|且有红叉|题目图片中学生/,
+    /为何答案写成|但为什么|为什么.{0,12}答案写成|为何.{0,12}答案/,
+];
+
+/** 是否出现了成段的解题式思维链（≥2 类信号才算，避免误伤） */
+export function containsChainOfThought(text?: string | null): boolean {
+    if (!text) return false;
+    return COT_SIGNAL_RES.filter((re) => re.test(text as string)).length >= 2;
+}
+
+/** 最早一处思维链信号的位置，用于保留前面已经正确的推导 */
+function firstChainOfThoughtIndex(text: string): number {
+    let earliest = -1;
+    for (const re of COT_SIGNAL_RES) {
+        const idx = text.search(re);
+        if (idx !== -1 && (earliest === -1 || idx < earliest)) earliest = idx;
+    }
+    return earliest;
+}
+
 /** 形如 <tag> / </tag> 的残留标签；不匹配数学不等式里的裸 < 和 > */
 const TAG_LITERAL_RE = /<\/?[a-zA-Z_][a-zA-Z0-9_]{2,30}>/;
 const LEAKED_TAG_RE = new RegExp(TAG_LITERAL_RE.source, 'g');
@@ -45,12 +75,18 @@ export function stripLeakedTags(text: string): string {
 
 /**
  * 清洗主体内容（题目/答案/解析）：剥离残留标签，
- * 若出现自我纠错段落，则从该处截断，保留前面已经正确的解题内容。
+ * 若出现自我纠错段落或成段的解题式思维链，则从该处截断，
+ * 保留前面已经正确的解题内容。
  */
 export function sanitizeBodyText(text: string): string {
     if (!text) return text;
     const stripped = stripLeakedTags(text);
-    const idx = stripped.search(META_TALK_RE);
+    let idx = stripped.search(META_TALK_RE);
+    if (idx === -1 && containsChainOfThought(stripped)) {
+        const cotIdx = firstChainOfThoughtIndex(stripped);
+        // 前面已有实质推导时才截断，避免把整段解析砍成空串
+        if (cotIdx > 0) idx = cotIdx;
+    }
     return (idx === -1 ? stripped : stripped.slice(0, idx)).trimEnd();
 }
 
@@ -186,6 +222,42 @@ export function reconcileMistakeFields(input: MistakeFieldInput): ReconciledMist
 /** 保存路径：清洗脏文本并裁决状态，但保留用户手填的内容 */
 export function sanitizeMistakeForPersistence(input: MistakeFieldInput): ReconciledMistakeFields {
     return reconcileMistakeFields({ ...input, preserveManual: true });
+}
+
+/**
+ * 判定段是否被「整段跳过」。
+ *
+ * 空白题时提示词要求模型不输出三个作答判定标签，也不在解析里讨论学生作答，
+ * 从源头掐掉「为了填判定而虚构学生答案 / 标准答案」的诱因。
+ * 仅当 <analysis> 已正常闭合时才认定，避免把输出被截断误判成空白题。
+ */
+export function verdictSectionOmitted(text: string): boolean {
+    if (!text || !text.includes('</analysis>')) return false;
+
+    const status = extractTagSafe(text, 'mistake_status');
+    if (status !== null && status.trim() !== '') return false;
+
+    const wrong = extractTagSafe(text, 'wrong_answer_text');
+    const analysis = extractTagSafe(text, 'mistake_analysis');
+    return !wrong?.trim() && !analysis?.trim();
+}
+
+/**
+ * 从原始 AI 响应解析作答判定字段，三个 provider 共用。
+ * 判定段被省略时直接落为 not_attempted + 空错因，
+ * 不再让模型为补齐标签而编造学生作答。
+ */
+export function parseMistakeFieldsFromResponse(
+    text: string,
+    extract: (tagName: string) => string | null,
+    answerText: string
+): ReconciledMistakeFields {
+    return reconcileMistakeFields({
+        answerText,
+        wrongAnswerText: extract('wrong_answer_text'),
+        mistakeAnalysis: extract('mistake_analysis'),
+        mistakeStatus: verdictSectionOmitted(text) ? 'not_attempted' : extract('mistake_status'),
+    });
 }
 
 /** 关闭「AI 错因分析」时，统一抹掉三个判定字段 */

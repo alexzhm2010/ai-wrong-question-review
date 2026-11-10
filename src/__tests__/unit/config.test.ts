@@ -82,6 +82,45 @@ describe('config module', () => {
             expect(config.prompts?.analyze).toBe('custom');
         });
 
+        it('默认单次分析输出上限为 8192', async () => {
+            findUniqueMock.mockResolvedValue(null);
+
+            const { getAppConfig } = await import('@/lib/config');
+            const config = await getAppConfig();
+
+            expect(config.aiOptions?.maxTokens).toBe(8192);
+        });
+
+        it('数据库里旧默认 4096 会一次性升级为 8192 并写回标记', async () => {
+            findUniqueMock.mockResolvedValue({
+                key: 'app_config',
+                value: JSON.stringify({ aiOptions: { maxTokens: 4096 } }),
+            });
+            upsertMock.mockResolvedValue({});
+
+            const { getAppConfig } = await import('@/lib/config');
+            const config = await getAppConfig();
+
+            expect(config.aiOptions?.maxTokens).toBe(8192);
+            expect(upsertMock).toHaveBeenCalledTimes(1);
+            const saved = JSON.parse(upsertMock.mock.calls[0][0].update.value);
+            expect(saved.aiOptions.maxTokens).toBe(8192);
+            expect(saved.aiOptions.maxTokensMigrated).toBe(true);
+        });
+
+        it('已迁移过的用户主动改回 4096 时不会被覆盖', async () => {
+            findUniqueMock.mockResolvedValue({
+                key: 'app_config',
+                value: JSON.stringify({ aiOptions: { maxTokens: 4096, maxTokensMigrated: true } }),
+            });
+
+            const { getAppConfig } = await import('@/lib/config');
+            const config = await getAppConfig();
+
+            expect(config.aiOptions?.maxTokens).toBe(4096);
+            expect(upsertMock).not.toHaveBeenCalled();
+        });
+
         it('数据库异常时回退到默认配置', async () => {
             findUniqueMock.mockRejectedValue(new Error('db down'));
             process.env.AI_PROVIDER = 'openai';

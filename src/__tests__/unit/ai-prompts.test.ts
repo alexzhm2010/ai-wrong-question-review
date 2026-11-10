@@ -346,6 +346,65 @@ describe('AI Prompts', () => {
         });
     });
 
+    describe('回归：空白题被幻觉出「学生作答 / 标准答案」', () => {
+        // 原题图片只有印刷题干与空白横线，模型却虚构了学生答案 + 红叉 + 权威标准答案，
+        // 进而推翻自己正确的结论。根因是提示词无条件预设图片里一定有手写与作答。
+        const templates = [DEFAULT_ANALYZE_TEMPLATE, DEFAULT_REANSWER_TEMPLATE];
+
+        it('不再无条件预设图片里一定有手写、红笔或勾叉', () => {
+            templates.forEach(tpl => {
+                expect(tpl).not.toContain('忽略图片中的手写、勾画、红笔批注与对勾/叉号');
+                expect(tpl).not.toContain('图片中的学生作答、批注、对勾/叉号不作为解题依据');
+                expect(tpl).toContain('若图片中存在');
+            });
+        });
+
+        it('空白题直接判 not_attempted，明确禁止臆测学生作答', () => {
+            templates.forEach(tpl => {
+                expect(tpl).toContain('空白横线');
+                expect(tpl).toContain('直接判为 not_attempted');
+                expect(tpl).toContain('严禁臆测');
+            });
+        });
+
+        it('自检只做一次并锁定结论，禁止引用标准答案 / 权威解法', () => {
+            templates.forEach(tpl => {
+                expect(tpl).toContain('自检只做一次，通过后即锁定结论');
+                expect(tpl).toContain('标准答案');
+                expect(tpl).toContain('权威解法');
+                expect(tpl).not.toContain('不通过就重新求解');
+                expect(tpl).not.toContain('不通过则重新求解');
+            });
+        });
+
+        it('输出纪律明确禁止虚构答案与外部比对措辞', () => {
+            templates.forEach(tpl => {
+                expect(tpl).toContain('严禁出现「标准答案」「权威解法」「查资料」「学生填的是」「红叉」');
+            });
+        });
+
+        it('空白题整段跳过作答判定输出，不补写空标签', () => {
+            templates.forEach(tpl => {
+                expect(tpl).toContain('整段跳过作答判定输出');
+                expect(tpl).toContain('不输出下面三个判定标签');
+                expect(tpl).toContain('仅在图片确有作答痕迹时输出');
+                expect(tpl).toContain('空白题可整段省略最后三个作答判定标签');
+            });
+        });
+
+        it('默认生成的提示词仍保留三个判定标签供确有作答时使用', () => {
+            const prompts = [
+                generateAnalyzePrompt('zh', null, '数学'),
+                generateReanswerPrompt('zh', '已知……求取值范围', '数学'),
+            ];
+            prompts.forEach(prompt => {
+                expect(prompt).toContain('<wrong_answer_text>');
+                expect(prompt).toContain('<mistake_status>');
+                expect(prompt).toContain('<mistake_analysis>');
+            });
+        });
+    });
+
     describe('表格处理指令', () => {
         it('analyze 提示词应包含表格处理规则', () => {
             const prompt = generateAnalyzePrompt('zh');

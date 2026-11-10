@@ -111,7 +111,7 @@ describe('Gemini Provider 响应解析', () => {
             expect(result.mistakeAnalysis).toContain('常数项');
         });
 
-        it('缺少错因标签时应该兼容旧响应并标记为未判断', () => {
+        it('判定段被整段省略（空白题）时标记为 not_attempted', () => {
             const mockResponse = `
 <question_text>测试题目</question_text>
 <answer_text>测试答案</answer_text>
@@ -122,7 +122,8 @@ describe('Gemini Provider 响应解析', () => {
 
             expect(result.wrongAnswerText).toBe('');
             expect(result.mistakeAnalysis).toBe('');
-            expect(result.mistakeStatus).toBe('unknown');
+            // 新提示词要求空白题写完 </analysis> 即结束，不再输出三个判定标签
+            expect(result.mistakeStatus).toBe('not_attempted');
         });
 
         it('未判断状态不应被错误解答文本强推为做错了', () => {
@@ -198,7 +199,8 @@ describe('Gemini Provider 重新解题错因同步', () => {
         expect(result.answerText).toBe('x = 2');
         expect(result.wrongAnswerText).toBe('');
         expect(result.mistakeAnalysis).toBe('');
-        expect(result.mistakeStatus).toBe('unknown');
+        // 判定段被整段省略（空白题）→ not_attempted
+        expect(result.mistakeStatus).toBe('not_attempted');
     });
 });
 

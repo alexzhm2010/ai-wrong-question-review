@@ -8,7 +8,7 @@ import { createLogger } from '../logger';
 import {
     extractTagSafe,
     sanitizeBodyText,
-    reconcileMistakeFields,
+    parseMistakeFieldsFromResponse,
 } from './response-guard';
 
 const logger = createLogger('ai:gemini');
@@ -112,12 +112,11 @@ export class GeminiProvider implements AIService {
         const questionText = sanitizeBodyText(rawQuestionText);
         const answerText = sanitizeBodyText(rawAnswerText);
         const analysis = sanitizeBodyText(rawAnalysis);
-        const mistake = reconcileMistakeFields({
-            answerText,
-            wrongAnswerText: this.extractTag(text, "wrong_answer_text"),
-            mistakeAnalysis: this.extractTag(text, "mistake_analysis"),
-            mistakeStatus: this.extractTag(text, "mistake_status"),
-        });
+        const mistake = parseMistakeFieldsFromResponse(
+            text,
+            (tag) => this.extractTag(text, tag),
+            answerText
+        );
 
         // Process Subject
         let subject: ParsedQuestion['subject'] = '其他';
@@ -349,12 +348,11 @@ export class GeminiProvider implements AIService {
             const analysis = sanitizeBodyText(this.extractTag(text, "analysis") || "");
             const knowledgePointsRaw = this.extractTag(text, "knowledge_points") || "";
             const knowledgePointsParsed = knowledgePointsRaw.split(/[,，\n]/).map(k => k.trim()).filter(k => k.length > 0);
-            const mistake = reconcileMistakeFields({
-                answerText,
-                wrongAnswerText: this.extractTag(text, "wrong_answer_text"),
-                mistakeAnalysis: this.extractTag(text, "mistake_analysis"),
-                mistakeStatus: this.extractTag(text, "mistake_status"),
-            });
+            const mistake = parseMistakeFieldsFromResponse(
+                text,
+                (tag) => this.extractTag(text, tag),
+                answerText
+            );
 
             logger.info('Reanswer parsed successfully');
 

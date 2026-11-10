@@ -96,6 +96,24 @@ describe('OpenAI Provider 响应解析', () => {
             expect(result.requiresImage).toBe(true);
         });
 
+        it('空白题省略三个判定标签时解析为 not_attempted 且无错因', () => {
+            const blankResponse = `
+<question_text>已知 g(x) 是定义在 [-2,2] 上的偶函数，求 m 的取值范围</question_text>
+<answer_text>$m \\in [-1, \\frac{1}{2})$</answer_text>
+<analysis>由偶函数性质得 |1-m| &gt; |m|，结合定义域解得区间</analysis>
+<subject>数学</subject>
+<knowledge_points>函数奇偶性</knowledge_points>
+<requires_image>false</requires_image>
+            `.trim();
+
+            const result = asPrivateProvider(provider).parseResponse(blankResponse);
+
+            expect(result.answerText).toContain('[-1');
+            expect(result.mistakeStatus).toBe('not_attempted');
+            expect(result.wrongAnswerText).toBe('');
+            expect(result.mistakeAnalysis).toBe('');
+        });
+
         it('应该解析错因分析相关可选标签', () => {
             const mockResponse = `
 <question_text>求 2x + 3 = 7</question_text>
@@ -113,7 +131,7 @@ describe('OpenAI Provider 响应解析', () => {
             expect(result.mistakeAnalysis).toContain('常数项');
         });
 
-        it('缺少错因标签时应该兼容旧响应并标记为未判断', () => {
+        it('判定段被整段省略（空白题）时标记为 not_attempted', () => {
             const mockResponse = `
 <question_text>测试题目</question_text>
 <answer_text>测试答案</answer_text>
@@ -124,7 +142,8 @@ describe('OpenAI Provider 响应解析', () => {
 
             expect(result.wrongAnswerText).toBe('');
             expect(result.mistakeAnalysis).toBe('');
-            expect(result.mistakeStatus).toBe('unknown');
+            // 新提示词要求空白题写完 </analysis> 即结束，不再输出三个判定标签
+            expect(result.mistakeStatus).toBe('not_attempted');
         });
 
         it('未判断状态不应被错误解答文本强推为做错了', () => {
@@ -208,7 +227,8 @@ describe('OpenAI Provider 重新解题错因同步', () => {
         expect(result.answerText).toBe('x = 2');
         expect(result.wrongAnswerText).toBe('');
         expect(result.mistakeAnalysis).toBe('');
-        expect(result.mistakeStatus).toBe('unknown');
+        // 判定段被整段省略（空白题）→ not_attempted
+        expect(result.mistakeStatus).toBe('not_attempted');
     });
 });
 
