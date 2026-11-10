@@ -8,7 +8,7 @@
  * PWA 仍展示旧页面、必须强刷的问题。这里只缓存图标，其余请求一律网络直通。
  */
 const CACHE_NAME = 'wrong-review-static-v1';
-const ICON_PREFIX = '/icons/';
+const ICON_PREFIX = '/ai-wrong-question-review/icons/';
 
 self.addEventListener('install', () => {
     self.skipWaiting();
