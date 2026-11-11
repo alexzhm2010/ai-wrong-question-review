@@ -80,7 +80,8 @@ export function BatchEntryButton() {
         <Link
             href="/batch"
             title={t.batch.entry}
-            className="relative flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            aria-label={t.batch.entry}
+            className="relative flex h-9 w-9 shrink-0 items-center justify-center gap-1.5 rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:w-auto sm:px-3"
         >
             <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="3" y="3" width="7" height="7" rx="1" />
@@ -88,6 +89,8 @@ export function BatchEntryButton() {
                 <rect x="3" y="14" width="7" height="7" rx="1" />
                 <rect x="14" y="14" width="7" height="7" rx="1" />
             </svg>
+            {/* 手机只有图标（空间紧），桌面上带文字，避免认不出这个图标是干嘛的 */}
+            <span className="hidden text-xs font-medium sm:inline">{t.batch.entry}</span>
             {!!job && pending > 0 && (
                 <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-semibold leading-none text-destructive-foreground">
                     {pending > 99 ? "99+" : pending}

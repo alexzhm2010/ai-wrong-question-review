@@ -13,7 +13,7 @@ import { AnalyzeResponse, Notebook, AppConfig } from "@/types/api";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { processImageFile } from "@/lib/image-utils";
-import { Upload, BookOpen, Tags, LogOut, BarChart3, PenLine } from "lucide-react";
+import { Upload, BookOpen, Tags, LogOut, BarChart3, PenLine, Images, ChevronRight } from "lucide-react";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { BroadcastNotification } from "@/components/broadcast-notification";
 import { VersionBadge } from "@/components/version-badge";
@@ -846,7 +846,7 @@ function HomeContent() {
                         )}
 
                         {inputMode === "image" ? (
-                            <div className="flex min-h-0 flex-1 flex-col">
+                            <div className="flex min-h-0 flex-1 flex-col gap-2">
                                 <UploadZone
                                     onImageSelect={onImageSelect}
                                     onImagesSelect={(files) => {
@@ -856,6 +856,22 @@ function HomeContent() {
                                     isAnalyzing={analysisStep !== 'idle'}
                                     fill
                                 />
+                                {/* 批量入口：单张走上面，多张走这里。手机上文件选择器多选不直观，给个明示入口 */}
+                                <button
+                                    type="button"
+                                    disabled={analysisStep !== 'idle'}
+                                    onClick={() => {
+                                        setBatchFiles([]);
+                                        setIsBatchOpen(true);
+                                    }}
+                                    className="flex shrink-0 items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary disabled:pointer-events-none disabled:opacity-50 sm:text-sm"
+                                >
+                                    <Images className="h-4 w-4 shrink-0" />
+                                    <span className="min-w-0 flex-1 truncate">
+                                        {t.batch?.multiEntry || "批量导入多张照片"}
+                                    </span>
+                                    <ChevronRight className="h-4 w-4 shrink-0" />
+                                </button>
                             </div>
                         ) : inputMode === "text" ? (
                             <div className="min-h-0 flex-1 overflow-y-auto">

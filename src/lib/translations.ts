@@ -677,6 +677,7 @@ export const translations = {
         batch: {
             title: "Batch Import",
             entry: "Batch Import",
+            multiEntry: "Batch import · multiple photos, parsed in background",
             subtitle: "Upload many photos at once, parse in background, confirm item by item",
             uploadHint: "Click to choose images, or drop them here",
             uploadTip: "Up to 30 images; resized to 1600px automatically",
@@ -1426,6 +1427,7 @@ export const translations = {
         batch: {
             title: "批量导入",
             entry: "批量导入",
+            multiEntry: "批量导入多张照片 · 后台解析，完成后逐条确认",
             subtitle: "一次上传多张图片，后台逐张解析，完成后逐条确认入库",
             uploadHint: "点击选择图片，或拖拽到此处",
             uploadTip: "最多 30 张；图片自动压缩到长边 1600px",
