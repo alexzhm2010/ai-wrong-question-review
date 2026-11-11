@@ -1,6 +1,6 @@
 {
-  "version": "1.18.0-static",
-  "releasedAt": "2026-11-11T11:50:00+08:00",
-  "notes": "静态版重建：Next.js 静态导出托管 GitHub Pages，Supabase 负责认证、数据持久化与 AI 代理，完整迁移原 Vercel 版 42 个接口的业务逻辑。",
+  "version": "1.18.1-static",
+  "releasedAt": "2026-11-11T13:20:00+08:00",
+  "notes": "修复「参考答案」与「解析思路」末尾结论不一致：新增前端一致性守卫（提示 + 一键采用解析结论），并在 ai-proxy 参考实现中加入单一真相源。",
   "channel": "github-pages"
 }
