@@ -19,8 +19,9 @@ const CORS = {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
 const API_KEY = Deno.env.get("OPENAI_API_KEY") || "";
-const BASE_URL = Deno.env.get("OPENAI_BASE_URL") || "https://dashscope.aliyuncs.com/compatible-mode/v1";
-const MODEL = Deno.env.get("OPENAI_MODEL") || "qwen3-vl-plus";
+// 主模型：火山引擎方舟（豆包），OpenAI 兼容端点。可用 OPENAI_* 秘密覆盖。
+const BASE_URL = Deno.env.get("OPENAI_BASE_URL") || "https://ark.cn-beijing.volces.com/api/v3";
+const MODEL = Deno.env.get("OPENAI_MODEL") || "doubao-seed-2-1-lite-260915";
 
 const VALID_SUBJECTS = ["数学", "物理", "化学", "生物", "英语", "语文", "历史", "地理", "政治", "其他"];
 
@@ -356,6 +357,9 @@ Deno.serve(async (req: Request) => {
         const primaryPromise = chat({
           systemPrompt, imageBase64, mimeType, stream: true,
           enableThinking: isMath,
+          // 豆包/推理模型会把「思考」也计入 completion tokens；给足空间，
+          // 避免思考+作答被 8192 截断导致 <analysis>/<final_answer> 标签缺失而报错。
+          maxTokens: 16000,
           onDelta: (d) => send({ type: "delta", content: d }),
         });
         let primaryText: string;
