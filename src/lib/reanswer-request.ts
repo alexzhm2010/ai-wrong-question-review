@@ -4,6 +4,8 @@ export type ReanswerRequestBody = {
     subject: string;
     imageBase64?: string;
     gradeSemester?: string;
+    /** 本题的思考深度：deep=深度思考，fast=关闭思考 */
+    reasoningMode?: 'deep' | 'fast';
 };
 
 export function buildReanswerRequestBody({
@@ -12,12 +14,14 @@ export function buildReanswerRequestBody({
     subject,
     imagePreview,
     gradeSemester,
+    reasoningMode,
 }: {
     questionText: string;
     language: 'zh' | 'en';
     subject: string;
     imagePreview?: string | null;
     gradeSemester?: string;
+    reasoningMode?: 'deep' | 'fast';
 }): ReanswerRequestBody {
     const requestBody: ReanswerRequestBody = {
         questionText,
@@ -31,6 +35,10 @@ export function buildReanswerRequestBody({
 
     if (gradeSemester) {
         requestBody.gradeSemester = gradeSemester;
+    }
+
+    if (reasoningMode) {
+        requestBody.reasoningMode = reasoningMode;
     }
 
     return requestBody;

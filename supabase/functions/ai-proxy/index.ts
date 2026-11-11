@@ -27,20 +27,27 @@ const MODEL = Deno.env.get("OPENAI_MODEL") || "doubao-seed-2-1-lite-260915";
 function extractTag(text: string, tag: string) { return extractTagSafe(text, tag, tag === "analysis"); }
 
 /** 与 src/lib/ai/openai-provider.ts#parseResponse 同源 */
-function parseResponse(text: string) {
-  const rawQuestion = extractTag(text, "question_text");
-  const rawAnswer = extractTag(text, "answer_text");
+function parseResponse(text: string, fallbackQuestionText?: string) {
+  // 文字解题时调用方已经持有题干，模型漏写 <question_text> 不该整单失败
+  const rawQuestion = extractTag(text, "question_text") || (fallbackQuestionText || "").trim();
   const rawAnalysis = extractTag(text, "analysis");
+  // <answer_text> 是首选来源；只有当模型整段漏掉这个标签时才回退到正文里的 <final_answer>
+  // （关闭思考的「快速」模式更容易漏标签）。绝不反向：标签存在时绝不会被正文结论覆盖。
+  const finalTag = rawAnalysis.match(/<final_answer>\s*([\s\S]*?)\s*<\/final_answer>/i);
+  const finalAnswer = finalTag ? finalTag[1].trim() : "";
+  const tagAnswer = extractTag(text, "answer_text");
+  const rawAnswer = tagAnswer || finalAnswer;
   if (!rawQuestion || !rawAnswer || !rawAnalysis) {
     throw new Error("Invalid AI response: Missing critical XML tags");
+  }
+  if (!tagAnswer) {
+    console.log("[ai-proxy] <answer_text> missing, fallback to <final_answer>");
   }
   // 单一真相源 = 模型提交的答案（<final_answer> 或 answer_text），全篇只此一份。
   // 解析正文里的「结论区间」仅用于冲突检测，绝不反向覆盖已提交答案：
   // 覆盖会在两种情况下翻车——提交答案对但解析末尾改口成错（本次事故），或反之（旧问题）。
   // 故 deriveAnswerFromAnalysis 永不自动覆盖，冲突只上报告警交人工裁决。
   // <final_answer> 标签由 sanitizeBodyText 的 stripLeakedTags 剥离。
-  const finalTag = rawAnalysis.match(/<final_answer>\s*([\s\S]*?)\s*<\/final_answer>/i);
-  const finalAnswer = finalTag ? finalTag[1].trim() : '';
   const derived = deriveAnswerFromAnalysis(rawAnalysis, rawAnswer, finalAnswer);
   const questionText = sanitizeBodyText(rawQuestion);
   const answerText = sanitizeBodyText(derived.answerText);
@@ -376,7 +383,13 @@ Deno.serve(async (req: Request) => {
     prefetchedEnglishTags: tags.english,
   };
   const language = payload.language === "en" ? "en" : "zh";
-  const reasoningMode = await readReasoningMode();
+  // 思考深度由前端逐题下发（设置页已不再提供全局开关）；
+  // 没带时回落到 AppSetting 里的全局值，最后兜底 deep。
+  const requestedMode =
+    payload.reasoningMode === "fast" || payload.reasoningMode === "deep"
+      ? (payload.reasoningMode as "deep" | "fast")
+      : null;
+  const reasoningMode = requestedMode ?? (await readReasoningMode());
 
   // ---------------------------------------------------------------- 拍照识题（SSE）
   if (action === "analyze") {
@@ -444,7 +457,8 @@ Deno.serve(async (req: Request) => {
     if (action === "reanswer") {
       const p = generateReanswerPrompt(language, payload.questionText || "", payload.subject || null, options, payload.gradeSemester ?? null);
       const text = await chat({ systemPrompt: p, userText: payload.imageBase64 ? undefined : "请重新解答", stream: false, reasoningMode });
-      return json({ ...parseResponse(text), finalResult: parseResponse(text) });
+      const parsed = parseResponse(text, payload.questionText || "");
+      return json({ ...parsed, finalResult: parsed });
     }
     if (action === "geogebra_analyze") {
       const p = generateGeogebraPrompt(payload.questionText || "", payload.answerText || "", payload.analysis || "", payload.previousErrors);

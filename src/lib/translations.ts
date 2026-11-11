@@ -22,6 +22,7 @@ export const translations = {
             cropper: {
                 title: "Crop Image",
                 hint: "💡 Drag to adjust crop area",
+                selectAll: "Select all",
             },
             progress: {
                 compressing: "Compressing image...",
@@ -58,6 +59,9 @@ export const translations = {
             stats: "Stats",
             logout: "Logout",
             uploadNew: "Upload New",
+            thinkingMode: "Thinking depth",
+            thinkingFastHint: "Thinking off, ~10s; harder questions are more likely wrong",
+            thinkingDeepHint: "Deep thinking, ~40-80s; higher accuracy",
             addError: "Add Error Item",
             viewNotebook: "View Notebook",
             practiceProblem: "Practice Problem",
@@ -700,6 +704,7 @@ export const translations = {
             cropper: {
                 title: "裁剪图片",
                 hint: "💡 拖动选框调整裁剪区域",
+                selectAll: "全选",
             },
             progress: {
                 compressing: "正在压缩图片...",
@@ -736,6 +741,9 @@ export const translations = {
             stats: "统计中心",
             logout: "退出登录",
             uploadNew: "上传新题",
+            thinkingMode: "思考深度",
+            thinkingFastHint: "关闭思考，约 10 秒；复杂题更容易算错",
+            thinkingDeepHint: "深度思考，约 40–80 秒；正确率更高",
             addError: "添加错题",
             viewNotebook: "查看错题本",
             practiceProblem: "练习题",

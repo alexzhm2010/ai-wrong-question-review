@@ -20,6 +20,7 @@ import { inferSubjectFromName } from "@/lib/knowledge-tags";
 import { getMistakeStatusLabel, normalizeMistakeStatusForSave, type MistakeStatus } from "@/lib/mistake-status";
 import type { ReanswerQuestionResult } from "@/lib/ai/types";
 import { buildReanswerRequestBody } from "@/lib/reanswer-request";
+import { ThinkingModeToggle, useThinkingMode } from "@/components/thinking-mode-toggle";
 import { GeogebraDemo } from "@/components/geogebra-demo";
 import { GeogebraEntry } from "@/components/geogebra-entry";
 import { shouldShowGeogebra } from "@/lib/geogebra-subject";
@@ -51,6 +52,8 @@ type ReanswerErrorMessages = {
 };
 
 export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, initialSubjectId, aiTimeout }: CorrectionEditorProps) {
+    // 重新解题同样按「这一题」的思考深度走，默认沿用首页选择
+    const [thinkingMode, setThinkingMode] = useThinkingMode();
     const [data, setData] = useState<ParsedQuestionWithSubject>(() => {
         // 入口统一走判定裁决层，历史脏数据/自定义提示词产生的自我纠错文本在这里被清掉
         const mistake = reconcileMistakeFields({
@@ -122,6 +125,7 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                 subject: data.subject,
                 imagePreview,
                 gradeSemester: data.gradeSemester,
+                reasoningMode: thinkingMode,
             });
 
             if (requestBody.imageBase64) {
@@ -336,6 +340,17 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                             </CardContent>
                         </Card>
                     )}
+
+                    <div className="flex items-center justify-between gap-2 rounded-lg border bg-muted/30 px-2.5 py-1.5">
+                        <span className="text-xs text-muted-foreground">
+                            {t.app?.thinkingMode || "思考深度"}
+                        </span>
+                        <ThinkingModeToggle
+                            value={thinkingMode}
+                            onChange={setThinkingMode}
+                            disabled={isReanswering}
+                        />
+                    </div>
 
                     <Button
                         variant="default"

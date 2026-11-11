@@ -26,6 +26,7 @@ import { parsePartialXml, type PartialParsed } from "@/lib/partial-parse";
 import { frontendLogger } from "@/lib/frontend-logger";
 import { toast } from "@/lib/toast";
 import { TextInputZone } from "@/components/text-input-zone";
+import { ThinkingModeToggle, useThinkingMode } from "@/components/thinking-mode-toggle";
 import { DirectTextEditor } from "@/components/direct-text-editor";
 import { streamAnalyze } from "@/lib/stream-analyze";
 import { inferSubjectFromName } from "@/lib/knowledge-tags";
@@ -49,6 +50,8 @@ function HomeContent() {
     const [autoSelectedNotebookId, setAutoSelectedNotebookId] = useState<string | null>(null);
 
     const [config, setConfig] = useState<AppConfig | null>(null);
+    // 逐题的思考深度：默认沿用上次选择，提交前可就地切换
+    const [thinkingMode, setThinkingMode] = useThinkingMode();
 
     // Cancellation + elapsed time for AI analysis
     const [elapsedMs, setElapsedMs] = useState(0);
@@ -221,26 +224,50 @@ function HomeContent() {
             setStep("review");
             const apiStartTime = Date.now();
             let data: AnalyzeResponse = {} as AnalyzeResponse;
-            await streamAnalyze({
-                imageBase64: base64Image,
-                language: language,
-                subjectId: initialNotebookId || autoSelectedNotebookId || undefined,
-                timeout: aiTimeout,
-                signal: controller.signal,
-                onDelta: (text) => {
-                    streamRawRef.current += text;
-                    const now = Date.now();
-                    if (now - lastFlushRef.current > 80) {
-                        lastFlushRef.current = now;
+
+            const runStream = (mode: "deep" | "fast") => {
+                streamRawRef.current = "";
+                lastFlushRef.current = 0;
+                setStreamParsed({});
+                return streamAnalyze({
+                    imageBase64: base64Image,
+                    language: language,
+                    subjectId: initialNotebookId || autoSelectedNotebookId || undefined,
+                    reasoningMode: mode,
+                    timeout: aiTimeout,
+                    signal: controller.signal,
+                    onDelta: (text) => {
+                        streamRawRef.current += text;
+                        const now = Date.now();
+                        if (now - lastFlushRef.current > 80) {
+                            lastFlushRef.current = now;
+                            setStreamParsed(parsePartialXml(streamRawRef.current));
+                        }
+                    },
+                    onDone: (result) => {
+                        data = result;
                         setStreamParsed(parsePartialXml(streamRawRef.current));
-                    }
-                },
-                onDone: (result) => {
-                    data = result;
-                    setStreamParsed(parsePartialXml(streamRawRef.current));
-                },
-                onError: (msg) => { const e: any = new Error(msg); e.data = { message: msg }; throw e; },
-            });
+                    },
+                    onError: (msg) => { const e: any = new Error(msg); e.data = { message: msg }; throw e; },
+                });
+            };
+
+            try {
+                await runStream(thinkingMode);
+            } catch (streamError: any) {
+                // 快速模式（关闭思考）偶发漏输出 <question_text> 等必需标签，重跑同样大概率再漏，
+                // 这里直接改用深度思考重试一次，避免用户白等一场还要自己再点一次。
+                const message = String(streamError?.data?.message || streamError?.message || "");
+                const missingTags = message.includes("Missing critical XML tags");
+                if (!missingTags || thinkingMode !== "fast" || controller.signal.aborted) throw streamError;
+                frontendLogger.warn('[HomeAnalyze]', 'Fast mode returned incomplete tags, retrying with deep thinking');
+                toast.info(
+                    language === "zh"
+                        ? "快速模式输出不完整，已自动改用深度思考重试"
+                        : "Fast mode returned incomplete output, retrying with deep thinking",
+                );
+                await runStream("deep");
+            }
             const apiDuration = Date.now() - apiStartTime;
             frontendLogger.info('[HomeAnalyze]', 'API stream completed, validating data', {
                 apiDuration
@@ -507,6 +534,7 @@ function HomeContent() {
                 questionText,
                 language,
                 subject: matchedNotebook?.name || undefined,
+                reasoningMode: thinkingMode,
             }, { timeout: aiTimeout, signal: controller.signal });
 
             setAnalysisStep('processing');
@@ -787,6 +815,26 @@ function HomeContent() {
                                 直接录入
                             </button>
                         </div>
+
+                        {inputMode !== "direct" && (
+                            <div className="flex shrink-0 items-center justify-between gap-2 rounded-lg border bg-card px-2.5 py-1.5 shadow-sm sm:px-3 sm:py-2">
+                                <div className="min-w-0">
+                                    <p className="text-xs font-medium leading-tight">
+                                        {t.app?.thinkingMode || "思考深度"}
+                                    </p>
+                                    <p className="truncate text-[10px] leading-tight text-muted-foreground sm:text-xs">
+                                        {thinkingMode === "fast"
+                                            ? (t.app?.thinkingFastHint || "关闭思考，约 10 秒；复杂题更容易算错")
+                                            : (t.app?.thinkingDeepHint || "深度思考，约 40–80 秒；正确率更高")}
+                                    </p>
+                                </div>
+                                <ThinkingModeToggle
+                                    value={thinkingMode}
+                                    onChange={setThinkingMode}
+                                    disabled={isAnalysisActive}
+                                />
+                            </div>
+                        )}
 
                         {inputMode === "image" ? (
                             <div className="flex min-h-0 flex-1 flex-col">

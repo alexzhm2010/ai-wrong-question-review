@@ -6,6 +6,8 @@ export interface StreamAnalyzeOptions {
     imageBase64: string;
     language: "zh" | "en";
     subjectId?: string;
+    /** 本题的思考深度：deep=深度思考（默认），fast=关闭思考 */
+    reasoningMode?: "deep" | "fast";
     /** 超时（毫秒），默认 180000 */
     timeout?: number;
     /** 外部取消信号（如用户点击取消） */
@@ -31,6 +33,7 @@ export async function streamAnalyze(opts: StreamAnalyzeOptions): Promise<void> {
         imageBase64,
         language,
         subjectId,
+        reasoningMode,
         timeout = 180000,
         signal,
         onDelta,
@@ -60,6 +63,7 @@ export async function streamAnalyze(opts: StreamAnalyzeOptions): Promise<void> {
                 imageBase64,
                 language,
                 subjectId,
+                reasoningMode,
             }),
             signal: controller.signal,
         });

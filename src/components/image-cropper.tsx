@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
-import ReactCrop, { Crop, PixelCrop, centerCrop, makeAspectCrop } from "react-image-crop";
+import { useState, useRef } from "react";
+import ReactCrop, { Crop, PixelCrop } from "react-image-crop";
 import "react-image-crop/dist/ReactCrop.css";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -14,49 +14,26 @@ interface ImageCropperProps {
     onCropComplete: (croppedImageBlob: Blob) => void;
 }
 
-// Helper to center the crop initially
-function centerAspectCrop(
-    mediaWidth: number,
-    mediaHeight: number,
-    aspect: number,
-) {
-    return centerCrop(
-        makeAspectCrop(
-            {
-                unit: '%',
-                width: 90,
-            },
-            aspect,
-            mediaWidth,
-            mediaHeight,
-        ),
-        mediaWidth,
-        mediaHeight,
-    )
-}
-
 export function ImageCropper({ imageSrc, open, onClose, onCropComplete }: ImageCropperProps) {
-    const { t, language } = useLanguage();
+    const { t } = useLanguage();
     const [crop, setCrop] = useState<Crop>();
     const [completedCrop, setCompletedCrop] = useState<PixelCrop>();
     const imgRef = useRef<HTMLImageElement>(null);
 
+    /**
+     * 默认整张图全选：拍照录入时题目往往横跨整页，
+     * 之前默认框在中间（80%×50%）容易把上下题干切掉，用户还没意识到就已经裁掉了。
+     * 现在默认铺满，想裁再自己拉。
+     */
     function onImageLoad(e: React.SyntheticEvent<HTMLImageElement>) {
         const { width, height } = e.currentTarget;
-        // Start with a centered crop covering most of the image
-        // Since we want free aspect, we just make a box
-        const initialCrop = centerCrop(
-            {
-                unit: '%',
-                width: 80,
-                height: 50,
-                x: 10,
-                y: 25
-            },
-            width,
-            height
-        );
-        setCrop(initialCrop);
+        selectAll(width, height);
+    }
+
+    function selectAll(width: number, height: number) {
+        setCrop({ unit: "%", x: 0, y: 0, width: 100, height: 100 });
+        // 直接给出像素级选区，保证用户不动框也能确认
+        setCompletedCrop({ unit: "px", x: 0, y: 0, width, height });
     }
 
     const getCroppedImg = async (
@@ -129,12 +106,12 @@ export function ImageCropper({ imageSrc, open, onClose, onCropComplete }: ImageC
 
     return (
         <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-            <DialogContent className="flex h-[90svh] max-h-[90svh] w-[calc(100vw_-_1rem)] max-w-[calc(100vw_-_1rem)] flex-col gap-0 overflow-hidden p-0 sm:w-full sm:max-w-3xl">
+            <DialogContent className="left-0 top-0 flex h-[100dvh] max-h-none w-screen max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:rounded-none">
                 <DialogHeader className="shrink-0 border-b p-4 pr-12">
                     <DialogTitle>{t.common.cropper?.title || "Crop Image"}</DialogTitle>
                 </DialogHeader>
 
-                <div className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden bg-black p-2 sm:p-4">
+                <div className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden bg-black p-3 sm:p-4">
                     <ReactCrop
                         crop={crop}
                         onChange={(_, percentCrop) => setCrop(percentCrop)}
@@ -147,15 +124,27 @@ export function ImageCropper({ imageSrc, open, onClose, onCropComplete }: ImageC
                             alt="Crop me"
                             src={imageSrc}
                             onLoad={onImageLoad}
-                            style={{ maxWidth: '100%', maxHeight: 'calc(90svh - 12rem)', display: 'block' }}
+                            style={{ maxWidth: '100%', maxHeight: 'calc(100dvh - 9.5rem)', display: 'block' }}
                         />
                     </ReactCrop>
                 </div>
 
                 <div className="flex shrink-0 flex-col gap-2 border-t bg-background p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
-                    <p className="text-xs text-muted-foreground sm:text-sm">
-                        {t.common.cropper?.hint || "💡 Drag to adjust crop area"}
-                    </p>
+                    <div className="flex items-center gap-3">
+                        <p className="text-xs text-muted-foreground sm:text-sm">
+                            {t.common.cropper?.hint || "💡 Drag to adjust crop area"}
+                        </p>
+                        <button
+                            type="button"
+                            className="shrink-0 text-xs font-medium text-primary underline-offset-2 hover:underline"
+                            onClick={() => {
+                                const img = imgRef.current;
+                                if (img) selectAll(img.width, img.height);
+                            }}
+                        >
+                            {t.common.cropper?.selectAll || "全选"}
+                        </button>
+                    </div>
                     <div className="flex w-full gap-2 sm:w-auto">
                         <Button variant="outline" className="flex-1 sm:flex-none" onClick={onClose}>
                             {t.common.cancel || "Cancel"}
