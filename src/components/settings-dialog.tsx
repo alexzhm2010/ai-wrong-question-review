@@ -108,6 +108,22 @@ export function SettingsDialog() {
 
     const router = useRouter();
 
+    // 当前是否以 PWA 全屏（standalone）运行。用户经常把「从桌面图标打开」和
+    // 「全屏生效」当成一回事：旧图标其实只是书签，打开后照样有地址栏。
+    const [standalone, setStandalone] = useState(false);
+    useEffect(() => {
+        const check = () => {
+            const byMedia = window.matchMedia("(display-mode: standalone)").matches
+                || window.matchMedia("(display-mode: fullscreen)").matches;
+            const byIOS = (navigator as Navigator & { standalone?: boolean }).standalone === true;
+            setStandalone(byMedia || byIOS);
+        };
+        check();
+        const mq = window.matchMedia("(display-mode: standalone)");
+        mq.addEventListener("change", check);
+        return () => mq.removeEventListener("change", check);
+    }, []);
+
     useEffect(() => {
         if (open) {
             fetchSettings();
@@ -911,6 +927,20 @@ export function SettingsDialog() {
                                         ? "关闭过安装引导，或系统弹窗点「保存」没反应时，可在这里重新打开引导并查看手动添加步骤。"
                                         : "Reopen the install guide here if you dismissed it or the system dialog did not respond."}
                                 </p>
+                                <div
+                                    className={`rounded-md border px-3 py-2 text-xs leading-relaxed ${standalone
+                                        ? "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200"
+                                        : "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+                                        }`}
+                                >
+                                    {standalone
+                                        ? (language === "zh"
+                                            ? "当前已是全屏模式：地址栏和底部工具栏都不会显示。"
+                                            : "Running full screen: no address bar or bottom toolbar.")
+                                        : (language === "zh"
+                                            ? "当前仍在浏览器内运行，地址栏和底部工具栏会一直存在。装到桌面后从图标打开才会全屏；若你已经是从图标打开却仍带栏，说明那是旧版创建的普通书签 —— 删掉该图标，按下方引导重新添加一次即可。"
+                                            : "Still running inside the browser. Install to the home screen and open from the icon; if you already do and still see bars, the old icon is a plain bookmark — remove it and add it again.")}
+                                </div>
                                 <Button
                                     variant="outline"
                                     size="sm"

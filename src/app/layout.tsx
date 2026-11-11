@@ -20,6 +20,12 @@ export const metadata: Metadata = {
     statusBarStyle: 'default',
     title: 'AI错题复习',
   },
+  // Next 16 的 appleWebApp 只输出标准版 mobile-web-app-capable，iOS Safari 仍然只认
+  // apple- 前缀。缺这一条时「添加到主屏幕」会退化成普通书签：从桌面图标打开照样带
+  // 地址栏和底部工具栏，看起来就像全屏没生效。
+  other: {
+    'apple-mobile-web-app-capable': 'yes',
+  },
   formatDetection: {
     telephone: false,
   },
