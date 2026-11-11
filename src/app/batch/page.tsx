@@ -11,7 +11,7 @@ import { useLanguage } from "@/contexts/LanguageContext";
 import { apiClient } from "@/lib/api-client";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
-import { BatchUploadDialog } from "@/components/batch-upload-dialog";
+import { BatchJobList } from "@/components/batch-job-list";
 import { refreshActiveBatch } from "@/lib/batch-store";
 import { CorrectionEditor } from "@/components/correction-editor";
 import type { ParsedQuestion } from "@/lib/ai";
@@ -85,78 +85,14 @@ function statusMeta(status: JobStatus, b: any) {
 function BatchList() {
     const { t } = useLanguage();
     const b = t.batch;
-    const router = useRouter();
-    const [jobs, setJobs] = useState<BatchJob[] | null>(null);
-    const [open, setOpen] = useState(false);
-
-    const load = useCallback(async () => {
-        try {
-            setJobs(await apiClient.get<BatchJob[]>("/api/batch/list"));
-        } catch {
-            setJobs([]);
-        }
-    }, []);
-
-    useEffect(() => { void load(); }, [load]);
 
     return (
         <div className="mx-auto w-full max-w-3xl space-y-4 p-3 sm:p-6">
-            <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                    <Link href="/"><Button variant="ghost" size="icon"><ArrowLeft className="h-5 w-5" /></Button></Link>
-                    <h1 className="text-lg font-semibold sm:text-xl">{b.title}</h1>
-                </div>
-                <Button onClick={() => setOpen(true)}>
-                    <ImagePlus className="mr-2 h-4 w-4" />{b.entry}
-                </Button>
+            <div className="flex items-center gap-2">
+                <Link href="/"><Button variant="ghost" size="icon"><ArrowLeft className="h-5 w-5" /></Button></Link>
+                <h1 className="text-lg font-semibold sm:text-xl">{b.tab}</h1>
             </div>
-
-            {jobs === null ? (
-                <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
-            ) : jobs.length === 0 ? (
-                <div className="rounded-lg border border-dashed py-16 text-center">
-                    <p className="text-sm font-medium">{b.empty}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">{b.emptyHint}</p>
-                </div>
-            ) : (
-                <div className="space-y-2">
-                    {jobs.map((job) => {
-                        const meta = statusMeta(job.status, b);
-                        // doneCount 已包含已入库（save 接口写入的是 done+saved），不要再加一遍
-                        const counts = job.doneCount;
-                        const pct = job.totalCount ? Math.round((counts / job.totalCount) * 100) : 0;
-                        return (
-                            <button
-                                key={job.id}
-                                onClick={() => router.push(`/batch?id=${job.id}`)}
-                                className="w-full rounded-lg border bg-card p-3 text-left transition-colors hover:border-primary/40"
-                            >
-                                <div className="flex items-center justify-between gap-2">
-                                    <span className="text-sm font-medium">
-                                        {b.totalCount.replace("{count}", String(job.totalCount))}
-                                        <span className="ml-2 text-xs font-normal text-muted-foreground">
-                                            {new Date(job.createdAt).toLocaleString()}
-                                        </span>
-                                    </span>
-                                    <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium", meta.cls)}>
-                                        {meta.label}
-                                    </span>
-                                </div>
-                                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
-                                    <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
-                                </div>
-                                <div className="mt-1.5 flex items-center gap-3 text-[11px] text-muted-foreground">
-                                    <span>{b.progress.replace("{done}", String(counts)).replace("{total}", String(job.totalCount))}</span>
-                                    {job.failedCount > 0 && <span className="text-destructive">{b.failed} {job.failedCount}</span>}
-                                    <span>{job.reasoningMode === "deep" ? b.deep : b.fast}</span>
-                                </div>
-                            </button>
-                        );
-                    })}
-                </div>
-            )}
-
-            <BatchUploadDialog open={open} onClose={() => { setOpen(false); void load(); }} />
+            <BatchJobList />
         </div>
     );
 }
@@ -310,7 +246,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
         return (
             <div className="mx-auto max-w-3xl p-6 text-center">
                 <p className="text-sm text-muted-foreground">{b.empty}</p>
-                <Button className="mt-3" variant="outline" onClick={() => router.push("/batch")}>{b.title}</Button>
+                <Button className="mt-3" variant="outline" onClick={() => router.push("/batch")}>{b.tab}</Button>
             </div>
         );
     }
@@ -324,7 +260,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
                 <div className="flex items-center gap-2">
                     <Link href="/batch"><Button variant="ghost" size="icon"><ArrowLeft className="h-5 w-5" /></Button></Link>
                     <h1 className="min-w-0 flex-1 truncate text-base font-semibold sm:text-lg">
-                        {b.title} · {new Date(job.createdAt).toLocaleDateString()}
+                        {b.tab} · {new Date(job.createdAt).toLocaleDateString()}
                     </h1>
                     <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium", meta.cls)}>
                         {meta.label}

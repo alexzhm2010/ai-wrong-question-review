@@ -138,26 +138,33 @@ export const BATCH_HANDLERS: RouteHandler[] = [
       return json({ id: jobId, queued, ...estimate(cleaned.length, mode) });
     }
 
-    /* ------------------------------ 首页横幅 ------------------------------ */
+    /* ------------------------- 活跃批次（横幅 / 角标） ------------------------- */
     if (action === "active" && ctx.method === "GET") {
       const rows = await restJson<any[]>(
-        `/BatchJob?select=*&userId=eq.${encodeURIComponent(user.id)}&status=in.(${ACTIVE_STATUSES.join(",")})&order=createdAt.desc&limit=1`,
+        `/BatchJob?select=*&userId=eq.${encodeURIComponent(user.id)}&status=in.(${ACTIVE_STATUSES.join(",")})&order=createdAt.asc&limit=20`,
       ).catch(() => []);
-      const job = rows?.[0] || null;
-      if (!job) return json({ job: null });
+      const jobs = rows || [];
+      if (!jobs.length) return json({ jobs: [] });
+
+      // 一次取回所有活跃批次的条目状态，避免 N+1 查询
+      const ids = jobs.map((j) => j.id).join(",");
       const items = await restJson<any[]>(
-        `/BatchItem?select=status&jobId=eq.${encodeURIComponent(job.id)}`,
+        `/BatchItem?select=jobId,status&jobId=in.(${ids})`,
       ).catch(() => []);
+
       return json({
-        job: {
-          ...job,
-          counts: {
-            done: items.filter((i) => i.status === "done").length,
-            failed: items.filter((i) => i.status === "failed").length,
-            saved: items.filter((i) => i.status === "saved").length,
-            total: items.length,
-          },
-        },
+        jobs: jobs.map((job) => {
+          const mine = items.filter((i) => i.jobId === job.id);
+          return {
+            ...job,
+            counts: {
+              done: mine.filter((i) => i.status === "done").length,
+              failed: mine.filter((i) => i.status === "failed").length,
+              saved: mine.filter((i) => i.status === "saved").length,
+              total: mine.length,
+            },
+          };
+        }),
       });
     }
 

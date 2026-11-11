@@ -27,8 +27,9 @@ import { frontendLogger } from "@/lib/frontend-logger";
 import { toast } from "@/lib/toast";
 import { ThinkingModeToggle, useThinkingMode } from "@/components/thinking-mode-toggle";
 import { BatchBanner } from "@/components/batch-banner";
-import { useActiveBatch } from "@/lib/batch-store";
-import { BatchUploadPanel } from "@/components/batch-upload-dialog";
+import { useActiveBatches } from "@/lib/batch-store";
+import { BatchQuickConfirm } from "@/components/batch-quick-confirm";
+import { BatchJobList } from "@/components/batch-job-list";
 import { streamAnalyze } from "@/lib/stream-analyze";
 import { inferSubjectFromName } from "@/lib/knowledge-tags";
 
@@ -71,12 +72,11 @@ function HomeContent() {
     const [croppingImage, setCroppingImage] = useState<string | null>(null);
     const [isCropperOpen, setIsCropperOpen] = useState(false);
 
-    // 批量导入：上传区一次选到多张时切到批量 tab，并把文件带过去
+    // 批量导入：上传区一次选到多张时，底部弹出轻确认条，确认后才建批次
     const [batchFiles, setBatchFiles] = useState<File[]>([]);
-    const [batchSeed, setBatchSeed] = useState(0);
-    // 批量 tab 上的小圆点：有进行中/待确认的批次时提个醒（不额外加入口）
-    const activeBatch = useActiveBatch();
-    const hasActiveBatchHint = !!activeBatch;
+    // 批量 tab 上的琥珀色提示：有排队/解析/待确认/暂停的批次
+    const activeBatches = useActiveBatches();
+    const hasActiveBatchHint = activeBatches.length > 0;
 
     // Timeout Config
     const aiTimeout = config?.timeouts?.analyze || 180000;
@@ -630,7 +630,7 @@ function HomeContent() {
 
                 {step === "upload" && (
                     <div className="flex min-h-0 flex-1 flex-col gap-2 sm:gap-4">
-                        {/* Input mode tabs：只留两条主路径 —— 单张拍照 / 批量上传 */}
+                        {/* 两个 tab：拍照上传（唯一入口，多选自动转批量）/ 批量进展跟踪 */}
                         <div className="flex shrink-0 gap-1 border-b sm:gap-2">
                             <button
                                 className={`flex flex-1 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap border-b-2 px-2 py-2 text-xs font-medium transition-colors sm:flex-none sm:gap-2 sm:px-4 sm:py-2.5 sm:text-sm ${
@@ -646,21 +646,25 @@ function HomeContent() {
                             <button
                                 className={`flex flex-1 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap border-b-2 px-2 py-2 text-xs font-medium transition-colors sm:flex-none sm:gap-2 sm:px-4 sm:py-2.5 sm:text-sm ${
                                     inputMode === "batch"
-                                        ? "border-primary text-primary"
-                                        : "border-transparent text-muted-foreground hover:text-foreground"
+                                        ? "border-amber-500 text-amber-600 dark:text-amber-400"
+                                        : hasActiveBatchHint
+                                            ? "border-transparent text-amber-600 hover:text-amber-700 dark:text-amber-400"
+                                            : "border-transparent text-muted-foreground hover:text-foreground"
                                 }`}
                                 onClick={() => setInputMode("batch")}
                             >
                                 <Images className="h-4 w-4 shrink-0" />
-                                {t.batch?.tab || "批量上传"}
+                                {t.batch?.tab || "批量进展跟踪"}
                                 {hasActiveBatchHint && (
-                                    <span className="ml-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-destructive" />
+                                    <span className="ml-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold leading-none text-white">
+                                        {activeBatches.length}
+                                    </span>
                                 )}
                             </button>
                         </div>
 
-                        {/* 思考深度：单张与批量共用这一个设置，批量面板里不再单独设 */}
-                        <div className="flex shrink-0 items-center justify-between gap-2 rounded-lg border bg-card px-2.5 py-1.5 shadow-sm sm:px-3 sm:py-2">
+                        {/* 思考深度：单张与批量共用这一个设置；跟踪 tab 不涉及新批次参数，隐藏 */}
+                        <div className={`${inputMode === "image" ? "flex" : "hidden"} shrink-0 items-center justify-between gap-2 rounded-lg border bg-card px-2.5 py-1.5 shadow-sm sm:px-3 sm:py-2`}>
                             <div className="min-w-0">
                                 <p className="text-xs font-medium leading-tight">
                                     {t.app?.thinkingMode || "思考深度"}
@@ -678,34 +682,41 @@ function HomeContent() {
                             />
                         </div>
 
-                        {/* 两个面板都保持挂载：切 tab 不会丢掉已经选好的图片 */}
-                        <div className={inputMode === "image" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
+                        {/* 拍照上传：保持挂载，切 tab 不丢已选图片 */}
+                        <div className={`${inputMode === "image" ? "flex" : "hidden"} min-h-0 flex-1 flex-col ${batchFiles.length ? "pb-20" : ""}`}>
                             <UploadZone
                                 onImageSelect={onImageSelect}
                                 onImagesSelect={(files) => {
-                                    // 一次选到多张 = 想批量导入，直接切到批量 tab 并带入这些图
+                                    // 多选 = 批量：轻确认，不直接开跑
                                     setBatchFiles(files);
-                                    setBatchSeed((n) => n + 1);
-                                    setInputMode("batch");
                                 }}
                                 isAnalyzing={analysisStep !== 'idle'}
                                 fill
                             />
                         </div>
 
-                        <div className={inputMode === "batch" ? "flex min-h-0 flex-1 flex-col gap-2" : "hidden"}>
-                            <BatchUploadPanel
-                                initialFiles={batchFiles}
-                                seed={batchSeed}
-                                onStarted={(id) => router.push(`/batch?id=${id}`)}
+                        {/* 批量进展跟踪：多任务视图 */}
+                        <div className={inputMode === "batch" ? "min-h-0 flex-1 overflow-y-auto" : "hidden"}>
+                            <BatchJobList
+                                jobs={activeBatches.map((j) => ({
+                                    id: j.id,
+                                    status: j.status,
+                                    reasoningMode: j.reasoningMode,
+                                    totalCount: j.counts.total || j.totalCount,
+                                    doneCount: (j.counts.done || 0) + (j.counts.saved || 0),
+                                    failedCount: j.counts.failed || j.failedCount || 0,
+                                    savedCount: j.counts.saved || 0,
+                                    createdAt: j.createdAt,
+                                }))}
+                                onOpen={(id) => router.push(`/batch?id=${id}`)}
                             />
-                            <div className="flex shrink-0 items-center justify-between gap-2 text-[11px] text-muted-foreground sm:text-xs">
-                                <span>{t.batch?.partialHint}</span>
-                                <Link href="/batch" className="flex shrink-0 items-center gap-0.5 hover:text-primary">
-                                    {t.batch?.history || "历史批次"}
-                                    <ChevronRight className="h-3.5 w-3.5" />
-                                </Link>
-                            </div>
+                            <Link
+                                href="/batch"
+                                className="mt-3 flex items-center justify-center gap-0.5 pb-2 text-[11px] text-muted-foreground hover:text-primary sm:text-xs"
+                            >
+                                {t.batch?.history || "查看全部批次"}
+                                <ChevronRight className="h-3.5 w-3.5" />
+                            </Link>
                         </div>
                     </div>
                 )}
@@ -736,6 +747,8 @@ function HomeContent() {
 
             </div>
 
+            {/* 多选后的轻确认条：确认才建批次，避免手滑直接花钱 */}
+            <BatchQuickConfirm files={batchFiles} onCancel={() => setBatchFiles([])} />
         </main>
     );
 }
