@@ -1075,6 +1075,25 @@ export function SettingsDialog() {
                         ) : (
                             <div className="space-y-4 border rounded-lg p-4 bg-muted/30">
                                 <div className="space-y-2">
+                                    <Label>{t.settings?.ai?.reasoningMode || "解析思考模式"}</Label>
+                                    <Select
+                                        value={config.reasoningMode || 'deep'}
+                                        onValueChange={(val: 'deep' | 'fast') => setConfig(prev => ({ ...prev, reasoningMode: val }))}
+                                    >
+                                        <SelectTrigger>
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="deep">{t.settings?.ai?.reasoningDeep || "深度思考（默认，正确率高，约 40–80 秒）"}</SelectItem>
+                                            <SelectItem value="fast">{t.settings?.ai?.reasoningFast || "快速（关闭思考，约 6–10 秒，难题正确率下降）"}</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                    <p className="text-xs text-muted-foreground">
+                                        {t.settings?.ai?.reasoningHint || "只影响豆包模型：关闭思考可大幅缩短等待时间、降低 token 费用，但复杂题更容易算错。"}
+                                    </p>
+                                </div>
+
+                                <div className="space-y-2">
                                     <Label>{t.settings?.tabs?.ai || "AI Provider"}</Label>
                                     <Select
                                         value={config.aiProvider}

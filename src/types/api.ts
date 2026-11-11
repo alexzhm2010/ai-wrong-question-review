@@ -113,6 +113,8 @@ export interface OpenAIInstance {
 export interface AppConfig {
     aiProvider: 'gemini' | 'openai' | 'azure';
     allowRegistration?: boolean;
+    /** 解析思考强度：deep=深度思考（默认），fast=关闭思考（快但难题正确率下降） */
+    reasoningMode?: 'deep' | 'fast';
     openai?: {
         instances?: OpenAIInstance[];
         activeInstanceId?: string;

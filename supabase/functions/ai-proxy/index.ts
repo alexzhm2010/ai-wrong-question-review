@@ -106,6 +106,32 @@ async function prefetchedTags(token: string) {
   return out;
 }
 
+/**
+ * 解析思考模式：deep（默认，开思考）/ fast（关闭思考）。
+ * 存于 AppSetting.app_config_public.reasoningMode，设置页可改，无需重新部署。
+ * 匿名 key 即可读取（RLS 只放行 app_config_public），60 秒缓存避免每次请求多打一次库。
+ */
+let reasoningModeCache: { mode: "deep" | "fast"; at: number } | null = null;
+
+async function readReasoningMode(): Promise<"deep" | "fast"> {
+  if (reasoningModeCache && Date.now() - reasoningModeCache.at < 60_000) {
+    return reasoningModeCache.mode;
+  }
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/AppSetting?key=eq.app_config_public&select=value`,
+      { headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` } },
+    );
+    const rows = await res.json();
+    const cfg = JSON.parse(rows?.[0]?.value || "{}");
+    const mode = cfg?.reasoningMode === "fast" ? "fast" : "deep";
+    reasoningModeCache = { mode, at: Date.now() };
+    return mode;
+  } catch {
+    return "deep";
+  }
+}
+
 /** 服务端防欠费：quota_snapshot 最新快照标记不可用则直接阻断 */
 async function quotaBlocked(token: string): Promise<boolean> {
   try {
@@ -131,6 +157,8 @@ type ChatOptions = {
   maxTokens?: number;
   enableThinking?: boolean;
   thinkingBudget?: number;
+  /** 豆包思考强度：deep=默认开思考，fast=关闭思考（设置页可配） */
+  reasoningMode?: "deep" | "fast";
   onDelta?: (s: string) => void;
   signal?: AbortSignal;
   /** 指定调用哪个 provider；省略则用主模型（OPENAI_*） */
@@ -159,6 +187,11 @@ async function chat(opts: ChatOptions): Promise<string> {
   if (creds.baseUrl.includes("dashscope") || creds.model.toLowerCase().includes("qwen3")) {
     body.enable_thinking = opts.enableThinking ?? false;
     if (body.enable_thinking) body.thinking_budget = opts.thinkingBudget ?? 4096;
+  }
+  // 豆包（方舟）：默认自带深度思考（reasoning_effort=high），显式关闭需要 thinking.type
+  const isDoubao = /doubao|seed/i.test(creds.model) || creds.baseUrl.includes("ark.cn-beijing");
+  if (isDoubao && opts.reasoningMode === "fast") {
+    body.thinking = { type: "disabled" };
   }
   if (opts.stream) body.stream_options = { include_usage: true };
 
@@ -232,6 +265,7 @@ async function verifyAnswerViaSubstitution(
   bodyConclusion: string,
   tagAnswer: string,
   language: string,
+  reasoningMode: "deep" | "fast" = "deep",
 ): Promise<string> {
   const prompt = generateVerifyPrompt(questionText, bodyConclusion, tagAnswer, language);
   const text = await chat({
@@ -239,6 +273,7 @@ async function verifyAnswerViaSubstitution(
     userText: "请完成反向代入验算，并只输出 <verified> 与 <reason> 两个标签。",
     stream: false,
     enableThinking: false,
+    reasoningMode,
   });
   const m = text.match(/<verified>\s*([\s\S]*?)\s*<\/verified>/i);
   if (!m) return "";
@@ -278,6 +313,7 @@ async function decideReferenceAnswer(
   parsed: ReturnType<typeof parseResponse>,
   payload: any,
   language: string,
+  reasoningMode: "deep" | "fast" = "deep",
 ): Promise<{ answerText: string; verified: boolean; reason: string }> {
   const { tagAnswer, bodyConclusion } = extractAnswerCandidates(primaryText);
   const fallback = () => {
@@ -291,7 +327,7 @@ async function decideReferenceAnswer(
   // 不一致 → 反向代入验算（同模型独立一次调用，只看原题、不泄露答案归属）
   try {
     const verified = await verifyAnswerViaSubstitution(
-      parsed.questionText, bodyConclusion, tagAnswer, language,
+      parsed.questionText, bodyConclusion, tagAnswer, language, reasoningMode,
     );
     if (verified) {
       return { answerText: sanitizeBodyText(verified), verified: true, reason: "reverse_substitution" };
@@ -340,6 +376,7 @@ Deno.serve(async (req: Request) => {
     prefetchedEnglishTags: tags.english,
   };
   const language = payload.language === "en" ? "en" : "zh";
+  const reasoningMode = await readReasoningMode();
 
   // ---------------------------------------------------------------- 拍照识题（SSE）
   if (action === "analyze") {
@@ -367,6 +404,7 @@ Deno.serve(async (req: Request) => {
           // 豆包/推理模型会把「思考」也计入 completion tokens；给足空间，
           // 避免思考+作答被 8192 截断导致 <analysis>/<final_answer> 标签缺失而报错。
           maxTokens: 16000,
+          reasoningMode,
           onDelta: (d) => send({ type: "delta", content: d }),
         });
         let primaryText: string;
@@ -381,7 +419,7 @@ Deno.serve(async (req: Request) => {
           // —— 参考答案取数可信度：反向代入验算后再决定填入哪个值 ——
           // 不再默认直接采信 <answer_text> 标签；以「正文推理结论」为第一候选，
           // 当其与标签答案不一致时发起独立反向代入验算，由验算结果定夺。
-          const decided = await decideReferenceAnswer(primaryText, result, payload, language);
+          const decided = await decideReferenceAnswer(primaryText, result, payload, language, reasoningMode);
           send({
             type: "done",
             result: {
@@ -405,7 +443,7 @@ Deno.serve(async (req: Request) => {
   try {
     if (action === "reanswer") {
       const p = generateReanswerPrompt(language, payload.questionText || "", payload.subject || null, options, payload.gradeSemester ?? null);
-      const text = await chat({ systemPrompt: p, userText: payload.imageBase64 ? undefined : "请重新解答", stream: false });
+      const text = await chat({ systemPrompt: p, userText: payload.imageBase64 ? undefined : "请重新解答", stream: false, reasoningMode });
       return json({ ...parseResponse(text), finalResult: parseResponse(text) });
     }
     if (action === "geogebra_analyze") {
