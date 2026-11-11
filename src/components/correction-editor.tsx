@@ -490,9 +490,9 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                                     <div className="flex items-start gap-2">
                                         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
                                         <div className="space-y-2">
-                                            <p className="font-medium">参考答案与解析末尾结论不一致</p>
+                                            <p className="font-medium">参考答案与解析推导结论不一致</p>
                                             <p className="text-xs text-amber-800">
-                                                AI 给出的「参考答案」是 {answerConflict.answerExpr}，但解析最后得到的结论是 {answerConflict.conclusionExpr}。请以解析推导为准，核对后再保存。
+                                                AI 给出的「参考答案」是 {answerConflict.answerExpr}，但解析推导得到的结论是 {answerConflict.conclusionExpr}。请以解析推导为准，核对后再保存。
                                             </p>
                                             <Button
                                                 variant="outline"
@@ -500,7 +500,7 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                                                 className="border-amber-400 text-amber-900 hover:bg-amber-100"
                                                 onClick={() => {
                                                     setData(prev => ({ ...prev, answerText: answerConflict.suggested }));
-                                                    toast.success("已采用解析末尾结论作为参考答案");
+                                                    toast.success("已采用解析推导结论作为参考答案");
                                                 }}
                                             >
                                                 采用解析结论 {answerConflict.suggested}

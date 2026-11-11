@@ -8,6 +8,7 @@ import {
   sanitizeBodyText, extractTagSafe, parseMistakeFieldsFromResponse,
   withoutMistakeAnalysis, shouldStopGeneration,
 } from "./lib/response-guard.ts";
+import { deriveAnswerFromAnalysis } from "./lib/answer-consistency.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -33,14 +34,16 @@ function parseResponse(text: string) {
   if (!rawQuestion || !rawAnswer || !rawAnalysis) {
     throw new Error("Invalid AI response: Missing critical XML tags");
   }
-  // 单一真相源：模型偶尔会把「参考答案」写错而解析末尾推对（典型症状是不等号方向写反）。
-  // 提示词要求解析末尾用 <final_answer> 给出唯一结论，此处用它覆盖参考答案；
-  // 标签本身由 sanitizeBodyText 的 stripLeakedTags 剥离，正文里只留下结论本身。
-  // 模型未输出该标签时保持原样，交由前端一致性守卫兜底，避免误改。
+  // 单一真相源：不再无条件采信 AI 第二次独立输出的 <final_answer>。
+  // 模型把答案写两遍时，第二遍可能抄错端点/开闭（(1/2,2]、(-1/2,1/2] 两次事故
+  // 同源），而解析正文的推导往往是对的。改为从解析正文确定性提取结论并交叉校验，
+  // 冲突时以解析结论为准；非区间答案或提取不到结论时一律保持模型原值。
+  // <final_answer> 标签由 sanitizeBodyText 的 stripLeakedTags 剥离。
   const finalTag = rawAnalysis.match(/<final_answer>\s*([\s\S]*?)\s*<\/final_answer>/i);
   const finalAnswer = finalTag ? finalTag[1].trim() : '';
+  const derived = deriveAnswerFromAnalysis(rawAnalysis, rawAnswer, finalAnswer);
   const questionText = sanitizeBodyText(rawQuestion);
-  const answerText = sanitizeBodyText(finalAnswer || rawAnswer);
+  const answerText = sanitizeBodyText(derived.answerText);
   const analysis = sanitizeBodyText(rawAnalysis);
   const mistake = parseMistakeFieldsFromResponse(text, (t) => extractTag(text, t), answerText);
   const subjectRaw = extractTag(text, "subject");
@@ -57,6 +60,9 @@ function parseResponse(text: string) {
     subject: subjectRaw && VALID_SUBJECTS.includes(subjectRaw) ? subjectRaw : "其他",
     knowledgePoints,
     requiresImage: requiresImageRaw?.toLowerCase().trim() === "true",
+    answerSource: derived.source,
+    answerConflict: derived.conflict,
+    originalAnswerText: derived.originalAnswerText || '',
   }, true);
 }
 

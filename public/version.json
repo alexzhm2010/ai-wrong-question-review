@@ -1,6 +1,6 @@
 {
-  "version": "1.18.2-static",
-  "releasedAt": "2026-11-11T15:00:00+08:00",
-  "notes": "修复 Markdown 渲染吞掉 \\notin 等 LaTeX 命令（显示为 3otin）；收敛 AI 解析的自我复盘口吻，改为按结构一次成型；同步前端与 Edge Function 两份提示词模板。",
+  "version": "1.18.3-static",
+  "releasedAt": "2026-11-11T15:41:12+08:00",
+  "notes": "根治参考答案与解析结论矛盾：不再无条件采信 AI 第二次输出的 <final_answer>，改为从解析正文确定性推导结论并交叉校验，冲突时以解析结论为准；一致性守卫改为全文扫描结论，不再只看最后一句。",
   "channel": "github-pages"
 }
