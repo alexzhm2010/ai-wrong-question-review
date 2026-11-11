@@ -43,8 +43,9 @@ const KEYWORDS: Record<string, string[]> = {
   ],
   英语: [
     "passage", "grammar", "tense", "vocabulary", "translate", "sentence", "cloze",
-    "时态", "从句", "单词", "语法", "完形填空", "阅读理解", "书面表达", "被动语态",
-    "第三人称", "不定式", "过去分词", "介词", "连词", "英语作文",
+    "reading comprehension", "comprehension", "时态", "从句", "单词", "语法",
+    "完形填空", "阅读理解", "书面表达", "被动语态", "第三人称", "不定式", "过去分词",
+    "介词", "连词", "英语作文",
   ],
   语文: [
     "文言文", "古诗", "诗歌", "修辞", "比喻", "拟人", "排比", "病句", "成语", "拼音",
@@ -150,6 +151,10 @@ export function resolveSubject(
   }
   const tagScore = tag ? scores[tag] || 0 : 0;
 
+  // 自报值毫无文本支撑（含写成「其他」），而某学科有明确证据 → 以证据为准
+  if (best && bestScore >= 2 && tagScore === 0) {
+    return { subject: best, tag, scores, changed: !!tag && tag !== best };
+  }
   // 证据显著强于自报值（领先 ≥3 分且自身 ≥3 分）→ 改判
   if (best && bestScore >= 3 && bestScore >= tagScore + 3 && best !== tag) {
     return { subject: best, tag, scores, changed: !!tag };
