@@ -1,5 +1,19 @@
 import { describe, it, expect } from "vitest";
-import { detectAnswerConflict } from "@/lib/answer-consistency";
+import { detectAnswerConflict, intervals, answersEquivalent } from "@/lib/answer-consistency";
+
+describe("区间归一化（全角括号 / Unicode 减号 / ½ 符号）", () => {
+    it("全角括号打头的区间也能被提取", () => {
+        expect(intervals("（−½, ½]")).toEqual(["(-1/2,1/2]"]);
+    });
+
+    it("½ 与 1/2、− 与 - 视为等价（模型常见写法差异）", () => {
+        expect(answersEquivalent("（−½, ½]", "(-1/2, 1/2]")).toBe(true);
+    });
+
+    it("不同区间不因归一化被误判为等价", () => {
+        expect(answersEquivalent("（−½, ½]", "[1/2, 2]")).toBe(false);
+    });
+});
 
 describe("detectAnswerConflict", () => {
     it("抓到「参考答案 (1/2,2] 与解析结论 [-1,1/2) 矛盾」这一真实案例", () => {

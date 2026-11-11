@@ -8,13 +8,15 @@
  * 「但需注意」「然而，还需验证」写进正文），前端「只看最后一句」的守卫在末尾
  * 是文字结论时也会漏报。
  *
- * 现在的结构：以「解析正文里确定性推出的结论」为唯一真相源。
+ * 现在的结构：模型提交的答案为唯一真相源，解析结论仅用于冲突检测。
  *  - findConclusionExpr：全文扫描结论语境提取最终表达式，不依赖最后一句；
- *  - deriveAnswerFromAnalysis（服务端）：三方交叉校验，不一致时以解析结论为准；
+ *  - deriveAnswerFromAnalysis（服务端）：以提交答案为准，仅上报告警，绝不反向覆盖；
  *  - detectAnswerConflict（前端）：对历史数据 / 旧函数结果做兜底提示。
  *
- * 安全边界：只在「参考答案本身是区间表达式」且「解析里能高置信提取到结论区间」
- * 时才覆盖。选择题、数值、文字结论等非区间答案一律不动，避免误改。
+ * 关键教训（v1.18.5）：v1.18.3 的「不一致时以解析结论覆盖答案」是静默翻错的根因——
+ * 解析正文常先写对、末尾自己改口写错，取「最后一次结论」会把正确答案覆盖成错误结论，
+ * 且覆盖后答案=解析结论（同错）导致前端守卫判为一致、连告警都不弹。故改为：
+ * 永不自动覆盖，冲突一律交人工「采用解析结论」按钮裁决（与双模型原则一致）。
  */
 
 /** 抽取形如 [-1,0)、(1/2,2] 的区间/集合表达式 */
@@ -32,7 +34,7 @@ const VAR_CONCLUSION_RE =
 const SUMMARY_RE =
   /(?:综上(?:所述)?|因此|所以|故|最终(?:答案|结论)?|可得|由此|答案为|取值范围(?:是|为)?|则|即|m\s*∈|m\s*\\in)\s*[：:]?\s*/g;
 
-/** 归一化数学文本，让 \frac{1}{2} 与 1/2、\cup 与 ∪ 等价 */
+/** 归一化数学文本，让 \frac{1}{2} 与 1/2、\cup 与 ∪、− 与 -、½ 与 1/2 等价 */
 function normalize(s: string): string {
   return s
     .replace(/\\(?:d|t)?frac\{([^{}]*)\}\{([^{}]*)\}/g, "$1/$2")
@@ -41,12 +43,19 @@ function normalize(s: string): string {
     .replace(/\\in/g, "∈")
     .replace(/\\text\{([^}]*)\}/g, "$1")
     .replace(/[（）]/g, (c) => (c === "（" ? "(" : ")"))
+    // Unicode 减号/破折号统一成 ASCII 连字符（模型常写 −½ 而非 -1/2）
+    .replace(/[−–—]/g, "-")
+    // 常见分数符号展开
+    .replace(/½/g, "1/2").replace(/⅓/g, "1/3").replace(/⅔/g, "2/3")
+    .replace(/¼/g, "1/4").replace(/¾/g, "3/4")
     .replace(/[，,]\s*/g, ",")
     .replace(/\s+/g, "");
 }
 
-function intervals(text: string): string[] {
-  return [...text.matchAll(INTERVAL_RE)].map((m) => normalize(m[0]));
+/** 抽取文本中的区间表达式（先归一全角括号，否则全角 （ 打头的区间会被漏掉） */
+export function intervals(text: string): string[] {
+  const t = (text || "").replace(/（/g, "(").replace(/）/g, ")");
+  return [...t.matchAll(INTERVAL_RE)].map((m) => normalize(m[0]));
 }
 
 /** 取解析最后一段总结句（截到句号/换行，最多 240 字） */
@@ -161,33 +170,27 @@ export function deriveAnswerFromAnalysis(
   rawAnswer: string,
   finalAnswer: string,
 ): DerivedAnswer {
-  const modelAnswer = (finalAnswer || rawAnswer || "").trim();
+  // 单一真相源 = 模型提交的答案（<final_answer> 或 answer_text），全篇只此一份。
+  // 解析正文里出现的「结论区间」仅用于【冲突检测】，绝不反向覆盖已提交答案。
+  //
+  // 反向覆盖在两种情形下都会翻车，v1.18.3 的「以解析结论为准」正是本次事故根因：
+  //   · 提交答案正确、解析末尾自己改口成错（"先给对、后改错"）→ 覆盖成错；
+  //   · 提交答案错误、解析正确 → 覆盖成对（旧问题），同样无声。
+  // 正确做法：永远以提交答案为准；与解析结论不一致时上报告警，交人工「采用解析结论」按钮裁决，
+  // 与双模型「分歧转人工、不自动裁判」原则一致。代码无法在两种矛盾来源间可靠二选一，
+  // 因此把判断权交还用户，而不是由代码静默替用户决定。
+  const committed = (finalAnswer || rawAnswer || "").trim();
   const derived = findConclusionExpr(rawAnalysis);
-  const modelExprs = intervals(modelAnswer);
-
-  if (!derived || !modelExprs.length) {
-    return { answerText: modelAnswer, derived: "", conflict: false, source: "model" };
-  }
-
-  const nDerived = normalize(derived);
-  const nModel = normalize(modelAnswer);
-  const agree =
-    nModel === nDerived || nModel.includes(nDerived) || modelExprs.includes(nDerived);
-
-  if (agree) {
-    return { answerText: modelAnswer, derived, conflict: false, source: "model" };
-  }
-
-  // 覆盖时保留模型答案的 $ 定界符：解析正文里的表达式是裸的，
-  // 若模型原本用 $...$ 包裹，直接替换会让前端 KaTeX 不再渲染。
-  const corrected = modelAnswer.includes("$") ? `$${derived}$` : derived;
-
+  const conflict =
+    !!derived && intervals(committed).length > 0 && !answersEquivalent(committed, derived);
   return {
-    answerText: corrected,
+    answerText: committed,
     derived,
-    conflict: true,
-    source: "analysis",
-    originalAnswerText: modelAnswer,
+    conflict,
+    source: "model",
+    // 冲突时把解析旁证结论带出来，供前端「采用解析结论」按钮在用户确认后采纳；
+    // 默认仍展示模型提交的参考答案，绝不在未确认时覆盖。
+    originalAnswerText: conflict ? derived : undefined,
   };
 }
 

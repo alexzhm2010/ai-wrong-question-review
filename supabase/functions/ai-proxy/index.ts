@@ -8,7 +8,7 @@ import {
   sanitizeBodyText, extractTagSafe, parseMistakeFieldsFromResponse,
   withoutMistakeAnalysis, shouldStopGeneration,
 } from "./lib/response-guard.ts";
-import { deriveAnswerFromAnalysis, findConclusionExpr, answersEquivalent } from "./lib/answer-consistency.ts";
+import { deriveAnswerFromAnalysis, findConclusionExpr, answersEquivalent, intervals } from "./lib/answer-consistency.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -233,7 +233,27 @@ async function verifyAnswerViaSubstitution(
     enableThinking: false,
   });
   const m = text.match(/<verified>\s*([\s\S]*?)\s*<\/verified>/i);
-  return m ? m[1].trim() : "";
+  if (!m) return "";
+  let verified = m[1].trim();
+  // 模型常把「候选 A / 候选 B：」前缀写进 <verified>，必须剥离，否则会泄漏进参考答案。
+  verified = verified.replace(/^候选\s*[AB]\s*[:：]\s*/i, "").trim();
+  // 归一到两个候选原文之一：若与某个候选等价，返回该候选的规范文本，杜绝脏格式。
+  // 顺序：优先正文推理结论，再回退标签值。
+  const candidates = [bodyConclusion, tagAnswer].filter(Boolean);
+  for (const c of candidates) {
+    if (answersEquivalent(verified, c)) return sanitizeBodyText(c);
+  }
+  // 次生兜底：verified 可能只含区间片段，按「最后一个区间等价」匹配候选。
+  const vi = intervals(verified);
+  if (vi.length) {
+    for (const c of candidates) {
+      const ci = intervals(c);
+      if (ci.length && ci[ci.length - 1] === vi[vi.length - 1]) return sanitizeBodyText(c);
+    }
+  }
+  // 验算结果无法归一到任一候选（模型自创第三值）→ 返回空，
+  // 由上层回退到「正文推理结论」，绝不把来源不明的值写进参考答案。
+  return "";
 }
 
 /**

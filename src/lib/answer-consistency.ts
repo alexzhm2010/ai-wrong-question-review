@@ -32,7 +32,7 @@ const VAR_CONCLUSION_RE =
 const SUMMARY_RE =
   /(?:综上(?:所述)?|因此|所以|故|最终(?:答案|结论)?|可得|由此|答案为|取值范围(?:是|为)?|则|即|m\s*∈|m\s*\\in)\s*[：:]?\s*/g;
 
-/** 归一化数学文本，让 \frac{1}{2} 与 1/2、\cup 与 ∪ 等价 */
+/** 归一化数学文本，让 \frac{1}{2} 与 1/2、\cup 与 ∪、− 与 -、½ 与 1/2 等价 */
 function normalize(s: string): string {
   return s
     .replace(/\\(?:d|t)?frac\{([^{}]*)\}\{([^{}]*)\}/g, "$1/$2")
@@ -41,12 +41,19 @@ function normalize(s: string): string {
     .replace(/\\in/g, "∈")
     .replace(/\\text\{([^}]*)\}/g, "$1")
     .replace(/[（）]/g, (c) => (c === "（" ? "(" : ")"))
+    // Unicode 减号/破折号统一成 ASCII 连字符（模型常写 −½ 而非 -1/2）
+    .replace(/[−–—]/g, "-")
+    // 常见分数符号展开
+    .replace(/½/g, "1/2").replace(/⅓/g, "1/3").replace(/⅔/g, "2/3")
+    .replace(/¼/g, "1/4").replace(/¾/g, "3/4")
     .replace(/[，,]\s*/g, ",")
     .replace(/\s+/g, "");
 }
 
-function intervals(text: string): string[] {
-  return [...text.matchAll(INTERVAL_RE)].map((m) => normalize(m[0]));
+/** 抽取文本中的区间表达式（先归一全角括号，否则全角 （ 打头的区间会被漏掉） */
+export function intervals(text: string): string[] {
+  const t = (text || "").replace(/（/g, "(").replace(/）/g, ")");
+  return [...t.matchAll(INTERVAL_RE)].map((m) => normalize(m[0]));
 }
 
 /** 取解析最后一段总结句（截到句号/换行，最多 240 字） */
