@@ -11,6 +11,7 @@ import { useLanguage } from "@/contexts/LanguageContext";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
+import { ReferenceAnswer } from "@/components/reference-answer";
 import { apiClient } from "@/lib/api-client";
 import { AppConfig } from "@/types/api";
 import { frontendLogger } from "@/lib/frontend-logger";
@@ -352,7 +353,7 @@ function PracticeContent() {
                                     <CardTitle className="text-green-600">{t.practice.correctAnswer}</CardTitle>
                                 </CardHeader>
                                 <CardContent>
-                                    <MarkdownRenderer content={question.answerText} className="font-bold" />
+                                    <ReferenceAnswer text={question.answerText} className="font-bold" />
                                 </CardContent>
                             </Card>
 

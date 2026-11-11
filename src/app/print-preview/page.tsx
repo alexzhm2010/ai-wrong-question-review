@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { BackButton } from "@/components/ui/back-button";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
+import { ReferenceAnswer } from "@/components/reference-answer";
 import { apiClient } from "@/lib/api-client";
 import { ErrorItem, PaginatedResponse } from "@/types/api";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -272,7 +273,7 @@ function PrintPreviewContent() {
                             {showAnswers && item.answerText && (
                                 <div className="mb-4">
                                     <h3 className="font-semibold mb-2">{t.printPreview?.referenceAnswer || 'Reference Answer'}:</h3>
-                                    <MarkdownRenderer content={item.answerText} />
+                                    <ReferenceAnswer text={item.answerText} />
                                 </div>
                             )}
 

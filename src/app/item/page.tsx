@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import Link from "next/link";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
+import { ReferenceAnswer } from "@/components/reference-answer";
 import { TagInput } from "@/components/tag-input";
 import { GRADE_SEMESTER_OPTIONS, GRADE_SEMESTER_UNSET, normalizeGradeSemester } from "@/lib/grade-options";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -574,7 +575,7 @@ export default function ErrorDetailPage() {
                         <CardContent className="space-y-4">
                             {isEditingAnswer ? (
                                 <div className="space-y-3"><Textarea value={answerInput} onChange={e => setAnswerInput(e.target.value)} placeholder="Enter answer..." rows={5} className="w-full font-mono text-sm" /><div className="flex gap-2"><Button size="sm" onClick={saveAnswerHandler}><Save className="h-4 w-4 mr-1" />{t.common?.save || "Save"}</Button><Button size="sm" variant="outline" onClick={cancelEditingAnswer}><X className="h-4 w-4 mr-1" />{t.common?.cancel || "Cancel"}</Button></div></div>
-                            ) : <MarkdownRenderer content={item.answerText} className="font-semibold" />}
+                            ) : <ReferenceAnswer text={item.answerText} className="font-semibold" />}
                             {item.referenceImageUrl && <div className="pt-3"><Button variant="ghost" size="sm" onClick={() => setShowReferenceImage(!showReferenceImage)} className="flex items-center gap-2 text-muted-foreground">{showReferenceImage ? <><EyeOff className="h-4 w-4" />隐藏图片</> : <><ImageIcon className="h-4 w-4" />查看图片</>}</Button>{showReferenceImage && <div className="mt-4"><img src={item.referenceImageUrl} alt="参考图片" className="w-full rounded-lg border cursor-pointer hover:opacity-90 transition-opacity" onClick={() => setIsImageViewerOpen(true)} /><p className="text-xs text-muted-foreground mt-1 text-center">{t.detail?.clickToEnlarge || "Click to enlarge"}</p></div>}</div>}
                         </CardContent>
                     </Card>

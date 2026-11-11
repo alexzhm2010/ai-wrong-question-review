@@ -10,6 +10,7 @@ import { Save, RefreshCw, Loader2, ChevronDown, ChevronUp } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { frontendLogger } from "@/lib/frontend-logger";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
+import { ReferenceAnswer } from "@/components/reference-answer";
 import { TagInput } from "@/components/tag-input";
 import { NotebookSelector } from "@/components/notebook-selector";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -480,7 +481,7 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                             <CardTitle>{t.editor.preview?.answer || "参考答案"}</CardTitle>
                         </CardHeader>
                         <CardContent>
-                            <MarkdownRenderer content={data.answerText} />
+                            <ReferenceAnswer text={data.answerText} />
                         </CardContent>
                     </Card>
 
