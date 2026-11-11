@@ -14,19 +14,20 @@ import { useLanguage } from "@/contexts/LanguageContext";
  */
 export type ThinkingMode = "deep" | "fast";
 
-const STORAGE_KEY = "aqr.thinkingMode";
+// v2：默认值从「深度」改为「快速」，旧键里的历史选择不再沿用，避免老用户被旧默认值钉死在深度
+const STORAGE_KEY = "aqr.thinkingMode.v2";
 
 // 模块级单例：同一页面里多个开关实例保持同步，避免出现两处取值不一致
-let cached: ThinkingMode = "deep";
+let cached: ThinkingMode = "fast";
 let hydrated = false;
 const listeners = new Set<() => void>();
 
 function readStored(): ThinkingMode {
-    if (typeof window === "undefined") return "deep";
+    if (typeof window === "undefined") return "fast";
     try {
-        return window.localStorage.getItem(STORAGE_KEY) === "fast" ? "fast" : "deep";
+        return window.localStorage.getItem(STORAGE_KEY) === "deep" ? "deep" : "fast";
     } catch {
-        return "deep";
+        return "fast";
     }
 }
 
@@ -56,7 +57,7 @@ export function setThinkingMode(mode: ThinkingMode) {
     listeners.forEach((fn) => fn());
 }
 
-/** 读取并订阅当前的思考模式（默认深度思考，选择记在本机） */
+/** 读取并订阅当前的思考模式（默认快速，选择记在本机；单张与批量共用） */
 export function useThinkingMode(): [ThinkingMode, (mode: ThinkingMode) => void] {
     const mode = useSyncExternalStore(
         subscribe,
@@ -64,7 +65,7 @@ export function useThinkingMode(): [ThinkingMode, (mode: ThinkingMode) => void] 
             hydrate();
             return cached;
         },
-        () => "deep" as ThinkingMode,
+        () => "fast" as ThinkingMode,
     );
     return [mode, setThinkingMode];
 }

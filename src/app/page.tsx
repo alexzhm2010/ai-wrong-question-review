@@ -13,7 +13,7 @@ import { AnalyzeResponse, Notebook, AppConfig } from "@/types/api";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { processImageFile } from "@/lib/image-utils";
-import { Upload, BookOpen, Tags, LogOut, BarChart3, PenLine, Images, ChevronRight } from "lucide-react";
+import { Upload, BookOpen, Tags, LogOut, BarChart3, Images, ChevronRight } from "lucide-react";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { BroadcastNotification } from "@/components/broadcast-notification";
 import { VersionBadge } from "@/components/version-badge";
@@ -25,11 +25,10 @@ import { StreamingReview } from "@/components/streaming-review";
 import { parsePartialXml, type PartialParsed } from "@/lib/partial-parse";
 import { frontendLogger } from "@/lib/frontend-logger";
 import { toast } from "@/lib/toast";
-import { TextInputZone } from "@/components/text-input-zone";
 import { ThinkingModeToggle, useThinkingMode } from "@/components/thinking-mode-toggle";
-import { BatchBanner, BatchEntryButton } from "@/components/batch-banner";
-import { BatchUploadDialog } from "@/components/batch-upload-dialog";
-import { DirectTextEditor } from "@/components/direct-text-editor";
+import { BatchBanner } from "@/components/batch-banner";
+import { useActiveBatch } from "@/lib/batch-store";
+import { BatchUploadPanel } from "@/components/batch-upload-dialog";
 import { streamAnalyze } from "@/lib/stream-analyze";
 import { inferSubjectFromName } from "@/lib/knowledge-tags";
 
@@ -66,15 +65,18 @@ function HomeContent() {
     const createdNotebookIdRef = useRef<string | null>(null);
 
     // Input mode: "image" for photo upload, "text" for AI solve, "direct" for manual entry
-    const [inputMode, setInputMode] = useState<"image" | "text" | "direct">("image");
+    const [inputMode, setInputMode] = useState<"image" | "batch">("image");
 
     // Cropper state
     const [croppingImage, setCroppingImage] = useState<string | null>(null);
     const [isCropperOpen, setIsCropperOpen] = useState(false);
 
-    // 批量导入：上传区一次选到多张时进入这里
+    // 批量导入：上传区一次选到多张时切到批量 tab，并把文件带过去
     const [batchFiles, setBatchFiles] = useState<File[]>([]);
-    const [isBatchOpen, setIsBatchOpen] = useState(false);
+    const [batchSeed, setBatchSeed] = useState(0);
+    // 批量 tab 上的小圆点：有进行中/待确认的批次时提个醒（不额外加入口）
+    const activeBatch = useActiveBatch();
+    const hasActiveBatchHint = !!activeBatch;
 
     // Timeout Config
     const aiTimeout = config?.timeouts?.analyze || 180000;
@@ -506,165 +508,6 @@ function HomeContent() {
         }
     };
 
-    const handleTextSubmit = async (questionText: string) => {
-        const startTime = Date.now();
-        frontendLogger.info('[HomeTextSubmit]', 'Starting text-based analysis', { textLength: questionText.length });
-
-        const controller = beginAnalysisRequest();
-
-        try {
-            phaseStartedAtRef.current = Date.now();
-            setAnalysisStep('analyzing');
-            // 先进入 review 视图：题目已知，答案/解析以骨架等待填充
-            setStreamParsed({ questionText });
-            setIsStreaming(true);
-            setParsedData(null);
-            setStep("review");
-
-            // Infer subject from auto-selected notebook
-            const targetNotebookId = initialNotebookId || autoSelectedNotebookId;
-            const matchedNotebook = targetNotebookId
-                ? notebooks.find(n => n.id === targetNotebookId)
-                : undefined;
-
-            const result = await apiClient.post<{
-                answerText: string;
-                analysis: string;
-                knowledgePoints: string[];
-                wrongAnswerText: string;
-                mistakeAnalysis: string;
-                mistakeStatus: string;
-                /** 服务端按题干+解析判定的学科（含证据校正） */
-                subject?: string;
-            }>("/api/reanswer", {
-                questionText,
-                language,
-                subject: matchedNotebook?.name || undefined,
-                reasoningMode: thinkingMode,
-            }, { timeout: aiTimeout, signal: controller.signal });
-
-            setAnalysisStep('processing');
-            setProgress(100);
-
-            const parsed: ParsedQuestion = {
-                questionText,
-                answerText: result.answerText,
-                analysis: result.analysis,
-                knowledgePoints: result.knowledgePoints || [],
-                wrongAnswerText: result.wrongAnswerText || "",
-                mistakeAnalysis: result.mistakeAnalysis || "",
-                mistakeStatus: (result.mistakeStatus as any) || "unknown",
-                // 学科由服务端按题干+解析判定，不再写死「数学」
-                subject: (result.subject as ParsedQuestion["subject"]) || "其他",
-                requiresImage: false,
-            };
-
-            // 文字输入路径同样自动选好对应错题本，并把选中的错题本写进结果
-            let subjectId: string | undefined;
-            if (parsed.subject) {
-                subjectId = await ensureNotebookForSubject(parsed.subject);
-            }
-
-            setCurrentImage(null); // No image for text input
-            setIsStreaming(false);
-            setStreamParsed({});
-            setParsedData(subjectId ? { ...parsed, subjectId } : parsed);
-            setStep("review");
-
-            const totalDuration = Date.now() - startTime;
-            frontendLogger.info('[HomeTextSubmit]', 'Text analysis completed', { totalDuration });
-        } catch (error: any) {
-            if (cancelRequestedRef.current) {
-                frontendLogger.info('[HomeTextSubmit]', 'Analysis cancelled by user');
-                setIsStreaming(false);
-                setStreamParsed({});
-                setStep("upload");
-                return;
-            }
-
-            setIsStreaming(false);
-            setStreamParsed({});
-            setStep("upload");
-
-            const errorDuration = Date.now() - startTime;
-            frontendLogger.error('[HomeTextSubmit]', 'Analysis failed', {
-                errorDuration,
-                error: error.message || String(error)
-            });
-
-            try {
-                let errorMessage = t.common?.messages?.analysisFailed || 'Analysis failed, please try again';
-                const backendErrorType = error?.data?.message;
-                if (backendErrorType && typeof backendErrorType === 'string') {
-                    if (t.errors && typeof t.errors === 'object' && backendErrorType in t.errors) {
-                        const mappedError = (t.errors as any)[backendErrorType];
-                        if (typeof mappedError === 'string') errorMessage = mappedError;
-                    } else {
-                        errorMessage = backendErrorType;
-                    }
-                }
-                toast.error(errorMessage);
-            } catch {
-                toast.error('Analysis failed. Please try again.');
-            }
-        } finally {
-            finishAnalysisRequest();
-            setAnalysisStep('idle');
-        }
-    };
-
-    const handleDirectSave = async (data: {
-        questionText: string;
-        answerText: string;
-        analysis: string;
-        wrongAnswerText: string;
-        mistakeAnalysis: string;
-        mistakeStatus: string;
-        knowledgePoints: string[];
-        subjectId: string;
-        gradeSemester?: string;
-    }): Promise<void> => {
-        frontendLogger.info('[HomeDirectSave]', 'Starting direct save', {
-            hasQuestionText: !!data.questionText,
-            hasAnswerText: !!data.answerText,
-            subjectId: data.subjectId,
-        });
-
-        try {
-            setAnalysisStep('saving');
-            const result = await apiClient.post<{ id: string; duplicate?: boolean }>("/api/error-items", {
-                questionText: data.questionText,
-                answerText: data.answerText,
-                analysis: data.analysis,
-                wrongAnswerText: data.wrongAnswerText || null,
-                mistakeAnalysis: data.mistakeAnalysis || null,
-                mistakeStatus: data.mistakeStatus || "unknown",
-                knowledgePoints: data.knowledgePoints,
-                subjectId: data.subjectId,
-                gradeSemester: data.gradeSemester,
-                originalImageUrl: "",
-            });
-
-            if (result.duplicate) {
-                frontendLogger.info('[HomeDirectSave]', 'Duplicate detected');
-            }
-
-            frontendLogger.info('[HomeDirectSave]', 'Save successful');
-            setAnalysisStep('idle');
-            toast.success(t.common?.messages?.saveSuccess || 'Saved successfully!');
-
-            // 直接保存同样回首页「录入新题」，不跳学科错题本
-            router.replace("/");
-        } catch (error: any) {
-            frontendLogger.error('[HomeDirectSave]', 'Save failed', {
-                errorStatus: error?.status,
-                errorMessage: error?.data?.message || error?.message || String(error),
-            });
-            setAnalysisStep('idle');
-            toast.error(t.common?.messages?.saveFailed || 'Failed to save');
-        }
-    };
-
     const getProgressMessage = () => {
         const isZh = language === 'zh';
         const analyzingElapsed = Date.now() - (phaseStartedAtRef.current ?? Date.now());
@@ -710,7 +553,6 @@ function HomeContent() {
                     <UserWelcome />
 
                     <div className="flex w-full items-center justify-between gap-1 rounded-lg border bg-card p-2 shadow-sm sm:w-auto sm:shrink-0 sm:justify-end sm:gap-2">
-                        <BatchEntryButton />
                         <BroadcastNotification />
                         <SettingsDialog />
                         <VersionBadge />
@@ -788,8 +630,8 @@ function HomeContent() {
 
                 {step === "upload" && (
                     <div className="flex min-h-0 flex-1 flex-col gap-2 sm:gap-4">
-                        {/* Input mode tabs */}
-                        <div className="flex shrink-0 gap-1 overflow-x-auto border-b sm:gap-2">
+                        {/* Input mode tabs：只留两条主路径 —— 单张拍照 / 批量上传 */}
+                        <div className="flex shrink-0 gap-1 border-b sm:gap-2">
                             <button
                                 className={`flex flex-1 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap border-b-2 px-2 py-2 text-xs font-medium transition-colors sm:flex-none sm:gap-2 sm:px-4 sm:py-2.5 sm:text-sm ${
                                     inputMode === "image"
@@ -803,102 +645,68 @@ function HomeContent() {
                             </button>
                             <button
                                 className={`flex flex-1 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap border-b-2 px-2 py-2 text-xs font-medium transition-colors sm:flex-none sm:gap-2 sm:px-4 sm:py-2.5 sm:text-sm ${
-                                    inputMode === "text"
+                                    inputMode === "batch"
                                         ? "border-primary text-primary"
                                         : "border-transparent text-muted-foreground hover:text-foreground"
                                 }`}
-                                onClick={() => setInputMode("text")}
+                                onClick={() => setInputMode("batch")}
                             >
-                                <PenLine className="h-4 w-4 shrink-0" />
-                                {t.app?.manualInput || "AI解题"}
-                            </button>
-                            <button
-                                className={`flex flex-1 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap border-b-2 px-2 py-2 text-xs font-medium transition-colors sm:flex-none sm:gap-2 sm:px-4 sm:py-2.5 sm:text-sm ${
-                                    inputMode === "direct"
-                                        ? "border-primary text-primary"
-                                        : "border-transparent text-muted-foreground hover:text-foreground"
-                                }`}
-                                onClick={() => setInputMode("direct")}
-                            >
-                                <PenLine className="h-4 w-4 shrink-0" />
-                                直接录入
+                                <Images className="h-4 w-4 shrink-0" />
+                                {t.batch?.tab || "批量上传"}
+                                {hasActiveBatchHint && (
+                                    <span className="ml-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-destructive" />
+                                )}
                             </button>
                         </div>
 
-                        {inputMode !== "direct" && (
-                            <div className="flex shrink-0 items-center justify-between gap-2 rounded-lg border bg-card px-2.5 py-1.5 shadow-sm sm:px-3 sm:py-2">
-                                <div className="min-w-0">
-                                    <p className="text-xs font-medium leading-tight">
-                                        {t.app?.thinkingMode || "思考深度"}
-                                    </p>
-                                    <p className="truncate text-[10px] leading-tight text-muted-foreground sm:text-xs">
-                                        {thinkingMode === "fast"
-                                            ? (t.app?.thinkingFastHint || "关闭思考，约 10 秒；复杂题更容易算错")
-                                            : (t.app?.thinkingDeepHint || "深度思考，约 40–80 秒；正确率更高")}
-                                    </p>
-                                </div>
-                                <ThinkingModeToggle
-                                    value={thinkingMode}
-                                    onChange={setThinkingMode}
-                                    disabled={isAnalysisActive}
-                                />
+                        {/* 思考深度：单张与批量共用这一个设置，批量面板里不再单独设 */}
+                        <div className="flex shrink-0 items-center justify-between gap-2 rounded-lg border bg-card px-2.5 py-1.5 shadow-sm sm:px-3 sm:py-2">
+                            <div className="min-w-0">
+                                <p className="text-xs font-medium leading-tight">
+                                    {t.app?.thinkingMode || "思考深度"}
+                                </p>
+                                <p className="truncate text-[10px] leading-tight text-muted-foreground sm:text-xs">
+                                    {thinkingMode === "fast"
+                                        ? (t.app?.thinkingFastHint || "关闭思考，约 10 秒；复杂题更容易算错")
+                                        : (t.app?.thinkingDeepHint || "深度思考，约 40–80 秒；正确率更高")}
+                                </p>
                             </div>
-                        )}
+                            <ThinkingModeToggle
+                                value={thinkingMode}
+                                onChange={setThinkingMode}
+                                disabled={isAnalysisActive}
+                            />
+                        </div>
 
-                        {inputMode === "image" ? (
-                            <div className="flex min-h-0 flex-1 flex-col gap-2">
-                                <UploadZone
-                                    onImageSelect={onImageSelect}
-                                    onImagesSelect={(files) => {
-                                        setBatchFiles(files);
-                                        setIsBatchOpen(true);
-                                    }}
-                                    isAnalyzing={analysisStep !== 'idle'}
-                                    fill
-                                />
-                                {/* 批量入口：单张走上面，多张走这里。手机上文件选择器多选不直观，给个明示入口 */}
-                                <button
-                                    type="button"
-                                    disabled={analysisStep !== 'idle'}
-                                    onClick={() => {
-                                        setBatchFiles([]);
-                                        setIsBatchOpen(true);
-                                    }}
-                                    className="flex shrink-0 items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary disabled:pointer-events-none disabled:opacity-50 sm:text-sm"
-                                >
-                                    <Images className="h-4 w-4 shrink-0" />
-                                    <span className="min-w-0 flex-1 truncate">
-                                        {t.batch?.multiEntry || "批量导入多张照片"}
-                                    </span>
-                                    <ChevronRight className="h-4 w-4 shrink-0" />
-                                </button>
+                        {/* 两个面板都保持挂载：切 tab 不会丢掉已经选好的图片 */}
+                        <div className={inputMode === "image" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
+                            <UploadZone
+                                onImageSelect={onImageSelect}
+                                onImagesSelect={(files) => {
+                                    // 一次选到多张 = 想批量导入，直接切到批量 tab 并带入这些图
+                                    setBatchFiles(files);
+                                    setBatchSeed((n) => n + 1);
+                                    setInputMode("batch");
+                                }}
+                                isAnalyzing={analysisStep !== 'idle'}
+                                fill
+                            />
+                        </div>
+
+                        <div className={inputMode === "batch" ? "flex min-h-0 flex-1 flex-col gap-2" : "hidden"}>
+                            <BatchUploadPanel
+                                initialFiles={batchFiles}
+                                seed={batchSeed}
+                                onStarted={(id) => router.push(`/batch?id=${id}`)}
+                            />
+                            <div className="flex shrink-0 items-center justify-between gap-2 text-[11px] text-muted-foreground sm:text-xs">
+                                <span>{t.batch?.partialHint}</span>
+                                <Link href="/batch" className="flex shrink-0 items-center gap-0.5 hover:text-primary">
+                                    {t.batch?.history || "历史批次"}
+                                    <ChevronRight className="h-3.5 w-3.5" />
+                                </Link>
                             </div>
-                        ) : inputMode === "text" ? (
-                            <div className="min-h-0 flex-1 overflow-y-auto">
-                                <TextInputZone
-                                    onSubmit={handleTextSubmit}
-                                    isAnalyzing={analysisStep !== 'idle'}
-                                    defaultNotebookName={
-                                        (initialNotebookId || autoSelectedNotebookId)
-                                            ? notebooks.find(n => n.id === (initialNotebookId || autoSelectedNotebookId))?.name
-                                            : undefined
-                                    }
-                                />
-                            </div>
-                        ) : (
-                            <div className="min-h-0 flex-1 overflow-y-auto">
-                                <DirectTextEditor
-                                    onSubmit={handleDirectSave}
-                                    defaultNotebookId={initialNotebookId || autoSelectedNotebookId || undefined}
-                                    defaultNotebookName={
-                                        (initialNotebookId || autoSelectedNotebookId)
-                                            ? notebooks.find(n => n.id === (initialNotebookId || autoSelectedNotebookId))?.name
-                                            : undefined
-                                    }
-                                    isSaving={analysisStep === 'saving'}
-                                />
-                            </div>
-                        )}
+                        </div>
                     </div>
                 )}
 
@@ -928,11 +736,6 @@ function HomeContent() {
 
             </div>
 
-            <BatchUploadDialog
-                open={isBatchOpen}
-                onClose={() => { setIsBatchOpen(false); setBatchFiles([]); }}
-                initialFiles={batchFiles}
-            />
         </main>
     );
 }
