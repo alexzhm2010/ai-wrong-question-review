@@ -34,7 +34,8 @@ function HomeContent() {
     const [step, setStep] = useState<"upload" | "review">("upload");
     const [analysisStep, setAnalysisStep] = useState<ProgressStatus>('idle');
     const [progress, setProgress] = useState(0);
-    const [parsedData, setParsedData] = useState<ParsedQuestion | null>(null);
+    // subjectId：按学科自动匹配/创建的错题本 id，随解析结果一起下发，保证归档不落空
+    const [parsedData, setParsedData] = useState<(ParsedQuestion & { subjectId?: string }) | null>(null);
     const [currentImage, setCurrentImage] = useState<string | null>(null);
     const [streamParsed, setStreamParsed] = useState<PartialParsed>({});
     const [isStreaming, setIsStreaming] = useState(false);
@@ -261,12 +262,14 @@ function HomeContent() {
 
             frontendLogger.info('[HomeAnalyze]', 'Step 4/5: Setting parsed data and auto-selecting notebook');
             const dataSize = JSON.stringify(data).length;
-            // 识别到学科就自动复用/新建对应错题本并选中
+            // 识别到学科就自动复用/新建对应错题本，并把选中的错题本直接写进结果，
+            // 避免编辑器挂载时 autoSelectedNotebookId 尚未生效导致学科落空、被手填错。
+            let subjectId: string | undefined;
             if (data.subject) {
-                await ensureNotebookForSubject(data.subject);
+                subjectId = await ensureNotebookForSubject(data.subject);
             }
             const setDataStart = Date.now();
-            setParsedData(data);
+            setParsedData(subjectId ? { ...data, subjectId } : data);
             const setDataDuration = Date.now() - setDataStart;
             frontendLogger.info('[HomeAnalyze]', 'Parsed data set successfully', {
                 dataSize,
@@ -375,7 +378,16 @@ function HomeContent() {
             return list.find(n => inferSubjectFromName(n.name) === key);
         };
 
-        const existing = findMatch(notebooks);
+        // 列表可能还没拉回来（分析比列表先完成），空列表会导致重复建同名错题本
+        let pool: { id: string; name: string }[] = notebooks;
+        if (!pool.length) {
+            try {
+                pool = await apiClient.get<Notebook[]>("/api/notebooks");
+                setNotebooks(pool);
+            } catch { /* 拉取失败则按空列表走创建流程 */ }
+        }
+
+        const existing = findMatch(pool);
         if (existing) {
             setAutoSelectedNotebookId(existing.id);
             return existing.id;
@@ -449,10 +461,8 @@ function HomeContent() {
             setCurrentImage(null);
             toast.success(t.common?.messages?.saveSuccess || 'Saved successfully!');
 
-            // Redirect to notebook page if subjectId is present
-            if (finalData.subjectId) {
-                router.push(`/notebook?id=${finalData.subjectId}`);
-            }
+            // 保存后回到首页「录入新题」界面（清掉 ?notebook= 参数），不再跳进学科错题本
+            router.replace("/");
         } catch (error: any) {
             frontendLogger.error('[HomeSave]', 'Save failed', {
                 errorStatus: error?.status,
@@ -491,6 +501,8 @@ function HomeContent() {
                 wrongAnswerText: string;
                 mistakeAnalysis: string;
                 mistakeStatus: string;
+                /** 服务端按题干+解析判定的学科（含证据校正） */
+                subject?: string;
             }>("/api/reanswer", {
                 questionText,
                 language,
@@ -508,19 +520,21 @@ function HomeContent() {
                 wrongAnswerText: result.wrongAnswerText || "",
                 mistakeAnalysis: result.mistakeAnalysis || "",
                 mistakeStatus: (result.mistakeStatus as any) || "unknown",
-                subject: "数学", // Default, will be overridden by notebook selection
+                // 学科由服务端按题干+解析判定，不再写死「数学」
+                subject: (result.subject as ParsedQuestion["subject"]) || "其他",
                 requiresImage: false,
             };
 
-            // 文字输入路径同样自动选好对应错题本，避免保存时卡在「请选择错题本」
+            // 文字输入路径同样自动选好对应错题本，并把选中的错题本写进结果
+            let subjectId: string | undefined;
             if (parsed.subject) {
-                await ensureNotebookForSubject(parsed.subject);
+                subjectId = await ensureNotebookForSubject(parsed.subject);
             }
 
             setCurrentImage(null); // No image for text input
             setIsStreaming(false);
             setStreamParsed({});
-            setParsedData(parsed);
+            setParsedData(subjectId ? { ...parsed, subjectId } : parsed);
             setStep("review");
 
             const totalDuration = Date.now() - startTime;
@@ -605,9 +619,8 @@ function HomeContent() {
             setAnalysisStep('idle');
             toast.success(t.common?.messages?.saveSuccess || 'Saved successfully!');
 
-            if (data.subjectId) {
-                router.push(`/notebook?id=${data.subjectId}`);
-            }
+            // 直接保存同样回首页「录入新题」，不跳学科错题本
+            router.replace("/");
         } catch (error: any) {
             frontendLogger.error('[HomeDirectSave]', 'Save failed', {
                 errorStatus: error?.status,

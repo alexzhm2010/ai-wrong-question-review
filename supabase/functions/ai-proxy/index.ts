@@ -9,6 +9,7 @@ import {
   withoutMistakeAnalysis, shouldStopGeneration,
 } from "./lib/response-guard.ts";
 import { deriveAnswerFromAnalysis, findConclusionExpr, answersEquivalent, intervals } from "./lib/answer-consistency.ts";
+import { resolveSubject } from "./lib/subject-resolve.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -22,8 +23,6 @@ const API_KEY = Deno.env.get("OPENAI_API_KEY") || "";
 // 主模型：火山引擎方舟（豆包），OpenAI 兼容端点。可用 OPENAI_* 秘密覆盖。
 const BASE_URL = Deno.env.get("OPENAI_BASE_URL") || "https://ark.cn-beijing.volces.com/api/v3";
 const MODEL = Deno.env.get("OPENAI_MODEL") || "doubao-seed-2-1-lite-260915";
-
-const VALID_SUBJECTS = ["数学", "物理", "化学", "生物", "英语", "语文", "历史", "地理", "政治", "其他"];
 
 function extractTag(text: string, tag: string) { return extractTagSafe(text, tag, tag === "analysis"); }
 
@@ -53,12 +52,20 @@ function parseResponse(text: string) {
   const knowledgePoints = pointsRaw
     ? pointsRaw.split(/[,，\n]/).map(k => k.trim()).filter(Boolean).slice(0, 5)
     : [];
+  // 学科：模型自报值只作弱提示，用题干+解析+知识点全文证据校正（避免「其他」误归档）
+  const subjectInfo = resolveSubject(subjectRaw || "", questionText, analysis, knowledgePoints);
+  if (subjectInfo.changed) {
+    console.log(
+      `[ai-proxy] subject corrected: tag="${subjectInfo.tag}" -> "${subjectInfo.subject}"`,
+      JSON.stringify(subjectInfo.scores),
+    );
+  }
   return withoutMistakeAnalysis({
     questionText, answerText, analysis,
     wrongAnswerText: mistake.wrongAnswerText,
     mistakeAnalysis: mistake.mistakeAnalysis,
     mistakeStatus: mistake.mistakeStatus,
-    subject: subjectRaw && VALID_SUBJECTS.includes(subjectRaw) ? subjectRaw : "其他",
+    subject: subjectInfo.subject,
     knowledgePoints,
     requiresImage: requiresImageRaw?.toLowerCase().trim() === "true",
     answerSource: derived.source,

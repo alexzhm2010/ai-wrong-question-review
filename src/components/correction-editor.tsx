@@ -64,7 +64,9 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
             wrongAnswerText: mistake.wrongAnswerText,
             mistakeAnalysis: mistake.mistakeAnalysis,
             mistakeStatus: mistake.mistakeStatus,
-            subjectId: initialSubjectId,
+            // 优先用解析结果里已经定好的错题本（后端按学科自动匹配/创建），
+            // 其次才用挂载后到达的 initialSubjectId，避免学科落空被手填错。
+            subjectId: (initialData as ParsedQuestionWithSubject).subjectId ?? initialSubjectId,
             gradeSemester: ""
         };
     });
