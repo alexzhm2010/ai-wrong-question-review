@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { ParsedQuestion } from "@/lib/ai";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Save, RefreshCw, Loader2, ChevronDown, ChevronUp } from "lucide-react";
+import { Save, RefreshCw, Loader2, ChevronDown, ChevronUp, AlertTriangle } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { frontendLogger } from "@/lib/frontend-logger";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
@@ -26,6 +26,7 @@ import { toast } from "@/lib/toast";
 import { GRADE_SEMESTER_OPTIONS, GRADE_SEMESTER_UNSET } from "@/lib/grade-options";
 import { fetchLastGradeSemester } from "@/lib/last-grade";
 import { reconcileMistakeFields, sanitizeMistakeText } from "@/lib/ai/response-guard";
+import { detectAnswerConflict } from "@/lib/answer-consistency";
 
 interface ParsedQuestionWithSubject extends ParsedQuestion {
     subjectId?: string;
@@ -74,6 +75,12 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
     const [geogebraError, setGeogebraError] = useState<string | null>(null);
     const [imageExpanded, setImageExpanded] = useState(false);
     const [mistakePreviewExpanded, setMistakePreviewExpanded] = useState(false);
+
+    // 参考答案与解析末尾结论的一致性守卫（首次解析、重新解题、历史错题统一生效）
+    const answerConflict = useMemo(
+        () => detectAnswerConflict(data.answerText, data.analysis),
+        [data.answerText, data.analysis],
+    );
 
     const [educationStage, setEducationStage] = useState<string | undefined>(undefined);
     const [notebooks, setNotebooks] = useState<Notebook[]>([]);
@@ -478,6 +485,30 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                             <CardTitle>{t.editor.preview?.answer || "参考答案"}</CardTitle>
                         </CardHeader>
                         <CardContent>
+                            {answerConflict.conflict && (
+                                <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                                    <div className="flex items-start gap-2">
+                                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                                        <div className="space-y-2">
+                                            <p className="font-medium">参考答案与解析末尾结论不一致</p>
+                                            <p className="text-xs text-amber-800">
+                                                AI 给出的「参考答案」是 {answerConflict.answerExpr}，但解析最后得到的结论是 {answerConflict.conclusionExpr}。请以解析推导为准，核对后再保存。
+                                            </p>
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className="border-amber-400 text-amber-900 hover:bg-amber-100"
+                                                onClick={() => {
+                                                    setData(prev => ({ ...prev, answerText: answerConflict.suggested }));
+                                                    toast.success("已采用解析末尾结论作为参考答案");
+                                                }}
+                                            >
+                                                采用解析结论 {answerConflict.suggested}
+                                            </Button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                             <MarkdownRenderer content={data.answerText} />
                         </CardContent>
                     </Card>

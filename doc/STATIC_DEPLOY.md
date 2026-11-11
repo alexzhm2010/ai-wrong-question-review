@@ -97,3 +97,15 @@ npx serve out            # 或任意静态服务器
 - `NEXT_PUBLIC_*` 值会内联进静态产物，属于**公开值**。数据隔离依赖 RLS，AI 厂商密钥依赖 Edge Function Secrets，切勿把 service_role key 或 AI API Key 放进 `NEXT_PUBLIC_*`。
 - 部署前确认 RLS 已对所有业务表启用，且 `anon` 角色没有越权策略。
 - 若更换 Supabase 项目，旧项目的数据需要自行导出迁移。
+
+## 8. 「参考答案」与「解析思路」结论不一致（v1.18.1）
+
+**现象**：一道题的「参考答案」写 `(1/2, 2]`，而「解析思路」分步推导到最后的「综上」得到 `[-1, 1/2)`。数学上后者正确，前者是把不等号方向写反后叠加定义域上限的结果。
+
+**根因**：`answerText` 与 `analysis` 是 AI 一次响应里两个**独立**字段。原提示词把 `<answer_text>` 排在 `<analysis>` 之前（先写结论、后推导），又要求「解析一次成型、结论写出后立即收尾、禁止追加复核段落」，导致模型在写答案时还没展开分情况讨论、反了号，之后也无法在解析里回头修正。前端把两个字段原样并列渲染，没有任何一致性校验。这与数据库权限、RLS 无关——数据库只是如实存了 AI 返回的两个矛盾字段。
+
+**前端兜底（已上线，无需任何额外权限）**：`src/lib/answer-consistency.ts` 保守地从解析末尾的总结句提取最终区间表达式，与答案比对；不一致时在「参考答案」卡片显示醒目告警，并提供「采用解析结论」按钮，由用户确认后一键替换（绝不静默覆盖）。检测只在「解析末尾能提取到明确结论」且「答案里的区间不在该结论里」时触发，宁可漏报不误报。首次解析、重新解题、打开历史错题都会生效。
+
+**根治（需要重新部署线上 `ai-proxy`）**：仓库里的 `supabase/functions/ai-proxy/index.ts` 已改成「单一真相源」——提示词要求模型在 `analysis` 末尾输出 `<final_answer>` 作为唯一结论、`answerText` 必须逐字复制它；服务端 `reconcileAnalysisResult()` 用该标签覆盖 `answerText` 并从解析正文移除标签。要把这份改动同步到线上，需要 Supabase 的**部署途径**（Supabase Dashboard 的 Edge Functions 编辑器，或 `supabase functions deploy ai-proxy` + Supabase access token）。
+
+> 注意：`sb_publishable_*` / anon key 是公开的**前端**密钥，本来就已内联在静态产物里。它能读公开配置，但不能写业务表、不能改提示词、更不能部署 Edge Function。重新部署需要 Supabase 账号的部署凭据（`sbp_...` access token）或直接在 Dashboard 操作，不是 publishable key。

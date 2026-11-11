@@ -79,9 +79,48 @@ function visionMessage(imageBase64?: string, instruction?: string): any[] {
 }
 
 const ANALYZE_PROMPT = `你是错题分析助手。识别题目图片或文字，输出且只输出一个 JSON 对象，字段：
-questionText(题干), answerText(正确答案与完整解析), analysis(解题思路), wrongAnswerText(学生错误作答，看不到则空),
+questionText(题干), answerText(正确答案), analysis(解题思路), wrongAnswerText(学生错误作答，看不到则空),
 mistakeAnalysis(错误原因), mistakeStatus(not_attempted|wrong_attempt|unknown),
-knowledgePoints(知识点字符串数组), subject(学科)。用中文回答。`;
+knowledgePoints(知识点字符串数组), subject(学科)。用中文回答。
+
+【最重要的输出纪律：答案与解析必须一致】
+1. 先在 analysis 里完整推导（定义域 → 化简 → 分情况讨论 → 取并集），不要先写结论。
+2. 推导结束后，在 analysis 末尾另起一行写 <final_answer>最终结论</final_answer>，
+   这是本题唯一的最终答案，必须包含完整的取值集合/区间（如 [-1, 1/2)）。
+3. answerText 必须逐字复制 <final_answer> 里的内容；禁止另算、禁止把不等号方向写反、
+   禁止只写某一种情况的中间范围。
+4. 若推导中发现前面判断有误，直接在 analysis 里改到正确路径，
+   <final_answer> 与 answerText 同时改成正确结论，不要保留旧值。`;
+
+/**
+ * 单一真相源：模型一次输出里的 answerText 与 analysis 偶尔会自相矛盾
+ * （典型症状：答案把不等号方向写反，解析末尾却推对了）。
+ * 提示词要求在 analysis 末尾用 <final_answer> 给出唯一结论，服务端用它覆盖
+ * answerText 并从解析正文移除该标签，保证界面上只出现一个结论。
+ * 没有该标签时保持原样，由前端一致性守卫兜底，避免误改。
+ */
+function normalizeExpr(s: string): string {
+  return s
+    .replace(/\\(?:d|t)?frac\{([^{}]*)\}\{([^{}]*)\}/g, "$1/$2")
+    .replace(/\\left|\\right|\\,|\\!/g, "")
+    .replace(/\\cup/g, "∪")
+    .replace(/\\in/g, "∈")
+    .replace(/\s+/g, "");
+}
+
+function reconcileAnalysisResult(result: any): any {
+  if (!result || typeof result !== "object") return result;
+  const analysis = String(result.analysis || "");
+  const tag = analysis.match(/<final_answer>\s*([\s\S]*?)\s*<\/final_answer>/i);
+  if (!tag) return result;
+  const finalAnswer = tag[1].trim();
+  result.analysis = analysis.replace(tag[0], "").trim();
+  if (finalAnswer && normalizeExpr(finalAnswer) !== normalizeExpr(String(result.answerText || ""))) {
+    result.answerText = finalAnswer;
+    result.answerReconciled = true;
+  }
+  return result;
+}
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: cors });
@@ -104,20 +143,20 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === "analyze") {
-      const result = extractJson(
+      const result = reconcileAnalysisResult(extractJson(
         await callAI(visionMessage(payload?.imageBase64, `${ANALYZE_PROMPT}\n补充要求：${payload?.language === "en" ? "Answer in English" : "用中文"}`), req.signal),
-      );
+      ));
       const body = sse({ type: "delta", content: "" }) + sse({ type: "done", result }) + sse({ type: "[DONE]" });
       return new Response(body, { headers: SSE_HEADERS });
     }
 
     if (action === "reanswer") {
-      const result = extractJson(
+      const result = reconcileAnalysisResult(extractJson(
         await callAI([
           { role: "system", content: ANALYZE_PROMPT },
           { role: "user", content: `请重新解答并核对下面的错题：\n${payload?.questionText || ""}\n学生上次作答：${payload?.wrongAnswerText || ""}` },
         ], req.signal),
-      );
+      ));
       return new Response(JSON.stringify({ success: true, ...result }), { headers: JSON_HEADERS });
     }
 
