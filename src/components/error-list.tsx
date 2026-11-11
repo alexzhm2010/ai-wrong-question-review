@@ -359,7 +359,7 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
                                     />
                                 </div>
                             )}
-                            <Link href={isSelectMode ? "#" : `/error-items/${item.id}`} onClick={(e) => isSelectMode && e.preventDefault()}>
+                            <Link href={isSelectMode ? "#" : `/item?id=${item.id}`} onClick={(e) => isSelectMode && e.preventDefault()}>
                                 <Card className="h-full hover:border-primary/50 transition-colors cursor-pointer gap-2 pt-4">
                                     <CardHeader className="pb-0">
                                         <div className="flex justify-between items-start">

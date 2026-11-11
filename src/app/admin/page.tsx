@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useSession } from "next-auth/react";
+import { useSession } from "@/lib/supabase/session";
 import { useRouter } from "next/navigation";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { apiClient } from "@/lib/api-client";
@@ -410,7 +410,7 @@ export default function AdminPage() {
                 <CardContent>
                     <UserTable
                         users={data.userStats}
-                        onViewDetail={(userId) => router.push(`/admin/user/${userId}`)}
+                        onViewDetail={(userId) => router.push(`/admin/user?id=${userId}`)}
                     />
                 </CardContent>
             </Card>

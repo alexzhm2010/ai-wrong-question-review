@@ -1,18 +1,8 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { BASE_PATH } from "@/lib/supabase/config";
 import "./globals.css";
 import { Providers } from "@/components/providers";
 import { PwaInstaller } from "@/components/pwa-installer";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
 
 export const viewport: Viewport = {
   themeColor: '#f97316',
@@ -34,8 +24,8 @@ export const metadata: Metadata = {
     telephone: false,
   },
   icons: {
-    icon: '/icons/icon.png',
-    apple: '/icons/icon.png',
+    icon: `${BASE_PATH}/icons/icon.png`,
+    apple: `${BASE_PATH}/icons/icon.png`,
   },
 };
 
@@ -47,7 +37,7 @@ export default function RootLayout({
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className="antialiased"
         suppressHydrationWarning={true}
       >
         <Providers>

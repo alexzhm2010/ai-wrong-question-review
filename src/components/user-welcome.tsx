@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 
 import { useLanguage } from "@/contexts/LanguageContext";
-import { useSession, signOut } from "next-auth/react";
+import { useSession, signOut } from "@/lib/supabase/session";
 import { Button } from "@/components/ui/button";
 import { LogOut, User } from "lucide-react";
 

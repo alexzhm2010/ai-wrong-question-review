@@ -17,7 +17,7 @@ import { Upload, BookOpen, Tags, LogOut, BarChart3, PenLine } from "lucide-react
 import { SettingsDialog } from "@/components/settings-dialog";
 import { BroadcastNotification } from "@/components/broadcast-notification";
 import { VersionBadge } from "@/components/version-badge";
-import { signOut } from "next-auth/react";
+import { signOut } from "@/lib/supabase/session";
 
 import type { ProgressStatus } from "@/components/ui/progress-feedback";
 import { TopProgressBar } from "@/components/top-progress-bar";
@@ -451,7 +451,7 @@ function HomeContent() {
 
             // Redirect to notebook page if subjectId is present
             if (finalData.subjectId) {
-                router.push(`/notebooks/${finalData.subjectId}`);
+                router.push(`/notebook?id=${finalData.subjectId}`);
             }
         } catch (error: any) {
             frontendLogger.error('[HomeSave]', 'Save failed', {
@@ -606,7 +606,7 @@ function HomeContent() {
             toast.success(t.common?.messages?.saveSuccess || 'Saved successfully!');
 
             if (data.subjectId) {
-                router.push(`/notebooks/${data.subjectId}`);
+                router.push(`/notebook?id=${data.subjectId}`);
             }
         } catch (error: any) {
             frontendLogger.error('[HomeDirectSave]', 'Save failed', {

@@ -77,7 +77,7 @@ export default function NotebooksPage() {
     };
 
     const handleNotebookClick = (id: string) => {
-        router.push(`/notebooks/${id}`);
+        router.push(`/notebook?id=${id}`);
     };
 
     if (loading) {

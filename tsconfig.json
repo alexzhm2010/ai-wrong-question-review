@@ -30,5 +30,9 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  // 以下目录不属于静态前端构建：
+  // - supabase/functions：Deno 运行时代码，由 Supabase CLI 单独部署
+  // - src/__tests__ / e2e：Vercel 版的服务端集成测试，依赖已移除的 API 路由
+  // - scripts：旧版数据库维护脚本（Prisma / 直连 PostgreSQL）
+  "exclude": ["node_modules", "supabase/functions", "src/__tests__", "e2e", "scripts"]
 }

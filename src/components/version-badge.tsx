@@ -1,4 +1,5 @@
 "use client";
+import { BASE_PATH } from "@/lib/supabase/config";
 
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -20,7 +21,7 @@ export function VersionBadge() {
 
     useEffect(() => {
         let active = true;
-        fetch(`/version.json?_=${Date.now()}`, { cache: "no-store" })
+        fetch(`${BASE_PATH}/version.json?_=${Date.now()}`, { cache: "no-store" })
             .then((r) => (r.ok ? r.json() : Promise.reject(new Error("bad status"))))
             .then((d: VersionInfo) => {
                 if (active) setInfo(d);

@@ -1,10 +1,11 @@
 {
   "name": "ai-wrong-question-review",
-  "version": "1.17.1-vercel-fullstack",
+  "version": "1.17.1",
   "private": true,
   "scripts": {
     "dev": "next dev -H 0.0.0.0",
     "build": "next build",
+    "pages:build": "next build && node scripts/prepare-pages.mjs",
     "start": "next start",
     "lint": "eslint src",
     "test": "vitest run",

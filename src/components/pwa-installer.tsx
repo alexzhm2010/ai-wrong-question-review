@@ -1,4 +1,5 @@
 "use client";
+import { BASE_PATH } from "@/lib/supabase/config";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
@@ -86,7 +87,7 @@ export function PwaInstaller() {
 
     useEffect(() => {
         if (process.env.NODE_ENV === "production" && "serviceWorker" in navigator) {
-            navigator.serviceWorker.register("/sw.js").catch(() => {
+            navigator.serviceWorker.register(`${BASE_PATH}/sw.js`).catch(() => {
                 // 注册失败不影响使用，退化为浏览器内访问
             });
         }
