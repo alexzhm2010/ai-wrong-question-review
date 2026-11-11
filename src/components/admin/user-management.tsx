@@ -129,7 +129,7 @@ export function UserManagement() {
                         <div className="flex justify-between items-start">
                             <div>
                                 <div className="font-medium">{user.name || "N/A"}</div>
-                                <div className="text-sm text-muted-foreground">{user.email}</div>
+                                <div className="text-sm text-muted-foreground">{user.username || user.email}</div>
                             </div>
                             <Badge variant={user.role === "admin" ? "default" : "secondary"}>
                                 {user.role === "admin" ? t.admin.admin : t.admin.user}
@@ -192,7 +192,7 @@ export function UserManagement() {
                             <TableRow key={user.id}>
                                 <TableCell>
                                     <div className="font-medium">{user.name || "N/A"}</div>
-                                    <div className="text-sm text-muted-foreground">{user.email}</div>
+                                    <div className="text-sm text-muted-foreground">{user.username || user.email}</div>
                                 </TableCell>
                                 <TableCell>
                                     <Badge variant={user.role === "admin" ? "default" : "secondary"}>

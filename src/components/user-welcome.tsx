@@ -18,7 +18,7 @@ export function UserWelcome() {
 
     // Server always renders 'User' (no session). Client matches this initially.
     // After mount, we show the real name.
-    const userName = mounted && session?.user ? (session.user.name || session.user.email) : 'User';
+    const userName = mounted && session?.user ? (session.user.name || session.user.username || session.user.email) : 'User';
 
     return (
         <div className="flex w-full min-w-0 items-center gap-2 rounded-lg border bg-card p-3 shadow-sm animate-in fade-in slide-in-from-top-4 duration-700 sm:w-auto sm:p-4">

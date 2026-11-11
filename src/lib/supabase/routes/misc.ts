@@ -98,14 +98,18 @@ async function handleRegister(ctx: RouteContext): Promise<Response | null> {
     return json({ enabled, allowRegistration: enabled });
   }
   if (ctx.parts.length === 1 && ctx.method === "POST") {
-    const { email, password, name } = ctx.body || {};
+    const { email, password, name, username } = ctx.body || {};
     const result = await rpc<any>("register_user", {
       p_email: email,
       p_password: password,
       p_name: name,
+      p_username: username,
     }).catch((e) => ({ success: false, error: e?.message || "注册失败" }));
     if (!result?.success) return apiError(400, result?.error || "注册失败");
-    return json({ user: { id: result.id, email: result.email }, message: "User created successfully" }, 201);
+    return json(
+      { user: { id: result.id, email: result.email, username: result.username }, message: "User created successfully" },
+      201,
+    );
   }
   return apiError(404, "Unknown register endpoint");
 }

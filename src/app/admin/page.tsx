@@ -227,7 +227,7 @@ function UserTable({ users, onViewDetail }: { users: AdminUserStats[]; onViewDet
                                         )}
                                     </div>
                                 </td>
-                                <td className="p-3 text-muted-foreground">{user.email}</td>
+                                <td className="p-3 text-muted-foreground">{user.username || user.email}</td>
                                 <td className="p-3 text-center">{user.notebookCount}</td>
                                 <td className="p-3 text-center font-medium">{user.errorCount}</td>
                                 <td className="p-3 text-center">{user.practiceCount}</td>
@@ -271,7 +271,7 @@ function UserTable({ users, onViewDetail }: { users: AdminUserStats[]; onViewDet
                                             <Badge variant="default" className="text-xs">{t.admin?.admin || "管理员"}</Badge>
                                         )}
                                     </div>
-                                    <div className="text-sm text-muted-foreground">{user.email}</div>
+                                    <div className="text-sm text-muted-foreground">{user.username || user.email}</div>
                                 </div>
                                 <div className="flex items-center gap-2">
                                     <Badge variant={user.isActive ? "default" : "destructive"} className="text-xs">

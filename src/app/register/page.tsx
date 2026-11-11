@@ -16,6 +16,7 @@ export default function RegisterPage() {
     const router = useRouter();
     const { t, language } = useLanguage();
     const [name, setName] = useState("");
+    const [username, setUsername] = useState("");
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [confirmPassword, setConfirmPassword] = useState("");
@@ -57,6 +58,7 @@ export default function RegisterPage() {
         try {
             await apiClient.post<any, RegisterRequest>("/api/register", {
                 name,
+                username,
                 email,
                 password,
                 educationStage,
@@ -135,6 +137,22 @@ export default function RegisterPage() {
                                 type="text"
                                 value={name}
                                 onChange={(e) => setName(e.target.value)}
+                                required
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <label htmlFor="username" className="text-sm font-medium">
+                                {t.auth?.username || '用户名'}
+                            </label>
+                            <Input
+                                id="username"
+                                name="username"
+                                type="text"
+                                autoComplete="username"
+                                placeholder={t.auth?.usernameHint || '2-32 位字母、数字、下划线、点或横线'}
+                                value={username}
+                                onChange={(e) => setUsername(e.target.value)}
+                                pattern="[A-Za-z0-9_.\-]{2,32}"
                                 required
                             />
                         </div>

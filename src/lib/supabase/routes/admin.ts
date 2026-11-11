@@ -8,7 +8,7 @@ async function handleAdmin(ctx: RouteContext): Promise<Response | null> {
 
   if (sub === "dashboard") {
     await requireAdmin();
-    const users = await restJson<any[]>("/User?select=id,email,name,role,createdAt").catch(() => []);
+    const users = await restJson<any[]>("/User?select=id,email,username,name,role,createdAt").catch(() => []);
     const items = await restJson<any[]>("/ErrorItem?select=id").catch(() => []);
     return json({ totalUsers: users.length, totalErrors: items.length, users });
   }
@@ -34,7 +34,7 @@ async function handleAdmin(ctx: RouteContext): Promise<Response | null> {
       if (ctx.method === "GET") {
         return json(
           await restJson<any[]>(
-            "/User?select=id,email,name,role,isActive,createdAt",
+            "/User?select=id,email,username,name,role,isActive,createdAt",
           ).catch(() => []),
         );
       }

@@ -399,6 +399,8 @@ export const translations = {
             },
             account: {
                 changePassword: "Change Password (Leave empty to keep)",
+                usernameHint: "Username is used to sign in. Contact an admin to change it.",
+                emailHint: "Email is only used for notifications, not for sign-in.",
                 update: "Update Profile",
             },
             ai: {
@@ -592,6 +594,8 @@ export const translations = {
         },
         auth: {
             email: "Email",
+            username: "Username",
+            usernameHint: "2-32 characters: letters, digits, underscore, dot or hyphen",
             password: "Password",
             confirmPassword: "Confirm Password",
             name: "Name",
@@ -1069,6 +1073,8 @@ export const translations = {
             },
             account: {
                 changePassword: "修改密码 (留空不修改)",
+                usernameHint: "用户名用于登录，如需修改请联系管理员",
+                emailHint: "邮箱仅用于通知，不用于登录",
                 update: "更新个人信息",
             },
             ai: {
@@ -1261,6 +1267,8 @@ export const translations = {
         },
         auth: {
             email: "邮箱",
+            username: "用户名",
+            usernameHint: "2-32 位字母、数字、下划线、点或横线",
             password: "密码",
             confirmPassword: "确认密码",
             name: "姓名",

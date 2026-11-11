@@ -15,6 +15,7 @@ export interface SessionUser {
   id: string;
   email: string;
   name?: string;
+  username?: string;
   role: string;
 }
 
@@ -152,6 +153,24 @@ export async function restJson<T = any>(path: string, init: RequestInit = {}): P
 /** 调用数据库函数（SECURITY DEFINER，用于注册/管理员操作） */
 export function rpc<T = any>(name: string, args: Record<string, unknown> = {}): Promise<T> {
   return restJson<T>(`/rpc/${name}`, { method: "POST", body: JSON.stringify(args) });
+}
+
+/**
+ * 登录标识（用户名或邮箱）→ 邮箱。
+ *
+ * Supabase Auth 只认邮箱，所以用户名登录先在库里换成邮箱再走密码流程。
+ * 函数 login_email 是 SECURITY DEFINER，未登录也可调用；查不到返回 null。
+ */
+export async function resolveLoginEmail(identifier: string): Promise<string> {
+  const value = identifier.trim();
+  if (!value) return "";
+  try {
+    const email = await rpc<string | null>("login_email", { p_identifier: value });
+    if (typeof email === "string" && email) return email;
+  } catch {
+    /* RPC 未部署时回退：按邮箱直登 */
+  }
+  return value.includes("@") ? value : "";
 }
 
 /* ----------------------------- Edge Functions ---------------------------- */

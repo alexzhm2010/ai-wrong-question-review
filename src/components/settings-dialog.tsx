@@ -50,6 +50,7 @@ function generateId(): string {
 
 interface ProfileFormState {
     name: string;
+    username: string;
     email: string;
     educationStage: string;
     enrollmentYear: string | number;
@@ -87,6 +88,7 @@ export function SettingsDialog() {
     // Profile State
     const [profile, setProfile] = useState<ProfileFormState>({
         name: "",
+        username: "",
         email: "",
         educationStage: "",
         enrollmentYear: "",
@@ -136,6 +138,7 @@ export function SettingsDialog() {
             const data = await apiClient.get<UserProfile>("/api/user");
             setProfile({
                 name: data.name || "",
+                username: data.username || "",
                 email: data.email || "",
                 educationStage: data.educationStage || "",
                 enrollmentYear: data.enrollmentYear || "",
@@ -225,7 +228,6 @@ export function SettingsDialog() {
 
             const payload: UpdateUserProfileRequest = {
                 name: profile.name,
-                email: profile.email,
                 educationStage: profile.educationStage,
             };
 
@@ -951,13 +953,20 @@ export function SettingsDialog() {
                                         />
                                     </div>
                                     <div className="space-y-2">
-                                        <Label>{t.auth?.email || "Email"}</Label>
-                                        <Input
-                                            value={profile.email || ""}
-                                            onChange={(e) => setProfile({ ...profile, email: e.target.value })}
-                                            type="email"
-                                        />
+                                        <Label>{t.auth?.username || "用户名"}</Label>
+                                        <Input value={profile.username || ""} readOnly disabled />
+                                        <p className="text-xs text-muted-foreground">
+                                            {t.settings?.account?.usernameHint || "用户名用于登录，如需修改请联系管理员"}
+                                        </p>
                                     </div>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <Label>{t.auth?.email || "邮箱"}</Label>
+                                    <Input value={profile.email || ""} readOnly disabled type="email" />
+                                    <p className="text-xs text-muted-foreground">
+                                        {t.settings?.account?.emailHint || "邮箱仅用于通知，不用于登录"}
+                                    </p>
                                 </div>
 
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

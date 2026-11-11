@@ -17,6 +17,7 @@ create table if not exists public."User" (
   id               text primary key,
   auth_uid         uuid unique references auth.users(id) on delete cascade,
   email            text unique not null,
+  username         text,
   password         text not null default '',
   name             text,
   "createdAt"      timestamptz not null default now(),
@@ -26,6 +27,10 @@ create table if not exists public."User" (
   role             text not null default 'user',
   "isActive"       boolean not null default true
 );
+
+-- 用户名：登录用；大小写不敏感唯一
+create unique index if not exists user_username_lower_key
+  on public."User" (lower(username)) where username is not null;
 
 -- ---------------------------- 学科 / 错题本 ----------------------------
 create table if not exists public."Subject" (
@@ -205,10 +210,11 @@ create policy quota_read on public.quota_snapshot for select to authenticated us
 create or replace function public.handle_new_auth_user()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
-  insert into public."User" (id, auth_uid, email, name, role, "isActive")
+  insert into public."User" (id, auth_uid, email, username, name, role, "isActive")
   values (
     'c' || replace(gen_random_uuid()::text, '-', ''),
     new.id, new.email,
+    coalesce(new.raw_user_meta_data->>'username', split_part(new.email, '@', 1)),
     coalesce(new.raw_user_meta_data->>'displayName', ''),
     'user', true
   ) on conflict (auth_uid) do nothing;
@@ -222,10 +228,20 @@ create trigger on_auth_user_created after insert on auth.users
 -- ------------------------------ RPC ------------------------------
 -- 注册：创建 Auth 用户后由上面的 trigger 生成 "User" 行。
 -- 现有项目已部署同名函数，这里给出等价实现以便迁移到新项目。
-create or replace function public.register_user(p_email text, p_password text, p_name text)
+create or replace function public.register_user(
+  p_email text, p_password text, p_name text default null, p_username text default null)
 returns json language plpgsql security definer set search_path = public, auth as $$
-declare v_uid uuid; v_id text;
+declare
+  v_uid uuid; v_id text;
+  v_username text := lower(btrim(coalesce(p_username, '')));
 begin
+  if v_username = '' then v_username := lower(split_part(p_email, '@', 1)); end if;
+  if v_username !~ '^[a-z0-9_.-]{2,32}$' then
+    return json_build_object('success', false, 'error', '用户名 2-32 位，仅支持字母、数字、下划线、点、横线');
+  end if;
+  if exists (select 1 from public."User" where lower(username) = v_username) then
+    return json_build_object('success', false, 'error', '该用户名已被占用');
+  end if;
   if exists (select 1 from auth.users where email = p_email) then
     return json_build_object('success', false, 'error', '该邮箱已注册');
   end if;
@@ -243,20 +259,27 @@ begin
     'authenticated', 'authenticated', p_email,
     crypt(p_password, gen_salt('bf')), now(),
     '{"provider":"email","providers":["email"]}'::jsonb,
-    jsonb_build_object('displayName', coalesce(p_name, '')),
+    jsonb_build_object('displayName', coalesce(p_name, ''), 'username', v_username),
     now(), now(), '', '', '', ''
   );
   select id into v_id from public."User" where auth_uid = v_uid;
-  return json_build_object('success', true, 'id', v_id, 'email', p_email);
+  update public."User" set username = v_username where id = v_id;
+  return json_build_object('success', true, 'id', v_id, 'email', p_email, 'username', v_username);
 end $$;
 
 create or replace function public.admin_create_user(
-  p_email text, p_password text, p_name text, p_role text default 'user')
+  p_email text, p_password text, p_name text default null, p_role text default 'user', p_username text default null)
 returns json language plpgsql security definer set search_path = public, auth as $$
-declare v_uid uuid; v_id text;
+declare
+  v_uid uuid; v_id text;
+  v_username text := lower(btrim(coalesce(p_username, '')));
 begin
   if not exists (select 1 from public."User" where auth_uid = auth.uid() and role = 'admin') then
     return json_build_object('success', false, 'error', 'Forbidden');
+  end if;
+  if v_username = '' then v_username := lower(split_part(p_email, '@', 1)); end if;
+  if exists (select 1 from public."User" where lower(username) = v_username) then
+    return json_build_object('success', false, 'error', '该用户名已被占用');
   end if;
   v_uid := gen_random_uuid();
   insert into auth.users (
@@ -269,12 +292,15 @@ begin
     'authenticated', 'authenticated', p_email,
     crypt(p_password, gen_salt('bf')), now(),
     '{"provider":"email","providers":["email"]}'::jsonb,
-    jsonb_build_object('displayName', coalesce(p_name, '')),
+    jsonb_build_object('displayName', coalesce(p_name, ''), 'username', v_username),
     now(), now(), '', '', '', ''
   );
-  update public."User" set role = coalesce(p_role, 'user') where auth_uid = v_uid;
+  update public."User"
+     set role = coalesce(p_role, 'user'), username = v_username
+   where auth_uid = v_uid;
   select id into v_id from public."User" where auth_uid = v_uid;
-  return json_build_object('success', true, 'id', v_id, 'email', p_email, 'role', coalesce(p_role, 'user'));
+  return json_build_object('success', true, 'id', v_id, 'email', p_email,
+                           'username', v_username, 'role', coalesce(p_role, 'user'));
 end $$;
 
 create or replace function public.admin_delete_user(p_target_user_id text)
@@ -302,7 +328,18 @@ begin
   return json_build_object('success', true, 'cleared', n);
 end $$;
 
-grant execute on function public.register_user(text,text,text) to anon, authenticated;
-grant execute on function public.admin_create_user(text,text,text,text) to authenticated;
+-- 登录名 → 邮箱（Supabase Auth 只认邮箱，前端先用它做一次映射）
+create or replace function public.login_email(p_identifier text)
+returns text language sql security definer set search_path = public as $$
+  select u.email from public."User" u
+   where u."isActive"
+     and (lower(u.username) = lower(btrim(coalesce(p_identifier, '')))
+          or lower(u.email) = lower(btrim(coalesce(p_identifier, ''))))
+   limit 1;
+$$;
+
+grant execute on function public.login_email(text) to anon, authenticated;
+grant execute on function public.register_user(text,text,text,text) to anon, authenticated;
+grant execute on function public.admin_create_user(text,text,text,text,text) to authenticated;
 grant execute on function public.admin_delete_user(text) to authenticated;
 grant execute on function public.reset_user_data() to authenticated;

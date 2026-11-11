@@ -81,7 +81,7 @@ export default function AdminUserDetailPage() {
                     </div>
                     <div>
                         <h1 className="text-xl font-bold">{data.user.name || "N/A"}</h1>
-                        <p className="text-sm text-muted-foreground">{data.user.email}</p>
+                        <p className="text-sm text-muted-foreground">{data.user.username || data.user.email}</p>
                     </div>
                     {data.user.role === "admin" && (
                         <Badge variant="default">{t.admin?.admin || "管理员"}</Badge>

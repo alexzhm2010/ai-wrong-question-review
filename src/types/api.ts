@@ -86,6 +86,7 @@ export type AnalyzeResponse = ParsedQuestion;
 export interface UserProfile {
     id: string;
     email: string;
+    username?: string | null;
     name?: string | null;
     educationStage?: string | null;
     enrollmentYear?: number | null;
@@ -243,6 +244,7 @@ export interface AdminUserStats {
     id: string;
     name: string | null;
     email: string;
+    username?: string | null;
     role: string;
     isActive: boolean;
     createdAt: string;
@@ -258,6 +260,7 @@ export interface AdminUserDetail {
         id: string;
         name: string | null;
         email: string;
+        username?: string | null;
         role: string;
         isActive: boolean;
         createdAt: string;
@@ -287,6 +290,7 @@ export interface AdminUserDetail {
 
 export interface RegisterRequest {
     name: string;
+    username: string;
     email: string;
     password: string;
     educationStage: string;

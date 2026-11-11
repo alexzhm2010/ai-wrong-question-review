@@ -14,6 +14,7 @@ import {
   setSession,
   invalidateAppUser,
   appUser,
+  resolveLoginEmail,
   type StaticSession,
 } from "./core";
 
@@ -21,6 +22,7 @@ export interface SessionUser {
   id: string;
   email: string;
   name?: string | null;
+  username?: string | null;
   role: string;
   image?: string | null;
 }
@@ -150,11 +152,16 @@ export async function signIn(
   if (provider !== "credentials" || !options.email || !options.password) {
     return { ok: false, error: "CredentialsSignin", status: 401, url: null };
   }
+  // 登录框收的是用户名；Supabase Auth 只认邮箱，先做一次映射
+  const loginEmail = await resolveLoginEmail(options.email);
+  if (!loginEmail) {
+    return { ok: false, error: "CredentialsSignin", status: 401, url: null };
+  }
   try {
     const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
       method: "POST",
       headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({ email: options.email, password: options.password }),
+      body: JSON.stringify({ email: loginEmail, password: options.password }),
     });
     const data = await res.json();
     if (!res.ok || !data.access_token) {
@@ -167,17 +174,20 @@ export async function signIn(
       token_type: data.token_type || "bearer",
       user: {
         id: data.user?.id || "",
-        email: data.user?.email || options.email,
+        email: data.user?.email || loginEmail,
         name: data.user?.user_metadata?.displayName || "",
+        username: data.user?.user_metadata?.username || "",
         role: "user",
       },
     };
     setSession(session);
     invalidateAppUser();
-    // 读出真实角色，保证管理员后台可用；失败时按普通用户处理
+    // 读出真实角色与用户名，保证管理员后台与界面展示可用
     try {
       const row = await appUser(true);
       if (row?.role) session.user.role = row.role;
+      if (row?.username) session.user.username = row.username;
+      if (!session.user.name && row?.name) session.user.name = row.name;
       setSession(session);
     } catch {
       /* RLS 未就绪时忽略 */
