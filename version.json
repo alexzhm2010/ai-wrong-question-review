@@ -1,6 +1,6 @@
 {
-  "version": "1.18.11-static",
-  "releasedAt": "2026-11-11T20:35:00+08:00",
-  "notes": "新增用户名登录：User 表增加 username（原 admin@localhost 的登录名改为 admin），登录框改用用户名，邮箱仅用于通知；注册与后台列表同步支持用户名。",
+  "version": "1.18.12-static",
+  "releasedAt": "2026-11-11T21:45:00+08:00",
+  "notes": "设置 → AI 新增「解析思考模式」：可选深度思考（默认）或快速（关闭思考）。快速模式首字从约 70 秒降到约 8 秒、单题费用约降 60%，但复杂题正确率会下降。",
   "channel": "github-pages"
 }
