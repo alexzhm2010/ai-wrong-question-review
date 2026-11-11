@@ -52,6 +52,7 @@ export async function savePublicConfig(next: Record<string, any>): Promise<void>
 export async function attachRelations(
   item: Record<string, any>,
   allTags?: any[],
+  allSubjects?: { id: string; name: string }[],
 ): Promise<Record<string, any>> {
   const tags = allTags || (await restJson<any[]>("/KnowledgeTag?select=*").catch(() => []));
   let linked: any[] = [];
@@ -63,10 +64,19 @@ export async function attachRelations(
   } catch {
     /* 关联表不可读时降级为空标签 */
   }
+  // subject 必须带 name：前端按 item.subject?.name 展示所属错题本，
+  // 只回 id 会导致明明已归档却显示成「未设置/未分类」。
+  let subject: { id: string; name?: string } | null = null;
+  if (item.subjectId) {
+    const pool = allSubjects
+      || (await restJson<any[]>("/Subject?select=id,name").catch(() => []));
+    const hit = pool.find((s) => s.id === item.subjectId);
+    subject = hit ? { id: hit.id, name: hit.name } : { id: item.subjectId };
+  }
   return {
     ...item,
     tags: linked,
-    subject: item.subjectId ? { id: item.subjectId } : null,
+    subject,
   };
 }
 

@@ -58,8 +58,12 @@ async function handleFixed(ctx: RouteContext, sub: string): Promise<Response | n
     );
     const offset = (page - 1) * pageSize;
     const allTags = await restJson<any[]>("/KnowledgeTag?select=*").catch(() => []);
+    // 一次取出学科名池，避免逐条再查
+    const allSubjects = await restJson<any[]>("/Subject?select=id,name").catch(() => []);
     return json({
-      items: await Promise.all(filtered.slice(offset, offset + pageSize).map((i) => attachRelations(i, allTags))),
+      items: await Promise.all(
+        filtered.slice(offset, offset + pageSize).map((i) => attachRelations(i, allTags, allSubjects)),
+      ),
       total: filtered.length,
       page,
       pageSize,
