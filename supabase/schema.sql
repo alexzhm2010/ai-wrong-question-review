@@ -343,3 +343,66 @@ grant execute on function public.register_user(text,text,text,text) to anon, aut
 grant execute on function public.admin_create_user(text,text,text,text,text) to authenticated;
 grant execute on function public.admin_delete_user(text) to authenticated;
 grant execute on function public.reset_user_data() to authenticated;
+
+-- ===========================================================================
+-- 批量导入（与 migrations/20261111_add_batch_import.sql 保持一致）
+-- 任务状态存库，worker 为 Edge Function batch-worker 自链式调用，与浏览器无关。
+-- ===========================================================================
+create table if not exists public."BatchJob" (
+  id             text primary key,
+  "userId"       text not null references public."User"(id) on delete cascade,
+  status         text not null default 'queued', -- queued|processing|confirming|paused|done|canceled
+  "reasoningMode" text not null default 'fast',
+  "totalCount"   int  not null default 0,
+  "doneCount"    int  not null default 0,
+  "failedCount"  int  not null default 0,
+  "savedCount"   int  not null default 0,
+  "heartbeatAt"  timestamptz,
+  "startedAt"    timestamptz,
+  "finishedAt"   timestamptz,
+  "errorMessage" text,
+  "createdAt"    timestamptz not null default now(),
+  "updatedAt"    timestamptz not null default now()
+);
+
+create table if not exists public."BatchItem" (
+  id              text primary key,
+  "jobId"         text not null references public."BatchJob"(id) on delete cascade,
+  "userId"        text not null references public."User"(id) on delete cascade,
+  idx             int  not null default 0,
+  status          text not null default 'pending', -- pending|processing|done|failed|saved
+  "imageBase64"   text not null default '',
+  "thumbBase64"   text,
+  "questionText"  text,
+  "answerText"    text,
+  analysis        text,
+  "subjectId"     text,
+  "subjectName"   text,
+  "gradeSemester" text,
+  "knowledgePoints" text,
+  "errorItemId"   text,
+  "failureReason" text,
+  attempts        int  not null default 0,
+  "autoDeepRetry" boolean not null default false,
+  "answerConflict" boolean not null default false,
+  "originalAnswerText" text,
+  "createdAt"     timestamptz not null default now(),
+  "updatedAt"     timestamptz not null default now()
+);
+
+create index if not exists batch_job_user_created_idx on public."BatchJob" ("userId", "createdAt" desc);
+create index if not exists batch_job_status_idx on public."BatchJob" (status);
+create index if not exists batch_item_job_idx on public."BatchItem" ("jobId", idx);
+
+alter table public."BatchJob" enable row level security;
+alter table public."BatchItem" enable row level security;
+
+drop policy if exists batch_job_owner on public."BatchJob";
+create policy batch_job_owner on public."BatchJob" for all to authenticated
+  using ("userId" = current_app_user_id() or is_admin())
+  with check ("userId" = current_app_user_id() or is_admin());
+
+drop policy if exists batch_item_owner on public."BatchItem";
+create policy batch_item_owner on public."BatchItem" for all to authenticated
+  using ("userId" = current_app_user_id() or is_admin())
+  with check ("userId" = current_app_user_id() or is_admin());

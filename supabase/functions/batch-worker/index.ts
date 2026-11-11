@@ -236,6 +236,21 @@ async function recount(jobId: string) {
   return { total: items.length, done, failed, saved };
 }
 
+/** 当前批次跑完后，把同账号排队最久的一批拉起来 */
+async function startNextQueued(userId: string, currentJobId: string): Promise<void> {
+  try {
+    const rows = await rest<any[]>(
+      `/BatchJob?select=id&userId=eq.${enc(userId)}&status=eq.queued&order=createdAt.asc&limit=1`,
+    );
+    const next = rows?.[0];
+    if (!next || next.id === currentJobId) return;
+    await patchJob(next.id, { status: "processing", startedAt: new Date().toISOString(), heartbeatAt: new Date().toISOString() });
+    selfInvoke(next.id);
+  } catch (e) {
+    console.error("[batch-worker] startNextQueued failed:", e);
+  }
+}
+
 async function runRound(jobId: string): Promise<{ processed: number; remaining: number; status: string }> {
   const jobRows = await rest<any[]>(`/BatchJob?select=*&id=eq.${enc(jobId)}&limit=1`);
   const job = jobRows?.[0];
@@ -333,6 +348,8 @@ async function runRound(jobId: string): Promise<{ processed: number; remaining: 
       savedCount: c.saved,
       totalCount: c.total,
     });
+    // 本批跑完 → 立刻拉起同账号排队中的下一批，否则它会一直停在 queued
+    await startNextQueued(job.userId, jobId);
     return { processed, remaining: 0, status: "confirming" };
   }
   // 先续上下一轮，再返回；waitUntil 保证响应结束后仍会发出请求
