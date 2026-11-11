@@ -106,12 +106,12 @@ export function ImageCropper({ imageSrc, open, onClose, onCropComplete }: ImageC
 
     return (
         <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-            <DialogContent className="left-0 top-0 flex h-[100dvh] max-h-none w-screen max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:rounded-none">
+            <DialogContent className="flex h-[90svh] max-h-[90svh] w-[calc(100vw_-_1rem)] max-w-[calc(100vw_-_1rem)] flex-col gap-0 overflow-hidden p-0 sm:w-full sm:max-w-3xl">
                 <DialogHeader className="shrink-0 border-b p-4 pr-12">
                     <DialogTitle>{t.common.cropper?.title || "Crop Image"}</DialogTitle>
                 </DialogHeader>
 
-                <div className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden bg-black p-3 sm:p-4">
+                <div className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden bg-black p-2 sm:p-4">
                     <ReactCrop
                         crop={crop}
                         onChange={(_, percentCrop) => setCrop(percentCrop)}
@@ -124,7 +124,7 @@ export function ImageCropper({ imageSrc, open, onClose, onCropComplete }: ImageC
                             alt="Crop me"
                             src={imageSrc}
                             onLoad={onImageLoad}
-                            style={{ maxWidth: '100%', maxHeight: 'calc(100dvh - 9.5rem)', display: 'block' }}
+                            style={{ maxWidth: '100%', maxHeight: 'calc(90svh - 12rem)', display: 'block' }}
                         />
                     </ReactCrop>
                 </div>
