@@ -1,9 +1,0 @@
-1:"$Sreact.fragment"
-2:I[47257,["/ai-wrong-question-review/_next/static/chunks/ff1a16fafef87110.js","/ai-wrong-question-review/_next/static/chunks/894700145f5af490.js"],"ClientPageRoot"]
-3:I[94655,["/ai-wrong-question-review/_next/static/chunks/195c216f52dae3f8.js","/ai-wrong-question-review/_next/static/chunks/70a25e5328551051.js","/ai-wrong-question-review/_next/static/chunks/3f00b0c35eb17485.js"],"default"]
-6:I[97367,["/ai-wrong-question-review/_next/static/chunks/ff1a16fafef87110.js","/ai-wrong-question-review/_next/static/chunks/894700145f5af490.js"],"OutletBoundary"]
-7:"$Sreact.suspense"
-0:{"buildId":"FpOaK4ZGXv6pACyHdDDOb","rsc":["$","$1","c",{"children":[["$","$L2",null,{"Component":"$3","serverProvidedParams":{"searchParams":{},"params":{},"promises":["$@4","$@5"]}}],[["$","script","script-0",{"src":"/ai-wrong-question-review/_next/static/chunks/3f00b0c35eb17485.js","async":true}]],["$","$L6",null,{"children":["$","$7",null,{"name":"Next.MetadataOutlet","children":"$@8"}]}]]}],"loading":null,"isPartial":false}
-4:{}
-5:"$0:rsc:props:children:0:props:serverProvidedParams:params"
-8:null

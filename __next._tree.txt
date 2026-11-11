@@ -1,5 +1,5 @@
-:HL["/ai-wrong-question-review/_next/static/chunks/52a12f620704f3fe.css","style"]
+:HL["/ai-wrong-question-review/_next/static/chunks/6016cdb000af13de.css","style"]
 :HC["/",""]
 :HL["/ai-wrong-question-review/_next/static/chunks/6f04dbb31b3b2afc.css","style"]
 :HL["/ai-wrong-question-review/_next/static/chunks/ef0b495c2229bec7.css","style"]
-0:{"buildId":"FpOaK4ZGXv6pACyHdDDOb","tree":{"name":"","paramType":null,"paramKey":"","hasRuntimePrefetch":false,"slots":{"children":{"name":"__PAGE__","paramType":null,"paramKey":"__PAGE__","hasRuntimePrefetch":false,"slots":null,"isRootLayout":false}},"isRootLayout":true},"staleTime":300}
+0:{"buildId":"LWPmkaHQUBHaUFdHpJu4w","tree":{"name":"","paramType":null,"paramKey":"","hasRuntimePrefetch":false,"slots":{"children":{"name":"__PAGE__","paramType":null,"paramKey":"__PAGE__","hasRuntimePrefetch":false,"slots":null,"isRootLayout":false}},"isRootLayout":true},"staleTime":300}
