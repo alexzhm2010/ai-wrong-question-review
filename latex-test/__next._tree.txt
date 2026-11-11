@@ -1,4 +1,4 @@
 :HL["/ai-wrong-question-review/_next/static/chunks/48163eaf29653f97.css","style"]
 :HC["/",""]
 :HL["/ai-wrong-question-review/_next/static/chunks/6f04dbb31b3b2afc.css","style"]
-0:{"buildId":"79KxllAmFJmmG0I39Z3iW","tree":{"name":"","paramType":null,"paramKey":"","hasRuntimePrefetch":false,"slots":{"children":{"name":"latex-test","paramType":null,"paramKey":"latex-test","hasRuntimePrefetch":false,"slots":{"children":{"name":"__PAGE__","paramType":null,"paramKey":"__PAGE__","hasRuntimePrefetch":false,"slots":null,"isRootLayout":false}},"isRootLayout":false}},"isRootLayout":true},"staleTime":300}
+0:{"buildId":"wiSbbr10tVB_PrNoSsVY1","tree":{"name":"","paramType":null,"paramKey":"","hasRuntimePrefetch":false,"slots":{"children":{"name":"latex-test","paramType":null,"paramKey":"latex-test","hasRuntimePrefetch":false,"slots":{"children":{"name":"__PAGE__","paramType":null,"paramKey":"__PAGE__","hasRuntimePrefetch":false,"slots":null,"isRootLayout":false}},"isRootLayout":false}},"isRootLayout":true},"staleTime":300}
