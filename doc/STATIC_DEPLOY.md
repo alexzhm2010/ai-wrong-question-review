@@ -98,7 +98,7 @@ npx serve out            # 或任意静态服务器
 - 部署前确认 RLS 已对所有业务表启用，且 `anon` 角色没有越权策略。
 - 若更换 Supabase 项目，旧项目的数据需要自行导出迁移。
 
-## 8. 「参考答案」与「解析思路」结论不一致（v1.18.1）
+## 8. 「参考答案」与「解析思路」结论不一致（前端 v1.18.1 + ai-proxy v3）
 
 **现象**：一道题的「参考答案」写 `(1/2, 2]`，而「解析思路」分步推导到最后的「综上」得到 `[-1, 1/2)`。数学上后者正确，前者是把不等号方向写反后叠加定义域上限的结果。
 
@@ -106,6 +106,19 @@ npx serve out            # 或任意静态服务器
 
 **前端兜底（已上线，无需任何额外权限）**：`src/lib/answer-consistency.ts` 保守地从解析末尾的总结句提取最终区间表达式，与答案比对；不一致时在「参考答案」卡片显示醒目告警，并提供「采用解析结论」按钮，由用户确认后一键替换（绝不静默覆盖）。检测只在「解析末尾能提取到明确结论」且「答案里的区间不在该结论里」时触发，宁可漏报不误报。首次解析、重新解题、打开历史错题都会生效。
 
-**根治（需要重新部署线上 `ai-proxy`）**：仓库里的 `supabase/functions/ai-proxy/index.ts` 已改成「单一真相源」——提示词要求模型在 `analysis` 末尾输出 `<final_answer>` 作为唯一结论、`answerText` 必须逐字复制它；服务端 `reconcileAnalysisResult()` 用该标签覆盖 `answerText` 并从解析正文移除标签。要把这份改动同步到线上，需要 Supabase 的**部署途径**（Supabase Dashboard 的 Edge Functions 编辑器，或 `supabase functions deploy ai-proxy` + Supabase access token）。
+**根治（已部署，2026-11-11）**：线上 `ai-proxy` 已从 **version 2 升级到 version 3**，`verify_jwt` 保持开启、匿名调用仍返回 401。
 
-> 注意：`sb_publishable_*` / anon key 是公开的**前端**密钥，本来就已内联在静态产物里。它能读公开配置，但不能写业务表、不能改提示词、更不能部署 Edge Function。重新部署需要 Supabase 账号的部署凭据（`sbp_...` access token）或直接在 Dashboard 操作，不是 publishable key。
+一个此前容易踩的坑：线上真实函数是**多文件结构**（`index.ts` + `lib/prompts.ts` + `lib/response-guard.ts` + `lib/mistake-status.ts`，提示词与输出护栏 100% 复用主仓库 `src/lib/ai`），而仓库里原先那份 `supabase/functions/ai-proxy/index.ts` 只是简化的单文件灾备副本，**两者不是同一份代码**。本次部署前先用 Management API 的 `Get a function body` 把线上 ESZIP 产物里的 `sourcesContent` 完整还原成源码，再基于线上真实版本做最小改动，避免覆盖掉线上已有的 `verifyUser()` 用户 JWT 校验。仓库的 `supabase/functions/ai-proxy/` 现已同步为线上真实版本（4 个文件），以后从仓库部署不会再有差异。
+
+改动只有两处：
+
+| 文件 | 改动 |
+|---|---|
+| `lib/prompts.ts` | `DEFAULT_ANALYZE_TEMPLATE` 与 `DEFAULT_REANSWER_TEMPLATE`：要求 `<analysis>` 末尾用 `<final_answer>` 写出唯一最终结论（必须含完整区间/解集），`<answer_text>` 必须逐字复制它；放宽原先「禁止回头改判 / 禁止复核」两条纪律中会把错误答案固化的部分 |
+| `index.ts` | `parseResponse()` 从解析里提取 `<final_answer>`，用它覆盖 `answerText`；标签本身由既有 `stripLeakedTags()` 剥离，正文只留结论；模型未输出该标签时保持原样，由前端一致性守卫兜底 |
+
+**安全降级**：不重排标签顺序（避免牵动作答判定段与流式截断逻辑），不静默猜测——只有模型明确给出 `<final_answer>` 时才覆盖，否则一律沿用原答案并靠前端告警提示人工确认。
+
+部署方式：`SUPABASE_ACCESS_TOKEN=<PAT> supabase functions deploy ai-proxy --project-ref sheoajxitvznnjlfyugq`。也可在 Dashboard → Edge Functions → `ai-proxy` 的编辑器里粘贴同样的改动后点 Deploy。
+
+> 注意：`sb_publishable_*` / anon key 是公开的**前端**密钥，本来就已内联在静态产物里。它能读公开配置，但不能写业务表、不能改提示词、更不能部署 Edge Function。重新部署需要 Supabase 账号的 **Personal Access Token**（当前 scoped token 前缀为 `sbp_fc...`，老的全权限 token 为 `sbp_...` 并被标记 Legacy），或直接在 Dashboard 操作。PAT 是账号级凭据，请在 Dashboard 里按最小权限（单项目 + `Edge Functions` Read-write）与短过期创建，用完立即撤销。

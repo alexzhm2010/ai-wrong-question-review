@@ -1,191 +1,287 @@
 /**
- * Supabase Edge Function：AI 统一代理（参考实现 / 新环境用）
- *
- * ⚠️ 线上现有 Supabase 项目已部署完整版 ai-proxy（昨天的改造包含它），
- *    重建后的前端直接调用即可，AI 分析、重新解题、练习生成等功能保持不变。
- *    本文件用于把项目迁移到全新 Supabase 项目时重新部署。
- *
- * 密钥只保存在 Supabase Edge Function Secrets 中，前端拿不到：
- *   AI_API_KEY / AI_BASE_URL / AI_MODEL（也兼容 OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL）
- *
- * 旧版前端 src/lib/stream-analyze.ts 消费 SSE：
- *   data: {"type":"delta","content":"..."}\n\n
- *   data: {"type":"done","result":{...}}\n\n
- * 因此 analyze 用 text/event-stream 返回，最小实现只发一条 done（结果完整，
- * 没有逐段打字动画）；如需流式，可把上游 SSE chunk 逐段转发为 delta。
+ * Supabase Edge Function：静态版 AI 代理。
+ * 百炼 API Key 只存在 EF secrets，浏览器永远拿不到。
+ * 提示词、逐句清洗、错因判定 100% 复用主仓库 src/lib/ai 的实现（lib/ 下为同源副本）。
  */
-const cors = {
+import { generateAnalyzePrompt, generateSimilarQuestionPrompt, generateGeogebraPrompt, generateReanswerPrompt } from "./lib/prompts.ts";
+import {
+  sanitizeBodyText, extractTagSafe, parseMistakeFieldsFromResponse,
+  withoutMistakeAnalysis, shouldStopGeneration,
+} from "./lib/response-guard.ts";
+
+const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const API_KEY = Deno.env.get("AI_API_KEY") || Deno.env.get("OPENAI_API_KEY") || "";
-const BASE_URL =
-  Deno.env.get("AI_BASE_URL") ||
-  Deno.env.get("OPENAI_BASE_URL") ||
-  "https://dashscope.aliyuncs.com/compatible-mode/v1";
-const MODEL =
-  Deno.env.get("AI_MODEL") || Deno.env.get("OPENAI_MODEL") || "qwen3-vl-plus";
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
+const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
+const API_KEY = Deno.env.get("OPENAI_API_KEY") || "";
+const BASE_URL = Deno.env.get("OPENAI_BASE_URL") || "https://dashscope.aliyuncs.com/compatible-mode/v1";
+const MODEL = Deno.env.get("OPENAI_MODEL") || "qwen3-vl-plus";
 
-const JSON_HEADERS = { ...cors, "Content-Type": "application/json" };
-const SSE_HEADERS = { ...cors, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" };
+const VALID_SUBJECTS = ["数学", "物理", "化学", "生物", "英语", "语文", "历史", "地理", "政治", "其他"];
 
-function sse(payload: unknown): string {
-  return `data: ${JSON.stringify(payload)}\n\n`;
+function extractTag(text: string, tag: string) { return extractTagSafe(text, tag, tag === "analysis"); }
+
+/** 与 src/lib/ai/openai-provider.ts#parseResponse 同源 */
+function parseResponse(text: string) {
+  const rawQuestion = extractTag(text, "question_text");
+  const rawAnswer = extractTag(text, "answer_text");
+  const rawAnalysis = extractTag(text, "analysis");
+  if (!rawQuestion || !rawAnswer || !rawAnalysis) {
+    throw new Error("Invalid AI response: Missing critical XML tags");
+  }
+  // 单一真相源：模型偶尔会把「参考答案」写错而解析末尾推对（典型症状是不等号方向写反）。
+  // 提示词要求解析末尾用 <final_answer> 给出唯一结论，此处用它覆盖参考答案；
+  // 标签本身由 sanitizeBodyText 的 stripLeakedTags 剥离，正文里只留下结论本身。
+  // 模型未输出该标签时保持原样，交由前端一致性守卫兜底，避免误改。
+  const finalTag = rawAnalysis.match(/<final_answer>\s*([\s\S]*?)\s*<\/final_answer>/i);
+  const finalAnswer = finalTag ? finalTag[1].trim() : '';
+  const questionText = sanitizeBodyText(rawQuestion);
+  const answerText = sanitizeBodyText(finalAnswer || rawAnswer);
+  const analysis = sanitizeBodyText(rawAnalysis);
+  const mistake = parseMistakeFieldsFromResponse(text, (t) => extractTag(text, t), answerText);
+  const subjectRaw = extractTag(text, "subject");
+  const pointsRaw = extractTag(text, "knowledge_points");
+  const requiresImageRaw = extractTag(text, "requires_image");
+  const knowledgePoints = pointsRaw
+    ? pointsRaw.split(/[,，\n]/).map(k => k.trim()).filter(Boolean).slice(0, 5)
+    : [];
+  return withoutMistakeAnalysis({
+    questionText, answerText, analysis,
+    wrongAnswerText: mistake.wrongAnswerText,
+    mistakeAnalysis: mistake.mistakeAnalysis,
+    mistakeStatus: mistake.mistakeStatus,
+    subject: subjectRaw && VALID_SUBJECTS.includes(subjectRaw) ? subjectRaw : "其他",
+    knowledgePoints,
+    requiresImage: requiresImageRaw?.toLowerCase().trim() === "true",
+  }, true);
 }
 
-async function callAI(messages: any[], signal?: AbortSignal): Promise<string> {
-  if (!API_KEY) throw new Error("AI_API_KEY 未配置（Supabase Edge Function Secrets）");
-  const res = await fetch(`${BASE_URL.replace(/\/$/, "")}/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${API_KEY}` },
-    body: JSON.stringify({ model: MODEL, messages, temperature: 0.2, max_tokens: 8192 }),
-    signal,
+async function verifyUser(req: Request): Promise<{ token: string; uid: string } | null> {
+  const auth = req.headers.get("Authorization") || "";
+  const token = auth.replace(/^Bearer\s+/i, "");
+  if (!token || token === ANON_KEY) return null;
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: { apikey: ANON_KEY, Authorization: `Bearer ${token}` },
   });
-  if (!res.ok) throw new Error(`上游 AI 返回 ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const data = await res.json();
-  return data?.choices?.[0]?.message?.content || "";
+  if (!res.ok) return null;
+  const u = await res.json();
+  return { token, uid: u.id };
 }
 
-/** 尽量从模型输出里取出 JSON 对象 */
-function extractJson(text: string): any {
-  const cleaned = text.replace(/^```(?:json)?/gim, "").replace(/```$/gim, "").trim();
+/** 从数据库读系统知识点标签，注入提示词（保持与全栈版一致的标签推荐能力） */
+async function prefetchedTags(token: string) {
+  const out: Record<string, string[]> = {
+    math: [], physics: [], chemistry: [], biology: [], english: [],
+  };
   try {
-    return JSON.parse(cleaned);
-  } catch {
-    const start = cleaned.indexOf("{");
-    const end = cleaned.lastIndexOf("}");
-    if (start >= 0 && end > start) {
-      try {
-        return JSON.parse(cleaned.slice(start, end + 1));
-      } catch {
-        /* ignore */
-      }
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/KnowledgeTag?select=name,subject&isSystem=eq.true&limit=3000`,
+      { headers: { apikey: ANON_KEY, Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) return out;
+    const rows: { name: string; subject: string }[] = await res.json();
+    for (const r of rows) {
+      const key = String(r.subject || "").toLowerCase();
+      if (key in out && out[key].length < 400) out[key].push(r.name);
     }
-    return { analysis: cleaned };
-  }
+  } catch { /* 标签获取失败不阻断解析 */ }
+  return out;
 }
 
-function visionMessage(imageBase64?: string, instruction?: string): any[] {
-  const content: any[] = [{ type: "text", text: instruction || "" }];
-  if (imageBase64) {
-    const dataUrl = imageBase64.startsWith("data:")
-      ? imageBase64
-      : `data:image/jpeg;base64,${imageBase64}`;
-    content.push({ type: "image_url", image_url: { url: dataUrl } });
-  }
-  return [{ role: "user", content }];
+/** 服务端防欠费：quota_snapshot 最新快照标记不可用则直接阻断 */
+async function quotaBlocked(token: string): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/quota_snapshot?select=*&order=captured_at.desc&limit=1`,
+      { headers: { apikey: ANON_KEY, Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) return false;
+    const rows = await res.json();
+    const r = rows?.[0];
+    return !!r && r.free_quota_expired === true && r.stop_when_free_expired !== false;
+  } catch { return false; }
 }
 
-const ANALYZE_PROMPT = `你是错题分析助手。识别题目图片或文字，输出且只输出一个 JSON 对象，字段：
-questionText(题干), answerText(正确答案), analysis(解题思路), wrongAnswerText(学生错误作答，看不到则空),
-mistakeAnalysis(错误原因), mistakeStatus(not_attempted|wrong_attempt|unknown),
-knowledgePoints(知识点字符串数组), subject(学科)。用中文回答。
+type ChatOptions = {
+  systemPrompt: string;
+  imageBase64?: string;
+  mimeType?: string;
+  userText?: string;
+  stream: boolean;
+  maxTokens?: number;
+  enableThinking?: boolean;
+  thinkingBudget?: number;
+  onDelta?: (s: string) => void;
+  signal?: AbortSignal;
+};
 
-【最重要的输出纪律：答案与解析必须一致】
-1. 先在 analysis 里完整推导（定义域 → 化简 → 分情况讨论 → 取并集），不要先写结论。
-2. 推导结束后，在 analysis 末尾另起一行写 <final_answer>最终结论</final_answer>，
-   这是本题唯一的最终答案，必须包含完整的取值集合/区间（如 [-1, 1/2)）。
-3. answerText 必须逐字复制 <final_answer> 里的内容；禁止另算、禁止把不等号方向写反、
-   禁止只写某一种情况的中间范围。
-4. 若推导中发现前面判断有误，直接在 analysis 里改到正确路径，
-   <final_answer> 与 answerText 同时改成正确结论，不要保留旧值。`;
+async function chat(opts: ChatOptions): Promise<string> {
+  if (!API_KEY) throw new Error("AI_NOT_CONFIGURED");
+  const messages: any[] = [{ role: "system", content: opts.systemPrompt }];
+  if (opts.imageBase64) {
+    messages.push({
+      role: "user",
+      content: [{ type: "image_url", image_url: { url: `data:${opts.mimeType || "image/jpeg"};base64,${opts.imageBase64}` } }],
+    });
+  } else {
+    messages.push({ role: "user", content: opts.userText || "" });
+  }
+  const body: any = {
+    model: MODEL,
+    messages,
+    max_tokens: opts.maxTokens ?? 8192,
+    stream: opts.stream,
+  };
+  if (BASE_URL.includes("dashscope") || MODEL.toLowerCase().includes("qwen3")) {
+    body.enable_thinking = opts.enableThinking ?? false;
+    if (body.enable_thinking) body.thinking_budget = opts.thinkingBudget ?? 4096;
+  }
+  if (opts.stream) body.stream_options = { include_usage: true };
 
-/**
- * 单一真相源：模型一次输出里的 answerText 与 analysis 偶尔会自相矛盾
- * （典型症状：答案把不等号方向写反，解析末尾却推对了）。
- * 提示词要求在 analysis 末尾用 <final_answer> 给出唯一结论，服务端用它覆盖
- * answerText 并从解析正文移除该标签，保证界面上只出现一个结论。
- * 没有该标签时保持原样，由前端一致性守卫兜底，避免误改。
- */
-function normalizeExpr(s: string): string {
-  return s
-    .replace(/\\(?:d|t)?frac\{([^{}]*)\}\{([^{}]*)\}/g, "$1/$2")
-    .replace(/\\left|\\right|\\,|\\!/g, "")
-    .replace(/\\cup/g, "∪")
-    .replace(/\\in/g, "∈")
-    .replace(/\s+/g, "");
+  const res = await fetch(`${BASE_URL}/chat/completions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: opts.signal,
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`AI_HTTP_${res.status}: ${t.slice(0, 300)}`);
+  }
+  if (!opts.stream) {
+    const j = await res.json();
+    return j.choices?.[0]?.message?.content || "";
+  }
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "", full = "";
+  const controller = new AbortController();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, idx).trim();
+      buffer = buffer.slice(idx + 1);
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (payload === "[DONE]") continue;
+      try {
+        const j = JSON.parse(payload);
+        const delta = j.choices?.[0]?.delta?.content || "";
+        if (delta) {
+          full += delta;
+          opts.onDelta?.(delta);
+          if (shouldStopGeneration(full)) { controller.abort(); await reader.cancel(); break; }
+        }
+      } catch { /* 忽略非 JSON 心跳 */ }
+    }
+    if (controller.signal.aborted) break;
+  }
+  return full;
 }
 
-function reconcileAnalysisResult(result: any): any {
-  if (!result || typeof result !== "object") return result;
-  const analysis = String(result.analysis || "");
-  const tag = analysis.match(/<final_answer>\s*([\s\S]*?)\s*<\/final_answer>/i);
-  if (!tag) return result;
-  const finalAnswer = tag[1].trim();
-  result.analysis = analysis.replace(tag[0], "").trim();
-  if (finalAnswer && normalizeExpr(finalAnswer) !== normalizeExpr(String(result.answerText || ""))) {
-    result.answerText = finalAnswer;
-    result.answerReconciled = true;
-  }
-  return result;
+function sseHeaders() {
+  return { ...CORS, "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" };
+}
+function json(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), { status, headers: { ...CORS, "Content-Type": "application/json" } });
 }
 
 Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: cors });
-  if (req.method !== "POST") {
-    return new Response(JSON.stringify({ error: "Method not allowed" }), { status: 405, headers: JSON_HEADERS });
+  if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
+  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
+
+  const user = await verifyUser(req);
+  if (!user) return json({ error: "Unauthorized" }, 401);
+
+  let action = "", payload: any = {};
+  try {
+    const body = await req.json();
+    action = body.action || "";
+    payload = body.payload || {};
+  } catch { return json({ error: "Invalid JSON" }, 400); }
+
+  if (action === "test") return json({ ok: true, model: MODEL, configured: !!API_KEY });
+  if (!API_KEY) return json({ error: "AI_NOT_CONFIGURED", message: "Edge Function 尚未配置 OPENAI_API_KEY" }, 503);
+
+  if (await quotaBlocked(user.token)) {
+    return json({ error: "AI_QUOTA_BLOCKED", message: "AI 额度已用尽或欠费，已自动阻断调用" }, 429);
   }
 
-  let action = "";
-  let payload: any = {};
-  try {
-    ({ action, payload } = await req.json());
-  } catch {
-    return new Response(JSON.stringify({ error: "Invalid JSON" }), { status: 400, headers: JSON_HEADERS });
-  }
+  const tags = await prefetchedTags(user.token);
+  const options = {
+    prefetchedMathTags: tags.math,
+    prefetchedPhysicsTags: tags.physics,
+    prefetchedChemistryTags: tags.chemistry,
+    prefetchedBiologyTags: tags.biology,
+    prefetchedEnglishTags: tags.english,
+  };
+  const language = payload.language === "en" ? "en" : "zh";
 
-  try {
-    if (action === "test") {
-      const text = await callAI([{ role: "user", content: "回复 OK 两个字母" }]);
-      return new Response(JSON.stringify({ ok: true, model: MODEL, reply: text.slice(0, 50) }), { headers: JSON_HEADERS });
-    }
+  // ---------------------------------------------------------------- 拍照识题（SSE）
+  if (action === "analyze") {
+    let imageBase64 = String(payload.imageBase64 || "");
+    let mimeType = "image/jpeg";
+    const m = imageBase64.match(/^data:([^;]+);base64,(.+)$/);
+    if (m) { mimeType = m[1]; imageBase64 = m[2]; }
+    if (!imageBase64) return json({ error: "Missing imageBase64" }, 400);
 
-    if (action === "analyze") {
-      const result = reconcileAnalysisResult(extractJson(
-        await callAI(visionMessage(payload?.imageBase64, `${ANALYZE_PROMPT}\n补充要求：${payload?.language === "en" ? "Answer in English" : "用中文"}`), req.signal),
-      ));
-      const body = sse({ type: "delta", content: "" }) + sse({ type: "done", result }) + sse({ type: "[DONE]" });
-      return new Response(body, { headers: SSE_HEADERS });
-    }
-
-    if (action === "reanswer") {
-      const result = reconcileAnalysisResult(extractJson(
-        await callAI([
-          { role: "system", content: ANALYZE_PROMPT },
-          { role: "user", content: `请重新解答并核对下面的错题：\n${payload?.questionText || ""}\n学生上次作答：${payload?.wrongAnswerText || ""}` },
-        ], req.signal),
-      ));
-      return new Response(JSON.stringify({ success: true, ...result }), { headers: JSON_HEADERS });
-    }
-
-    if (action === "geogebra_analyze" || action === "geogebra-analyze") {
-      const text = await callAI([
-        { role: "system", content: "只输出 GeoGebra 命令列表（每行一条），不适用则输出空字符串。" },
-        { role: "user", content: `题目：${payload?.questionText || payload?.previousErrors || ""}` },
-      ], req.signal);
-      const commands = text.trim();
-      return new Response(JSON.stringify({ commands, suitable: commands.length > 0 }), { headers: JSON_HEADERS });
-    }
-
-    if (action === "practice_generate") {
-      const result = extractJson(
-        await callAI([
-          { role: "system", content: "根据错题生成同类练习题，输出 JSON：{questions:[{questionText,answerText,analysis,difficulty}]}。" },
-          { role: "user", content: JSON.stringify(payload || {}) },
-        ], req.signal),
-      );
-      return new Response(JSON.stringify(result), { headers: JSON_HEADERS });
-    }
-
-    return new Response(JSON.stringify({ error: `Unknown action: ${action}` }), { status: 400, headers: JSON_HEADERS });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const body = sse({ type: "error", message });
-    return new Response(action === "analyze" ? body : JSON.stringify({ error: message }), {
-      status: 200,
-      headers: action === "analyze" ? SSE_HEADERS : JSON_HEADERS,
+    const subject = payload.subjectName || null;
+    const isMath = !!subject && String(subject).includes("数学");
+    const systemPrompt = generateAnalyzePrompt(
+      language, payload.grade ?? null, subject, options, payload.gradeSemester ?? null,
+    );
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const send = (obj: unknown) => {
+          try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`)); } catch { /* closed */ }
+        };
+        try {
+          const text = await chat({
+            systemPrompt, imageBase64, mimeType, stream: true,
+            enableThinking: isMath,
+            onDelta: (d) => send({ type: "delta", content: d }),
+          });
+          send({ type: "done", result: parseResponse(text) });
+        } catch (e) {
+          send({ type: "error", message: e instanceof Error ? e.message : String(e) });
+        } finally {
+          try { controller.close(); } catch { /* noop */ }
+        }
+      },
     });
+    return new Response(stream, { headers: sseHeaders() });
+  }
+
+  // ---------------------------------------------------------------- 其它 AI 动作
+  try {
+    if (action === "reanswer") {
+      const p = generateReanswerPrompt(language, payload.questionText || "", payload.subject || null, options, payload.gradeSemester ?? null);
+      const text = await chat({ systemPrompt: p, userText: payload.imageBase64 ? undefined : "请重新解答", stream: false });
+      return json({ ...parseResponse(text), finalResult: parseResponse(text) });
+    }
+    if (action === "geogebra_analyze") {
+      const p = generateGeogebraPrompt(payload.questionText || "", payload.answerText || "", payload.analysis || "", payload.previousErrors);
+      const text = await chat({ systemPrompt: p, userText: "生成 GeoGebra 命令", stream: false });
+      return json({ commands: text, result: text });
+    }
+    if (action === "practice_generate") {
+      const p = generateSimilarQuestionPrompt(
+        language, payload.originalQuestion || "", payload.knowledgePoints || [],
+        payload.difficulty || "medium", options, payload.gradeSemester ?? null,
+      );
+      const text = await chat({ systemPrompt: p, userText: "生成同类题", stream: false });
+      return json(parseResponse(text));
+    }
+    return json({ error: `Unknown action: ${action}` }, 400);
+  } catch (e) {
+    return json({ error: e instanceof Error ? e.message : String(e) }, 500);
   }
 });
