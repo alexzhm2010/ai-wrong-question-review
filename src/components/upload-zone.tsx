@@ -8,12 +8,14 @@ import { useLanguage } from "@/contexts/LanguageContext";
 
 interface UploadZoneProps {
     onImageSelect: (file: File) => void;  // 改为传递 File 对象
+    /** 一次选到多张时走批量导入；未提供则仍只取第一张 */
+    onImagesSelect?: (files: File[]) => void;
     isAnalyzing: boolean;
     /** 是否撑满父容器剩余高度（首页整屏布局使用） */
     fill?: boolean;
 }
 
-export function UploadZone({ onImageSelect, isAnalyzing, fill = false }: UploadZoneProps) {
+export function UploadZone({ onImageSelect, onImagesSelect, isAnalyzing, fill = false }: UploadZoneProps) {
     const { t } = useLanguage();
     useEffect(() => {
         // 请求通知权限
@@ -24,13 +26,16 @@ export function UploadZone({ onImageSelect, isAnalyzing, fill = false }: UploadZ
 
     const onDrop = useCallback(
         (acceptedFiles: File[]) => {
-            const file = acceptedFiles[0];
-            if (file) {
-                // 直接传递 File 对象，让父组件处理压缩
-                onImageSelect(file);
+            if (!acceptedFiles.length) return;
+            // 选到多张 = 用户想批量导入；单张仍走原来的逐题流程
+            if (acceptedFiles.length > 1 && onImagesSelect) {
+                onImagesSelect(acceptedFiles);
+                return;
             }
+            // 直接传递 File 对象，让父组件处理压缩
+            onImageSelect(acceptedFiles[0]);
         },
-        [onImageSelect]
+        [onImageSelect, onImagesSelect]
     );
 
     const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -38,7 +43,8 @@ export function UploadZone({ onImageSelect, isAnalyzing, fill = false }: UploadZ
         accept: {
             "image/*": [".jpeg", ".jpg", ".png"],
         },
-        maxFiles: 1,
+        maxFiles: onImagesSelect ? 30 : 1,
+        multiple: !!onImagesSelect,
         disabled: isAnalyzing,
     });
 

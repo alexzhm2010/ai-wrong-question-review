@@ -27,6 +27,8 @@ import { frontendLogger } from "@/lib/frontend-logger";
 import { toast } from "@/lib/toast";
 import { TextInputZone } from "@/components/text-input-zone";
 import { ThinkingModeToggle, useThinkingMode } from "@/components/thinking-mode-toggle";
+import { BatchBanner, BatchEntryButton } from "@/components/batch-banner";
+import { BatchUploadDialog } from "@/components/batch-upload-dialog";
 import { DirectTextEditor } from "@/components/direct-text-editor";
 import { streamAnalyze } from "@/lib/stream-analyze";
 import { inferSubjectFromName } from "@/lib/knowledge-tags";
@@ -69,6 +71,10 @@ function HomeContent() {
     // Cropper state
     const [croppingImage, setCroppingImage] = useState<string | null>(null);
     const [isCropperOpen, setIsCropperOpen] = useState(false);
+
+    // 批量导入：上传区一次选到多张时进入这里
+    const [batchFiles, setBatchFiles] = useState<File[]>([]);
+    const [isBatchOpen, setIsBatchOpen] = useState(false);
 
     // Timeout Config
     const aiTimeout = config?.timeouts?.analyze || 180000;
@@ -704,6 +710,7 @@ function HomeContent() {
                     <UserWelcome />
 
                     <div className="flex w-full items-center justify-between gap-1 rounded-lg border bg-card p-2 shadow-sm sm:w-auto sm:shrink-0 sm:justify-end sm:gap-2">
+                        <BatchEntryButton />
                         <BroadcastNotification />
                         <SettingsDialog />
                         <VersionBadge />
@@ -718,6 +725,8 @@ function HomeContent() {
                         </Button>
                     </div>
                 </div>
+
+                <BatchBanner />
 
                 {/* Action Center */}
                 <div className={initialNotebookId ? "flex shrink-0 justify-center" : "grid shrink-0 grid-cols-2 gap-2 sm:gap-4 md:grid-cols-4"}>
@@ -838,7 +847,15 @@ function HomeContent() {
 
                         {inputMode === "image" ? (
                             <div className="flex min-h-0 flex-1 flex-col">
-                                <UploadZone onImageSelect={onImageSelect} isAnalyzing={analysisStep !== 'idle'} fill />
+                                <UploadZone
+                                    onImageSelect={onImageSelect}
+                                    onImagesSelect={(files) => {
+                                        setBatchFiles(files);
+                                        setIsBatchOpen(true);
+                                    }}
+                                    isAnalyzing={analysisStep !== 'idle'}
+                                    fill
+                                />
                             </div>
                         ) : inputMode === "text" ? (
                             <div className="min-h-0 flex-1 overflow-y-auto">
@@ -894,6 +911,12 @@ function HomeContent() {
                 )}
 
             </div>
+
+            <BatchUploadDialog
+                open={isBatchOpen}
+                onClose={() => { setIsBatchOpen(false); setBatchFiles([]); }}
+                initialFiles={batchFiles}
+            />
         </main>
     );
 }

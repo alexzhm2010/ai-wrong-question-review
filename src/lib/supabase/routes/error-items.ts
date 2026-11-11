@@ -9,7 +9,7 @@ const ITEM_FIELDS = [
   "userNotes", "gradeSemester", "paperLevel", "subjectId",
 ];
 
-function buildItem(body: any, userId: string): Record<string, any> {
+export function buildItem(body: any, userId: string): Record<string, any> {
   const row: Record<string, any> = {
     id: cuid(),
     userId,
@@ -24,7 +24,7 @@ function buildItem(body: any, userId: string): Record<string, any> {
   return row;
 }
 
-async function linkTags(itemId: string, knowledgePoints: any[]): Promise<void> {
+export async function linkTags(itemId: string, knowledgePoints: any[]): Promise<void> {
   if (!knowledgePoints?.length) return;
   const allTags = await restJson<any[]>("/KnowledgeTag?select=id,name").catch(() => []);
   for (const kp of knowledgePoints) {

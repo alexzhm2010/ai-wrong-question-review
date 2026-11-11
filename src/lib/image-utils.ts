@@ -87,3 +87,25 @@ export async function processImageFile(file: File): Promise<string> {
     // 显著缩短 AI 分析耗时（手机直出照片常见 3000-4000px，直接上传会让模型预处理变慢）。
     return await compressImage(file, 1, 1600, 0.8);
 }
+
+/**
+ * 生成确认列表用的缩略图（默认长边 240px）。
+ * 列表页一次要渲染 30 张，直接塞 1600px 原图会把内存和滚动都拖垮。
+ */
+export async function makeThumbnail(base64: string, maxSize: number = 240): Promise<string> {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+            const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, Math.round(img.width * scale));
+            canvas.height = Math.max(1, Math.round(img.height * scale));
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return resolve('');
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            resolve(canvas.toDataURL('image/jpeg', 0.7).replace(/^data:[^;]+;base64,/, ''));
+        };
+        img.onerror = () => resolve('');
+        img.src = base64.startsWith('data:') ? base64 : `data:image/jpeg;base64,${base64}`;
+    });
+}

@@ -6,8 +6,10 @@ import { ERROR_ITEM_HANDLERS } from "./error-items";
 import { TAG_HANDLERS } from "./tags";
 import { PRACTICE_HANDLERS } from "./practice";
 import { ADMIN_HANDLERS } from "./admin";
+import { BATCH_HANDLERS } from "./batch";
 
 export const ROUTE_HANDLERS: RouteHandler[] = [
+  ...BATCH_HANDLERS,
   ...MISC_HANDLERS,
   ...NOTEBOOK_HANDLERS,
   ...ERROR_ITEM_HANDLERS,

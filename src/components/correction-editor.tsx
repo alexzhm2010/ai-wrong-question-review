@@ -42,6 +42,8 @@ interface CorrectionEditorProps {
     imagePreview?: string | null;
     initialSubjectId?: string;
     aiTimeout?: number;
+    /** 保存按钮文案覆盖：批量确认场景只是「保存修改」，不是直接入库 */
+    saveLabel?: string;
 }
 
 type ReanswerErrorMessages = {
@@ -51,7 +53,7 @@ type ReanswerErrorMessages = {
     responseError?: string;
 };
 
-export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, initialSubjectId, aiTimeout }: CorrectionEditorProps) {
+export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, initialSubjectId, aiTimeout, saveLabel }: CorrectionEditorProps) {
     // 重新解题同样按「这一题」的思考深度走，默认沿用首页选择
     const [thinkingMode, setThinkingMode] = useThinkingMode();
     const [data, setData] = useState<ParsedQuestionWithSubject>(() => {
@@ -308,7 +310,7 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                             ) : (
                                 <Save className="mr-2 h-4 w-4" />
                             )}
-                            {isSaving ? (t.common?.pleaseWait || "请稍候...") : t.editor.save}
+                            {isSaving ? (t.common?.pleaseWait || "请稍候...") : (saveLabel || t.editor.save)}
                         </Button>
                     </div>
                 </CardContent>
