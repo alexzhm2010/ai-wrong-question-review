@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { ParsedQuestion } from "@/lib/ai";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Save, RefreshCw, Loader2, ChevronDown, ChevronUp, AlertTriangle } from "lucide-react";
+import { Save, RefreshCw, Loader2, ChevronDown, ChevronUp } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { frontendLogger } from "@/lib/frontend-logger";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
@@ -26,7 +26,6 @@ import { toast } from "@/lib/toast";
 import { GRADE_SEMESTER_OPTIONS, GRADE_SEMESTER_UNSET } from "@/lib/grade-options";
 import { fetchLastGradeSemester } from "@/lib/last-grade";
 import { reconcileMistakeFields, sanitizeMistakeText } from "@/lib/ai/response-guard";
-import { detectAnswerConflict, type ModelVerdict } from "@/lib/answer-consistency";
 
 interface ParsedQuestionWithSubject extends ParsedQuestion {
     subjectId?: string;
@@ -76,13 +75,9 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
     const [imageExpanded, setImageExpanded] = useState(false);
     const [mistakePreviewExpanded, setMistakePreviewExpanded] = useState(false);
 
-    // 参考答案与解析末尾结论的一致性守卫（首次解析、重新解题、历史错题统一生效）
-    const answerConflict = useMemo(
-        () => detectAnswerConflict(data.answerText, data.analysis),
-        [data.answerText, data.analysis],
-    );
-
+    // 参考答案由后端经「反向代入验算」自动定夺，前端不再做答案/解析一致性的人工判断 UI。
     const [educationStage, setEducationStage] = useState<string | undefined>(undefined);
+
     const [notebooks, setNotebooks] = useState<Notebook[]>([]);
 
     // 错题本列表（学科推断）、学段（标签建议）、上次保存时用的年级
@@ -485,57 +480,6 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                             <CardTitle>{t.editor.preview?.answer || "参考答案"}</CardTitle>
                         </CardHeader>
                         <CardContent>
-                            {answerConflict.conflict && (
-                                <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-                                    <div className="flex items-start gap-2">
-                                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-                                        <div className="space-y-2">
-                                            <p className="font-medium">参考答案与解析推导结论不一致</p>
-                                            <p className="text-xs text-amber-800">
-                                                AI 给出的「参考答案」是 {answerConflict.answerExpr}，但解析推导得到的结论是 {answerConflict.conclusionExpr}。请以解析推导为准，核对后再保存。
-                                            </p>
-                                            <Button
-                                                variant="outline"
-                                                size="sm"
-                                                className="border-amber-400 text-amber-900 hover:bg-amber-100"
-                                                onClick={() => {
-                                                    setData(prev => ({ ...prev, answerText: answerConflict.suggested }));
-                                                    toast.success("已采用解析推导结论作为参考答案");
-                                                }}
-                                            >
-                                                采用解析结论 {answerConflict.suggested}
-                                            </Button>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-                            {(() => {
-                                const verdict = data.modelVerdict as ModelVerdict | undefined;
-                                if (!verdict) return null;
-                                if (verdict.needsReview) {
-                                    return (
-                                        <div className="mb-3 rounded-md border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900">
-                                            <div className="flex items-start gap-2">
-                                                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
-                                                <div className="space-y-1">
-                                                    <p className="font-medium">双模型交叉校验不一致，请人工复核</p>
-                                                    <p className="text-xs text-rose-800">主模型（{verdict.primaryModel}）参考答案：<span className="font-semibold">{verdict.primaryAnswer}</span></p>
-                                                    <p className="text-xs text-rose-800">第二模型（{verdict.secondaryModel}）参考答案：<span className="font-semibold">{verdict.secondaryAnswer}</span></p>
-                                                    <p className="text-xs text-rose-700">两者结论不同，已保留主模型结果。请核对后手动修改为正确参考答案再保存。</p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    );
-                                }
-                                if (verdict.enabled && verdict.agree) {
-                                    return (
-                                        <div className="mb-3 rounded-md border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-700">
-                                            双模型（{verdict.primaryModel} / {verdict.secondaryModel}）结论一致，信心较高；仍建议人工复核。
-                                        </div>
-                                    );
-                                }
-                                return null;
-                            })()}
                             <MarkdownRenderer content={data.answerText} />
                         </CardContent>
                     </Card>

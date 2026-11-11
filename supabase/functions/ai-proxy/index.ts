@@ -3,12 +3,12 @@
  * 百炼 API Key 只存在 EF secrets，浏览器永远拿不到。
  * 提示词、逐句清洗、错因判定 100% 复用主仓库 src/lib/ai 的实现（lib/ 下为同源副本）。
  */
-import { generateAnalyzePrompt, generateSimilarQuestionPrompt, generateGeogebraPrompt, generateReanswerPrompt } from "./lib/prompts.ts";
+import { generateAnalyzePrompt, generateSimilarQuestionPrompt, generateGeogebraPrompt, generateReanswerPrompt, generateVerifyPrompt } from "./lib/prompts.ts";
 import {
   sanitizeBodyText, extractTagSafe, parseMistakeFieldsFromResponse,
   withoutMistakeAnalysis, shouldStopGeneration,
 } from "./lib/response-guard.ts";
-import { deriveAnswerFromAnalysis, compareModelAnswers, type ModelVerdict } from "./lib/answer-consistency.ts";
+import { deriveAnswerFromAnalysis, findConclusionExpr, answersEquivalent } from "./lib/answer-consistency.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -22,24 +22,9 @@ const API_KEY = Deno.env.get("OPENAI_API_KEY") || "";
 const BASE_URL = Deno.env.get("OPENAI_BASE_URL") || "https://dashscope.aliyuncs.com/compatible-mode/v1";
 const MODEL = Deno.env.get("OPENAI_MODEL") || "qwen3-vl-plus";
 
-// 第二模型（方案 B 交叉校验用）。默认 Gemini 2.5 Flash：与 Qwen 不同厂商、
-// 免费档（Google AI Studio）、支持视觉，走 OpenAI 兼容协议。未配置密钥则单模型模式。
-const SECONDARY_API_KEY = Deno.env.get("OPENAI2_API_KEY") || "";
-const SECONDARY_BASE_URL = Deno.env.get("OPENAI2_BASE_URL") || "https://generativelanguage.googleapis.com/v1beta/openai";
-const SECONDARY_MODEL = Deno.env.get("OPENAI2_MODEL") || "gemini-2.5-flash";
-
 const VALID_SUBJECTS = ["数学", "物理", "化学", "生物", "英语", "语文", "历史", "地理", "政治", "其他"];
 
 function extractTag(text: string, tag: string) { return extractTagSafe(text, tag, tag === "analysis"); }
-
-/** 单模型原始标签（供双模型比对时各自独立取答案/解析） */
-function rawTags(text: string) {
-  const analysis = extractTag(text, "analysis") || "";
-  const answerText = extractTag(text, "answer_text") || "";
-  const m = text.match(/<final_answer>\s*([\s\S]*?)\s*<\/final_answer>/i);
-  const finalAnswer = m ? m[1].trim() : "";
-  return { analysis, answerText, finalAnswer };
-}
 
 /** 与 src/lib/ai/openai-provider.ts#parseResponse 同源 */
 function parseResponse(text: string) {
@@ -49,10 +34,10 @@ function parseResponse(text: string) {
   if (!rawQuestion || !rawAnswer || !rawAnalysis) {
     throw new Error("Invalid AI response: Missing critical XML tags");
   }
-  // 单一真相源：不再无条件采信 AI 第二次独立输出的 <final_answer>。
-  // 模型把答案写两遍时，第二遍可能抄错端点/开闭（(1/2,2]、(-1/2,1/2] 两次事故
-  // 同源），而解析正文的推导往往是对的。改为从解析正文确定性提取结论并交叉校验，
-  // 冲突时以解析结论为准；非区间答案或提取不到结论时一律保持模型原值。
+  // 单一真相源 = 模型提交的答案（<final_answer> 或 answer_text），全篇只此一份。
+  // 解析正文里的「结论区间」仅用于冲突检测，绝不反向覆盖已提交答案：
+  // 覆盖会在两种情况下翻车——提交答案对但解析末尾改口成错（本次事故），或反之（旧问题）。
+  // 故 deriveAnswerFromAnalysis 永不自动覆盖，冲突只上报告警交人工裁决。
   // <final_answer> 标签由 sanitizeBodyText 的 stripLeakedTags 剥离。
   const finalTag = rawAnalysis.match(/<final_answer>\s*([\s\S]*?)\s*<\/final_answer>/i);
   const finalAnswer = finalTag ? finalTag[1].trim() : '';
@@ -144,12 +129,6 @@ type ChatOptions = {
   creds?: ChatCreds;
 };
 
-/** 第二模型凭证；未配置密钥返回 null（退化单模型） */
-function getSecondaryCreds(): ChatCreds | null {
-  if (!SECONDARY_API_KEY) return null;
-  return { apiKey: SECONDARY_API_KEY, baseUrl: SECONDARY_BASE_URL, model: SECONDARY_MODEL };
-}
-
 async function chat(opts: ChatOptions): Promise<string> {
   const creds = opts.creds ?? { apiKey: API_KEY, baseUrl: BASE_URL, model: MODEL };
   if (!creds.apiKey) throw new Error("AI_NOT_CONFIGURED");
@@ -219,6 +198,83 @@ async function chat(opts: ChatOptions): Promise<string> {
   return full;
 }
 
+/**
+ * 从模型原始输出抽取「参考答案」的两个候选：
+ *  - tagAnswer：模型标签 <answer_text> / <analysis> 末尾 <final_answer> 里写的值
+ *    （历史事故正是它常与正文不一致、且被旧代码「冒昧」直接当作答案）
+ *  - bodyConclusion：解析正文推理得出的结论（findConclusionExpr 从全文确定性提取，
+ *    刻意排除 <final_answer> 标签，只认推理正文）
+ */
+function extractAnswerCandidates(primaryText: string): { tagAnswer: string; bodyConclusion: string } {
+  const rawAnalysis = extractTag(primaryText, "analysis") || "";
+  const tagAnswerRaw = extractTag(primaryText, "answer_text") || "";
+  const finalMatch = rawAnalysis.match(/<final_answer>\s*([\s\S]*?)\s*<\/final_answer>/i);
+  const tagAnswer = sanitizeBodyText(((finalMatch && finalMatch[1]) || tagAnswerRaw || "").trim());
+  const bodyConclusion = findConclusionExpr(rawAnalysis);
+  return { tagAnswer, bodyConclusion };
+}
+
+/**
+ * 反向代入验算：给定原题与两个候选答案，让模型只做「代入检验」不做解题，
+ * 通过边界点/内部点/外部反例点逐一代入原条件，判断哪个候选正确。
+ * 输入不含任何「哪个更可信」的引导，避免模型迁就标签。返回验算后的正确值（空串=无结论）。
+ */
+async function verifyAnswerViaSubstitution(
+  questionText: string,
+  bodyConclusion: string,
+  tagAnswer: string,
+  language: string,
+): Promise<string> {
+  const prompt = generateVerifyPrompt(questionText, bodyConclusion, tagAnswer, language);
+  const text = await chat({
+    systemPrompt: prompt,
+    userText: "请完成反向代入验算，并只输出 <verified> 与 <reason> 两个标签。",
+    stream: false,
+    enableThinking: false,
+  });
+  const m = text.match(/<verified>\s*([\s\S]*?)\s*<\/verified>/i);
+  return m ? m[1].trim() : "";
+}
+
+/**
+ * 决定「参考答案」最终填入的值（取数可信度核心逻辑）。
+ * 决策顺序：
+ *  1. 标签答案与正文推理结论一致 → 直接采用（无需额外验算）；
+ *  2. 不一致 → 发起独立「反向代入验算」，由验算结果定夺；
+ *  3. 验算无结论/失败 → 优先信任「正文推理结论」而非标签
+ *     （修复此前冒昧采信错误标签值、正文结论被闲置的问题）；
+ *  4. 纯文字论述题等无区间答案 → 优先采用正文结论（或标签）。
+ */
+async function decideReferenceAnswer(
+  primaryText: string,
+  parsed: ReturnType<typeof parseResponse>,
+  payload: any,
+  language: string,
+): Promise<{ answerText: string; verified: boolean; reason: string }> {
+  const { tagAnswer, bodyConclusion } = extractAnswerCandidates(primaryText);
+  const fallback = () => {
+    const text = bodyConclusion || tagAnswer || parsed.answerText;
+    return { answerText: sanitizeBodyText(text), verified: false, reason: bodyConclusion ? "fallback_to_analysis" : "" };
+  };
+  // 仅区间类答案才需要验算；两者等价直接采用正文结论（与标签一致）。
+  if (!bodyConclusion || !tagAnswer || answersEquivalent(bodyConclusion, tagAnswer)) {
+    return fallback();
+  }
+  // 不一致 → 反向代入验算（同模型独立一次调用，只看原题、不泄露答案归属）
+  try {
+    const verified = await verifyAnswerViaSubstitution(
+      parsed.questionText, bodyConclusion, tagAnswer, language,
+    );
+    if (verified) {
+      return { answerText: sanitizeBodyText(verified), verified: true, reason: "reverse_substitution" };
+    }
+  } catch (e) {
+    console.error("[ai-proxy] verify (reverse substitution) failed:", e);
+  }
+  // 验算无结论时，优先信任正文推理结论（不再冒昧采信标签错误值）
+  return fallback();
+}
+
 function sseHeaders() {
   return { ...CORS, "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" };
 }
@@ -240,7 +296,7 @@ Deno.serve(async (req: Request) => {
     payload = body.payload || {};
   } catch { return json({ error: "Invalid JSON" }, 400); }
 
-  if (action === "test") return json({ ok: true, model: MODEL, configured: !!API_KEY, dualEnabled: !!SECONDARY_API_KEY, secondaryModel: SECONDARY_MODEL });
+  if (action === "test") return json({ ok: true, model: MODEL, configured: !!API_KEY });
   if (!API_KEY) return json({ error: "AI_NOT_CONFIGURED", message: "Edge Function 尚未配置 OPENAI_API_KEY" }, 503);
 
   if (await quotaBlocked(user.token)) {
@@ -271,7 +327,6 @@ Deno.serve(async (req: Request) => {
       language, payload.grade ?? null, subject, options, payload.gradeSemester ?? null,
     );
     const encoder = new TextEncoder();
-    const secondaryCreds = getSecondaryCreds();
     const stream = new ReadableStream({
       async start(controller) {
         const send = (obj: unknown) => {
@@ -283,40 +338,28 @@ Deno.serve(async (req: Request) => {
           enableThinking: isMath,
           onDelta: (d) => send({ type: "delta", content: d }),
         });
-        // 第二模型：非流式、与主模型并行；失败仅记日志，不影响主结果。
-        const secondaryPromise = secondaryCreds
-          ? chat({
-              systemPrompt, imageBase64, mimeType, stream: false,
-              creds: secondaryCreds, enableThinking: false,
-            }).catch((e) => {
-              console.error("[ai-proxy] secondary model failed:", e instanceof Error ? e.message : String(e));
-              return null;
-            })
-          : Promise.resolve(null);
         let primaryText: string;
-        let secondaryText: string | null = null;
         try {
-          [primaryText, secondaryText] = await Promise.all([primaryPromise, secondaryPromise]);
+          primaryText = await primaryPromise;
         } catch (e) {
           send({ type: "error", message: e instanceof Error ? e.message : String(e) });
           return;
         }
         try {
           const result = parseResponse(primaryText);
-          let modelVerdict: ModelVerdict | undefined;
-          if (secondaryText) {
-            try {
-              modelVerdict = compareModelAnswers({
-                primaryRaw: rawTags(primaryText),
-                secondaryRaw: rawTags(secondaryText),
-                primaryModel: MODEL,
-                secondaryModel: secondaryCreds!.model,
-              });
-            } catch (e) {
-              console.error("[ai-proxy] verdict compare failed:", e);
-            }
-          }
-          send({ type: "done", result: { ...result, modelVerdict } });
+          // —— 参考答案取数可信度：反向代入验算后再决定填入哪个值 ——
+          // 不再默认直接采信 <answer_text> 标签；以「正文推理结论」为第一候选，
+          // 当其与标签答案不一致时发起独立反向代入验算，由验算结果定夺。
+          const decided = await decideReferenceAnswer(primaryText, result, payload, language);
+          send({
+            type: "done",
+            result: {
+              ...result,
+              answerText: decided.answerText,
+              answerVerified: decided.verified,
+              answerReason: decided.reason,
+            },
+          });
         } catch (e) {
           send({ type: "error", message: e instanceof Error ? e.message : String(e) });
         } finally {
