@@ -1,6 +1,6 @@
 {
-  "version": "1.18.1-static",
-  "releasedAt": "2026-11-11T13:20:00+08:00",
-  "notes": "修复「参考答案」与「解析思路」末尾结论不一致：新增前端一致性守卫（提示 + 一键采用解析结论），并在 ai-proxy 参考实现中加入单一真相源。",
+  "version": "1.18.2-static",
+  "releasedAt": "2026-11-11T15:00:00+08:00",
+  "notes": "修复 Markdown 渲染吞掉 \\notin 等 LaTeX 命令（显示为 3otin）；收敛 AI 解析的自我复盘口吻，改为按结构一次成型；同步前端与 Edge Function 两份提示词模板。",
   "channel": "github-pages"
 }
