@@ -122,3 +122,22 @@ npx serve out            # 或任意静态服务器
 部署方式：`SUPABASE_ACCESS_TOKEN=<PAT> supabase functions deploy ai-proxy --project-ref sheoajxitvznnjlfyugq`。也可在 Dashboard → Edge Functions → `ai-proxy` 的编辑器里粘贴同样的改动后点 Deploy。
 
 > 注意：`sb_publishable_*` / anon key 是公开的**前端**密钥，本来就已内联在静态产物里。它能读公开配置，但不能写业务表、不能改提示词、更不能部署 Edge Function。重新部署需要 Supabase 账号的 **Personal Access Token**（当前 scoped token 前缀为 `sbp_fc...`，老的全权限 token 为 `sbp_...` 并被标记 Legacy），或直接在 Dashboard 操作。PAT 是账号级凭据，请在 Dashboard 里按最小权限（单项目 + `Edge Functions` Read-write）与短过期创建，用完立即撤销。
+
+## 9. LaTeX 反斜杠被吞 + 解析行文啰嗦（v1.18.2，2026-11-11）
+
+**现象 A**：解析里出现 `3otin[-2,2]`，本意是 `$3 \notin [-2,2]$`。
+
+**根因**：`src/components/markdown-renderer.tsx` 为了把 AI 偶发返回的字面 `\n` 转成真实换行，做了 `.replace(/\\n/g, '\n')`。但 `\notin`、`\neq`、`\nabla`、`\nsubseteq` 等 LaTeX 命令都以 `\n` 开头，反斜杠被吃掉后就变成 `otin` / `eq` / `abla`。
+
+**修复**：新增纯函数 `src/lib/markdown-preprocess.ts`。先把 `$...$` / `$$...$$` 数学区整体暂存为占位符，等所有基于换行的段落归一化规则跑完再原样还原；数学区外仍处理字面 `\n`，但用 `(?![a-zA-Z])` 保护未包裹的 LaTeX 命令。顺带修正了旧「紧贴中文补空格」正则会把相邻两个公式之间的正文误配成定界符的问题（改为按真实公式边界逐个判断）。单测 `src/__tests__/unit/markdown-preprocess.test.ts` 覆盖真实案例、多命令、字面 `\n` 回归、块级公式、紧贴定界符等 11 项。
+
+**现象 B**：解析里出现「等等——这里有个关键遗漏！」「但注意！」「但还需验证」「当 $m=-2$ 呢？」这类边想边改的自我复盘口吻。这是上一版为避免固化错误答案而放宽「禁止复核」纪律后的副作用——模型把端点核验、定义域检查写成了事后补记和设问。
+
+**修复**：两份提示词模板（`src/lib/ai/prompts.ts` 设置页默认值、`supabase/functions/ai-proxy/lib/prompts.ts` 线上函数）同步改为：
+
+- 自检改为**静默完成**，其结果直接写成解析里的常规推导步骤；
+- 新增【解析行文结构】：前提 → 分步推导 → 边界核验（陈述句）→ `<final_answer>` 结论，一次成型；
+- 输出纪律新增口语化转折 / 自问自答禁用清单，并明确 `<final_answer>` 之后不得再有任何文字；
+- 保留「发现判断有误时静默改到正确路径并同步修正 `<final_answer>`」的纠错能力，**不固化错误答案**。
+
+两份文件现已完全一致（此前前端副本缺少 `<final_answer>` 相关纪律，用户在设置页「恢复默认」会退回旧模板）。线上 `ai-proxy` 已从 **v3 升级到 v4**（`status ACTIVE`、`verify_jwt=true`）。单测 `src/__tests__/unit/prompt-discipline.test.ts` 校验两份一致性、结构要求、禁用词与纠错能力。
