@@ -190,3 +190,83 @@ export function deriveAnswerFromAnalysis(
     originalAnswerText: modelAnswer,
   };
 }
+
+// ---------------------------------------------------------------------------
+// 双模型交叉校验（方案 B）：两个不同厂商模型并行解题，结果互校，
+// 不一致时转人工复核，不自动裁判。
+// ---------------------------------------------------------------------------
+
+export interface ModelVerdict {
+  /** 是否启用了第二模型（未配密钥则单模型模式） */
+  enabled: boolean;
+  /** 两模型最终答案是否一致 */
+  agree: boolean;
+  /** 不一致 → 转人工复核 */
+  needsReview: boolean;
+  /** high=双模型一致 / low=分歧 / single=仅单模型 */
+  confidence: "high" | "low" | "single";
+  /** 主模型最终答案（已按自身解析校正） */
+  primaryAnswer: string;
+  /** 第二模型最终答案（已按自身解析校正），未启用为空 */
+  secondaryAnswer: string;
+  primaryModel: string;
+  secondaryModel: string;
+  note?: string;
+}
+
+/** 两个答案是否等价：区间集合精确相等，或非区间文本归一化后相等。
+ *  故意不做「子集/超集」容错——交叉校验的目标是抓分歧，把仅写出定义域
+ *  （如 [-1,2]）误判为与 [-1,1/2) 一致会掩盖真实分歧。 */
+export function answersEquivalent(a: string, b: string): boolean {
+  const na = normalize(a), nb = normalize(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const ia = intervals(a), ib = intervals(b);
+  if (ia.length && ib.length) {
+    return ia.length === ib.length && ia.every((v, i) => v === ib[i]);
+  }
+  return false;
+}
+
+/**
+ * 双模型交叉校验（方案 B 核心）。
+ *
+ * 每个模型先按 v1.18.3 的单一真相源把自身「答案」与「解析结论」对齐，
+ * 再比较两个对齐后的最终答案：
+ *  - 未启用第二模型 → confidence:"single"（退回单模型行为，零破坏）
+ *  - 两模型一致     → confidence:"high"
+ *  - 两模型不一致   → needsReview:true，但【不自动裁判】，保留主模型结果交人工复核
+ *
+ * 设计边界（务必牢记）：一致 ≠ 一定正确——两模型可能一起错（共用相似启发式）。
+ * 本函数只给出「信心信号」与「分歧提示」，不替用户决定正确答案；真正的
+ * 确定性校验（代回原题做符号/数值验算）需引入数学引擎，不在本次范围内。
+ */
+export function compareModelAnswers(params: {
+  primaryRaw: { analysis: string; answerText: string; finalAnswer: string };
+  secondaryRaw?: { analysis: string; answerText: string; finalAnswer: string } | null;
+  primaryModel: string;
+  secondaryModel: string;
+}): ModelVerdict {
+  const p = deriveAnswerFromAnalysis(params.primaryRaw.analysis, params.primaryRaw.answerText, params.primaryRaw.finalAnswer);
+  const primaryAnswer = p.answerText;
+  if (!params.secondaryRaw) {
+    return {
+      enabled: false, agree: true, needsReview: false, confidence: "single",
+      primaryAnswer, secondaryAnswer: "", primaryModel: params.primaryModel, secondaryModel: "",
+    };
+  }
+  const s = deriveAnswerFromAnalysis(params.secondaryRaw.analysis, params.secondaryRaw.answerText, params.secondaryRaw.finalAnswer);
+  const secondaryAnswer = s.answerText;
+  const agree = answersEquivalent(primaryAnswer, secondaryAnswer);
+  if (agree) {
+    return {
+      enabled: true, agree: true, needsReview: false, confidence: "high",
+      primaryAnswer, secondaryAnswer, primaryModel: params.primaryModel, secondaryModel: params.secondaryModel,
+    };
+  }
+  return {
+    enabled: true, agree: false, needsReview: true, confidence: "low",
+    primaryAnswer, secondaryAnswer, primaryModel: params.primaryModel, secondaryModel: params.secondaryModel,
+    note: "两个模型给出的参考答案不一致，已保留主模型结果，请人工复核正确答案。",
+  };
+}

@@ -8,7 +8,7 @@ import {
   sanitizeBodyText, extractTagSafe, parseMistakeFieldsFromResponse,
   withoutMistakeAnalysis, shouldStopGeneration,
 } from "./lib/response-guard.ts";
-import { deriveAnswerFromAnalysis } from "./lib/answer-consistency.ts";
+import { deriveAnswerFromAnalysis, compareModelAnswers, type ModelVerdict } from "./lib/answer-consistency.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -22,9 +22,24 @@ const API_KEY = Deno.env.get("OPENAI_API_KEY") || "";
 const BASE_URL = Deno.env.get("OPENAI_BASE_URL") || "https://dashscope.aliyuncs.com/compatible-mode/v1";
 const MODEL = Deno.env.get("OPENAI_MODEL") || "qwen3-vl-plus";
 
+// 第二模型（方案 B 交叉校验用）。默认 Gemini 2.5 Flash：与 Qwen 不同厂商、
+// 免费档（Google AI Studio）、支持视觉，走 OpenAI 兼容协议。未配置密钥则单模型模式。
+const SECONDARY_API_KEY = Deno.env.get("OPENAI2_API_KEY") || "";
+const SECONDARY_BASE_URL = Deno.env.get("OPENAI2_BASE_URL") || "https://generativelanguage.googleapis.com/v1beta/openai";
+const SECONDARY_MODEL = Deno.env.get("OPENAI2_MODEL") || "gemini-2.5-flash";
+
 const VALID_SUBJECTS = ["数学", "物理", "化学", "生物", "英语", "语文", "历史", "地理", "政治", "其他"];
 
 function extractTag(text: string, tag: string) { return extractTagSafe(text, tag, tag === "analysis"); }
+
+/** 单模型原始标签（供双模型比对时各自独立取答案/解析） */
+function rawTags(text: string) {
+  const analysis = extractTag(text, "analysis") || "";
+  const answerText = extractTag(text, "answer_text") || "";
+  const m = text.match(/<final_answer>\s*([\s\S]*?)\s*<\/final_answer>/i);
+  const finalAnswer = m ? m[1].trim() : "";
+  return { analysis, answerText, finalAnswer };
+}
 
 /** 与 src/lib/ai/openai-provider.ts#parseResponse 同源 */
 function parseResponse(text: string) {
@@ -112,6 +127,8 @@ async function quotaBlocked(token: string): Promise<boolean> {
   } catch { return false; }
 }
 
+type ChatCreds = { apiKey: string; baseUrl: string; model: string };
+
 type ChatOptions = {
   systemPrompt: string;
   imageBase64?: string;
@@ -123,10 +140,19 @@ type ChatOptions = {
   thinkingBudget?: number;
   onDelta?: (s: string) => void;
   signal?: AbortSignal;
+  /** 指定调用哪个 provider；省略则用主模型（OPENAI_*） */
+  creds?: ChatCreds;
 };
 
+/** 第二模型凭证；未配置密钥返回 null（退化单模型） */
+function getSecondaryCreds(): ChatCreds | null {
+  if (!SECONDARY_API_KEY) return null;
+  return { apiKey: SECONDARY_API_KEY, baseUrl: SECONDARY_BASE_URL, model: SECONDARY_MODEL };
+}
+
 async function chat(opts: ChatOptions): Promise<string> {
-  if (!API_KEY) throw new Error("AI_NOT_CONFIGURED");
+  const creds = opts.creds ?? { apiKey: API_KEY, baseUrl: BASE_URL, model: MODEL };
+  if (!creds.apiKey) throw new Error("AI_NOT_CONFIGURED");
   const messages: any[] = [{ role: "system", content: opts.systemPrompt }];
   if (opts.imageBase64) {
     messages.push({
@@ -137,20 +163,21 @@ async function chat(opts: ChatOptions): Promise<string> {
     messages.push({ role: "user", content: opts.userText || "" });
   }
   const body: any = {
-    model: MODEL,
+    model: creds.model,
     messages,
     max_tokens: opts.maxTokens ?? 8192,
     stream: opts.stream,
   };
-  if (BASE_URL.includes("dashscope") || MODEL.toLowerCase().includes("qwen3")) {
+  // enable_thinking 仅 Qwen/DashScope 支持；其它模型（如 Gemini）忽略该参数。
+  if (creds.baseUrl.includes("dashscope") || creds.model.toLowerCase().includes("qwen3")) {
     body.enable_thinking = opts.enableThinking ?? false;
     if (body.enable_thinking) body.thinking_budget = opts.thinkingBudget ?? 4096;
   }
   if (opts.stream) body.stream_options = { include_usage: true };
 
-  const res = await fetch(`${BASE_URL}/chat/completions`, {
+  const res = await fetch(`${creds.baseUrl}/chat/completions`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${creds.apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
     signal: opts.signal,
   });
@@ -213,7 +240,7 @@ Deno.serve(async (req: Request) => {
     payload = body.payload || {};
   } catch { return json({ error: "Invalid JSON" }, 400); }
 
-  if (action === "test") return json({ ok: true, model: MODEL, configured: !!API_KEY });
+  if (action === "test") return json({ ok: true, model: MODEL, configured: !!API_KEY, dualEnabled: !!SECONDARY_API_KEY, secondaryModel: SECONDARY_MODEL });
   if (!API_KEY) return json({ error: "AI_NOT_CONFIGURED", message: "Edge Function 尚未配置 OPENAI_API_KEY" }, 503);
 
   if (await quotaBlocked(user.token)) {
@@ -244,18 +271,52 @@ Deno.serve(async (req: Request) => {
       language, payload.grade ?? null, subject, options, payload.gradeSemester ?? null,
     );
     const encoder = new TextEncoder();
+    const secondaryCreds = getSecondaryCreds();
     const stream = new ReadableStream({
       async start(controller) {
         const send = (obj: unknown) => {
           try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`)); } catch { /* closed */ }
         };
+        // 主模型：流式（保证 UX），逐段转发 delta。
+        const primaryPromise = chat({
+          systemPrompt, imageBase64, mimeType, stream: true,
+          enableThinking: isMath,
+          onDelta: (d) => send({ type: "delta", content: d }),
+        });
+        // 第二模型：非流式、与主模型并行；失败仅记日志，不影响主结果。
+        const secondaryPromise = secondaryCreds
+          ? chat({
+              systemPrompt, imageBase64, mimeType, stream: false,
+              creds: secondaryCreds, enableThinking: false,
+            }).catch((e) => {
+              console.error("[ai-proxy] secondary model failed:", e instanceof Error ? e.message : String(e));
+              return null;
+            })
+          : Promise.resolve(null);
+        let primaryText: string;
+        let secondaryText: string | null = null;
         try {
-          const text = await chat({
-            systemPrompt, imageBase64, mimeType, stream: true,
-            enableThinking: isMath,
-            onDelta: (d) => send({ type: "delta", content: d }),
-          });
-          send({ type: "done", result: parseResponse(text) });
+          [primaryText, secondaryText] = await Promise.all([primaryPromise, secondaryPromise]);
+        } catch (e) {
+          send({ type: "error", message: e instanceof Error ? e.message : String(e) });
+          return;
+        }
+        try {
+          const result = parseResponse(primaryText);
+          let modelVerdict: ModelVerdict | undefined;
+          if (secondaryText) {
+            try {
+              modelVerdict = compareModelAnswers({
+                primaryRaw: rawTags(primaryText),
+                secondaryRaw: rawTags(secondaryText),
+                primaryModel: MODEL,
+                secondaryModel: secondaryCreds!.model,
+              });
+            } catch (e) {
+              console.error("[ai-proxy] verdict compare failed:", e);
+            }
+          }
+          send({ type: "done", result: { ...result, modelVerdict } });
         } catch (e) {
           send({ type: "error", message: e instanceof Error ? e.message : String(e) });
         } finally {

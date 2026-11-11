@@ -26,7 +26,7 @@ import { toast } from "@/lib/toast";
 import { GRADE_SEMESTER_OPTIONS, GRADE_SEMESTER_UNSET } from "@/lib/grade-options";
 import { fetchLastGradeSemester } from "@/lib/last-grade";
 import { reconcileMistakeFields, sanitizeMistakeText } from "@/lib/ai/response-guard";
-import { detectAnswerConflict } from "@/lib/answer-consistency";
+import { detectAnswerConflict, type ModelVerdict } from "@/lib/answer-consistency";
 
 interface ParsedQuestionWithSubject extends ParsedQuestion {
     subjectId?: string;
@@ -509,6 +509,33 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                                     </div>
                                 </div>
                             )}
+                            {(() => {
+                                const verdict = data.modelVerdict as ModelVerdict | undefined;
+                                if (!verdict) return null;
+                                if (verdict.needsReview) {
+                                    return (
+                                        <div className="mb-3 rounded-md border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900">
+                                            <div className="flex items-start gap-2">
+                                                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+                                                <div className="space-y-1">
+                                                    <p className="font-medium">双模型交叉校验不一致，请人工复核</p>
+                                                    <p className="text-xs text-rose-800">主模型（{verdict.primaryModel}）参考答案：<span className="font-semibold">{verdict.primaryAnswer}</span></p>
+                                                    <p className="text-xs text-rose-800">第二模型（{verdict.secondaryModel}）参考答案：<span className="font-semibold">{verdict.secondaryAnswer}</span></p>
+                                                    <p className="text-xs text-rose-700">两者结论不同，已保留主模型结果。请核对后手动修改为正确参考答案再保存。</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                }
+                                if (verdict.enabled && verdict.agree) {
+                                    return (
+                                        <div className="mb-3 rounded-md border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-700">
+                                            双模型（{verdict.primaryModel} / {verdict.secondaryModel}）结论一致，信心较高；仍建议人工复核。
+                                        </div>
+                                    );
+                                }
+                                return null;
+                            })()}
                             <MarkdownRenderer content={data.answerText} />
                         </CardContent>
                     </Card>
