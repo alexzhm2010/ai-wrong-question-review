@@ -6,6 +6,7 @@
     "dev": "next dev -H 0.0.0.0",
     "build": "next build",
     "pages:build": "next build && node scripts/prepare-pages.mjs",
+    "deploy": "node scripts/deploy-gh-pages.mjs",
     "start": "next start",
     "lint": "eslint src",
     "test": "vitest run",
