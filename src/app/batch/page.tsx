@@ -280,6 +280,19 @@ function BatchDetail({ jobId }: { jobId: string }) {
                     userGuidance: data.userGuidance || null,
                 },
             });
+
+            // 已入库的条目：人工改过的题干/答案/解析要同步回错题记录，否则库里还是旧的
+            if (editing.errorItemId) {
+                await apiClient.put(`/api/error-items/${editing.errorItemId}`, {
+                    questionText: data.questionText,
+                    answerText: data.answerText,
+                    analysis: data.analysis,
+                    subjectId: data.subjectId,
+                    gradeSemester: data.gradeSemester,
+                }).catch(() => {
+                    /* 同步失败不阻断批次保存，错题详情里仍可再改 */
+                });
+            }
             setEditing(null);
             setEditingImage(null);
             // 校对完点保存 = 确认入库，不用再回到底部勾选一次
