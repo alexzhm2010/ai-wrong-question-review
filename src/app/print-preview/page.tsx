@@ -1,48 +1,57 @@
 "use client";
 
-import { useEffect, useState, useRef, Suspense } from "react";
+import { useEffect, useMemo, useState, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { BackButton } from "@/components/ui/back-button";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 import { ReferenceAnswer } from "@/components/reference-answer";
 import { apiClient } from "@/lib/api-client";
 import { ErrorItem, PaginatedResponse } from "@/types/api";
-import { useLanguage } from "@/contexts/LanguageContext";
 import { PRINT_PREVIEW_PAGE_SIZE } from "@/lib/constants/pagination";
-import {
-    getPrintPreviewCountLabel,
-    getPrintPreviewEmptyState,
-    getSelectedPrintItems,
-    shouldReserveAnswerSpace,
-} from "@/lib/print-preview";
+import { getSelectedPrintItems } from "@/lib/print-preview";
+
+type FilterKey = "all" | "w2" | "w3" | "never" | "streak";
+type SpaceKey = "none" | "sm" | "md" | "lg";
+
+const SPACE_CM: Record<SpaceKey, number> = { none: 0, sm: 4, md: 6, lg: 9 };
+
+const FILTERS: Array<{ key: FilterKey; label: string; test: (i: ErrorItem) => boolean }> = [
+    { key: "all", label: "全部", test: () => true },
+    { key: "w2", label: "错 2 次以上", test: (i) => (i.wrongCount || 0) >= 2 },
+    { key: "w3", label: "错 3 次以上", test: (i) => (i.wrongCount || 0) >= 3 },
+    { key: "never", label: "从没做对", test: (i) => (i.correctCount || 0) === 0 },
+    { key: "streak", label: "连续对 ≥2", test: (i) => (i.correctStreak || 0) >= 2 },
+];
 
 function PrintPreviewContent() {
     const searchParams = useSearchParams();
-    const { t } = useLanguage();
     const [items, setItems] = useState<ErrorItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [showAnswers, setShowAnswers] = useState(false);
     const [showAnalysis, setShowAnalysis] = useState(false);
     const [showTags, setShowTags] = useState(false);
-    const [imageScale, setImageScale] = useState(70);
+    const [imageScale, setImageScale] = useState(60);
     const [showQuestionText, setShowQuestionText] = useState(false);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-    // 原图按需分批加载，不阻塞首屏
+    const [filter, setFilter] = useState<FilterKey>("all");
+    const [space, setSpace] = useState<SpaceKey>("sm");
+    const [previewAt, setPreviewAt] = useState<number | null>(null);
     const [imageProgress, setImageProgress] = useState({ loaded: 0, total: 0 });
     const imageLoadStarted = useRef(false);
 
     useEffect(() => {
         fetchItems();
     }, []);
+
     const fetchItems = async () => {
         try {
             const params = new URLSearchParams(searchParams.toString());
-            // 打印预览需要所有符合条件的数据，设置较大的 pageSize。
-            // 不再 includeImage=true：旧版一次拉回全库 7.65MB base64 原图，
-            // 首屏要等 3.4 秒才出内容。现在先只取文本，页面立即可用。
             params.set("pageSize", String(PRINT_PREVIEW_PAGE_SIZE));
-            const response = await apiClient.get<PaginatedResponse<ErrorItem>>(`/api/error-items/list?${params.toString()}`);
+            const response = await apiClient.get<PaginatedResponse<ErrorItem>>(
+                `/api/error-items/list?${params.toString()}`,
+            );
             setItems(response.items);
             setSelectedIds(new Set(response.items.map((item) => item.id)));
         } catch (error) {
@@ -52,18 +61,14 @@ function PrintPreviewContent() {
         }
     };
 
-    /**
-     * 文本就绪后再按片补图：每片 8 张，后台渐进加载。
-     * 用户先看到题目文字/占位骨架，图片陆续出现；总量不变但不再阻塞首屏，
-     * 且只看文字（showQuestionText）时图片请求仍可在后台并行完成，打印不缺图。
-     */
+    /** 文本就绪后按片补图：4 片并发，缩略图墙与打印区共用同一份数据 */
     useEffect(() => {
         if (loading || imageLoadStarted.current || items.length === 0) return;
         imageLoadStarted.current = true;
         let cancelled = false;
         const ids = items.map((item) => item.id);
         const BATCH = 8;
-        const CONCURRENCY = 4; // 4 片并发，串行 10 片会把总耗时拖到 9 秒以上
+        const CONCURRENCY = 4;
         const chunks: string[][] = [];
         for (let i = 0; i < ids.length; i += BATCH) chunks.push(ids.slice(i, i + BATCH));
         let cursor = 0;
@@ -81,12 +86,14 @@ function PrintPreviewContent() {
                         );
                         const byId = new Map((res.images || []).map((x) => [x.id, x.originalImageUrl]));
                         if (!cancelled && byId.size) {
-                            setItems(prev => prev.map(it => (
-                                byId.has(it.id) ? { ...it, originalImageUrl: byId.get(it.id) } : it
-                            )));
+                            setItems((prev) =>
+                                prev.map((it) =>
+                                    byId.has(it.id) ? { ...it, originalImageUrl: byId.get(it.id) } : it,
+                                ),
+                            );
                         }
                     } catch {
-                        /* 单片失败不影响其余图片与文字内容 */
+                        /* 单片失败不影响其余 */
                     }
                     if (!cancelled) {
                         loaded += chunk.length;
@@ -94,277 +101,400 @@ function PrintPreviewContent() {
                     }
                 }
             };
-            await Promise.all(
-                Array.from({ length: Math.min(CONCURRENCY, chunks.length) }, () => worker()),
-            );
+            await Promise.all(Array.from({ length: Math.min(CONCURRENCY, chunks.length) }, () => worker()));
         })();
         return () => { cancelled = true; };
-        // 只在首屏数据到达时启动一次；后续 setItems 不改长度，不会重跑
     }, [loading, items.length]);
 
-    const handlePrint = () => {
-        window.print();
-    };
+    const visibleItems = useMemo(() => {
+        const test = FILTERS.find((f) => f.key === filter)!.test;
+        return items
+            .filter(test)
+            .slice()
+            .sort((a, b) => (b.wrongCount || 0) - (a.wrongCount || 0)
+                || (a.correctCount || 0) - (b.correctCount || 0));
+    }, [items, filter]);
 
     const selectedItems = getSelectedPrintItems(items, selectedIds);
-    const reserveAnswerSpace = shouldReserveAnswerSpace(showAnswers, showAnalysis);
-    const countLabel = getPrintPreviewCountLabel(items.length, selectedItems.length);
-    const emptyState = getPrintPreviewEmptyState(items.length, selectedItems.length);
+    const reserveSpace = !showAnswers && !showAnalysis;
 
-    const toggleSelectedItem = (id: string) => {
+    const toggle = (id: string) => {
         setSelectedIds((prev) => {
             const next = new Set(prev);
-            if (next.has(id)) {
-                next.delete(id);
-            } else {
-                next.add(id);
-            }
+            next.has(id) ? next.delete(id) : next.add(id);
             return next;
         });
     };
 
-    const selectAllItems = () => {
-        setSelectedIds(new Set(items.map((item) => item.id)));
+    const toggleAt = (index: number) => {
+        const item = visibleItems[index];
+        if (item) toggle(item.id);
     };
 
-    const clearSelectedItems = () => {
-        setSelectedIds(new Set());
+    /**
+     * 打印的同时把这批题目记到本地：用户做完卷子回来点「批改」，
+     * 不用再从列表里一道道挑，直接就是刚才打印的这一批。
+     */
+    const handlePrint = () => {
+        try {
+            localStorage.setItem(
+                "wq:last-print",
+                JSON.stringify({ ids: selectedItems.map((i) => i.id), at: Date.now() }),
+            );
+        } catch {
+            /* 隐私模式下写不进去，不影响打印 */
+        }
+        window.print();
     };
+
+    const previewItem = previewAt === null ? null : visibleItems[previewAt];
+
+    useEffect(() => {
+        if (previewAt === null) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === "Escape") setPreviewAt(null);
+            if (e.key === "ArrowLeft") setPreviewAt((v) => (v === null ? v : Math.max(0, v - 1)));
+            if (e.key === "ArrowRight")
+                setPreviewAt((v) => (v === null ? v : Math.min(visibleItems.length - 1, v + 1)));
+            if (e.key === " ") {
+                e.preventDefault();
+                if (previewAt !== null) toggleAt(previewAt);
+            }
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, [previewAt, visibleItems]);
 
     if (loading) {
         return (
             <div className="min-h-screen flex items-center justify-center">
-                <p className="text-muted-foreground">{t.common.loading}</p>
+                <p className="text-muted-foreground">加载中…</p>
             </div>
         );
     }
 
     return (
         <>
-            {/* Print Controls - Hidden when printing */}
-            <div className="print:hidden sticky top-0 z-10 bg-background border-b p-3 sm:p-4 shadow-sm">
-                <div className="max-w-6xl mx-auto space-y-3">
-                    {/* Header Row */}
+            {/* 控制区：打印时整体隐藏 */}
+            <div className="print:hidden sticky top-0 z-20 bg-background/95 backdrop-blur border-b">
+                <div className="max-w-6xl mx-auto px-3 sm:px-4 pt-3 pb-2 space-y-2">
                     <div className="flex items-center gap-3">
                         <BackButton fallbackUrl="/notebooks" />
-                        <h1 className="text-lg sm:text-xl font-bold flex-1">
-                            {t.printPreview?.title || 'Print Preview'} ({countLabel} {t.notebooks?.items || 'items'})
-                        </h1>
-                        {imageProgress.total > 0 && imageProgress.loaded < imageProgress.total && (
-                            <span className="whitespace-nowrap text-xs text-muted-foreground print:hidden">
-                                {t.printPreview?.imagesLoading || '图片'} {imageProgress.loaded}/{imageProgress.total}
-                            </span>
-                        )}
+                        <div className="flex-1 min-w-0">
+                            <div className="text-base sm:text-lg font-bold leading-tight">选择要打印的错题</div>
+                            <div className="text-[11px] text-muted-foreground">
+                                共 {visibleItems.length} 道 · 已选 {selectedItems.length} 道
+                                {imageProgress.total > 0 && imageProgress.loaded < imageProgress.total
+                                    ? ` · 图片 ${imageProgress.loaded}/${imageProgress.total}`
+                                    : ""}
+                            </div>
+                        </div>
+                        <Link
+                            href="/grade"
+                            className="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-600 whitespace-nowrap"
+                        >
+                            批改
+                        </Link>
                         <Button onClick={handlePrint} size="sm" className="whitespace-nowrap" disabled={selectedItems.length === 0}>
-                            {t.printPreview?.printButton || 'Print / Save PDF'}
+                            打印 / PDF
                         </Button>
                     </div>
 
-                    {/* Controls Row */}
-                    <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-4">
-                        {/* Image Scale Control */}
-                        <div className="flex items-center gap-2 text-sm bg-muted/50 px-2 sm:px-3 py-1 rounded-md">
-                            <span className="whitespace-nowrap text-xs sm:text-sm">{t.printPreview?.imageScale || 'Image Scale'}: {imageScale}%</span>
-                            <input
-                                type="range"
-                                min="30"
-                                max="100"
-                                value={imageScale}
-                                onChange={(e) => setImageScale(Number(e.target.value))}
-                                className="w-16 sm:w-20 accent-primary"
-                            />
-                        </div>
+                    {/* 筛选 */}
+                    <div className="flex gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                        {FILTERS.map((f) => (
+                            <button
+                                key={f.key}
+                                onClick={() => setFilter(f.key)}
+                                className={`shrink-0 rounded-full border px-3 py-1 text-xs transition-colors ${
+                                    filter === f.key
+                                        ? f.key === "w2" || f.key === "w3"
+                                            ? "bg-red-600 border-red-600 text-white font-semibold"
+                                            : "bg-slate-900 border-slate-900 text-white font-semibold"
+                                        : f.key === "w2" || f.key === "w3"
+                                            ? "border-red-200 bg-red-50 text-red-700"
+                                            : "border-slate-200 bg-white text-slate-600"
+                                }`}
+                            >
+                                {f.label}
+                            </button>
+                        ))}
+                        <span className="w-px shrink-0 bg-border mx-1" />
+                        <button
+                            onClick={() => setSelectedIds(new Set([...selectedIds, ...visibleItems.map((i) => i.id)]))}
+                            className="shrink-0 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-600"
+                        >
+                            全选当前
+                        </button>
+                        <button
+                            onClick={() => setSelectedIds(new Set())}
+                            className="shrink-0 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-600"
+                        >
+                            清空
+                        </button>
+                    </div>
 
-                        {/* Toggle Options - Grid on Mobile */}
-                        <div className="flex flex-wrap gap-x-3 gap-y-1 sm:gap-4">
-                            <label className="flex items-center gap-1.5 text-xs sm:text-sm cursor-pointer whitespace-nowrap hover:text-primary transition-colors">
-                                <input
-                                    type="checkbox"
-                                    checked={showQuestionText}
-                                    onChange={(e) => setShowQuestionText(e.target.checked)}
-                                    className="rounded border-gray-300 text-primary focus:ring-primary w-3.5 h-3.5 sm:w-4 sm:h-4"
-                                />
-                                {t.printPreview?.showQuestionText || 'Question Text'}
-                            </label>
-                            <label className="flex items-center gap-1.5 text-xs sm:text-sm cursor-pointer whitespace-nowrap hover:text-primary transition-colors">
-                                <input
-                                    type="checkbox"
-                                    checked={showAnswers}
-                                    onChange={(e) => setShowAnswers(e.target.checked)}
-                                    className="rounded border-gray-300 text-primary focus:ring-primary w-3.5 h-3.5 sm:w-4 sm:h-4"
-                                />
-                                {t.printPreview?.showAnswers || 'Show Answers'}
-                            </label>
-                            <label className="flex items-center gap-1.5 text-xs sm:text-sm cursor-pointer whitespace-nowrap hover:text-primary transition-colors">
-                                <input
-                                    type="checkbox"
-                                    checked={showAnalysis}
-                                    onChange={(e) => setShowAnalysis(e.target.checked)}
-                                    className="rounded border-gray-300 text-primary focus:ring-primary w-3.5 h-3.5 sm:w-4 sm:h-4"
-                                />
-                                {t.printPreview?.showAnalysis || 'Show Analysis'}
-                            </label>
-                            <label className="flex items-center gap-1.5 text-xs sm:text-sm cursor-pointer whitespace-nowrap hover:text-primary transition-colors">
-                                <input
-                                    type="checkbox"
-                                    checked={showTags}
-                                    onChange={(e) => setShowTags(e.target.checked)}
-                                    className="rounded border-gray-300 text-primary focus:ring-primary w-3.5 h-3.5 sm:w-4 sm:h-4"
-                                />
-                                {t.printPreview?.showTags || 'Show Tags'}
-                            </label>
+                    {/* 缩略图墙：限高滚动，否则 80 道题会把整页撑开、打印预览被挤没 */}
+                    <div className="max-h-[52vh] overflow-y-auto overscroll-contain rounded-md border bg-white p-1.5">
+                        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4 lg:grid-cols-6">
+                            {visibleItems.map((item, index) => {
+                                const on = selectedIds.has(item.id);
+                                const wc = item.wrongCount || 0;
+                                const cc = item.correctCount || 0;
+                                const practiced = wc + cc > 0;
+                                const tone = wc >= 3 ? "bg-red-100 text-red-700" : wc === 2 ? "bg-orange-100 text-orange-700" : "bg-white/90 text-slate-500";
+                                const brief = (item.questionText || "")
+                                    .replace(/\$[^$]*\$/g, " ")
+                                    .replace(/\\[a-zA-Z]+/g, " ")
+                                    .replace(/[{}$\\^_]/g, " ")
+                                    .replace(/\s+/g, " ")
+                                    .trim();
+                                return (
+                                    <div
+                                        key={item.id}
+                                        className={`relative h-28 sm:h-32 rounded-md overflow-hidden bg-slate-100 cursor-pointer transition ${
+                                            on ? "ring-2 ring-blue-600 ring-offset-1" : "ring-1 ring-slate-200"
+                                        }`}
+                                        onClick={() => setPreviewAt(index)}
+                                    >
+                                        {item.originalImageUrl ? (
+                                            <img
+                                                src={item.originalImageUrl}
+                                                alt=""
+                                                loading="lazy"
+                                                className={`w-full h-full object-contain bg-white transition-opacity ${on ? "opacity-80" : ""}`}
+                                            />
+                                        ) : (
+                                            <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-400 p-1 text-center line-clamp-4">
+                                                {brief.slice(0, 40) || "无图"}
+                                            </div>
+                                        )}
+
+                                        {/* 题干摘要：整页截图缩略后认不出题，靠这行兜住 */}
+                                        {brief && (
+                                            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 via-black/40 to-transparent px-1.5 pt-4 pb-1">
+                                                <p className="text-[10px] leading-tight text-white line-clamp-1">{brief}</p>
+                                            </div>
+                                        )}
+
+                                        <button
+                                            aria-label={on ? "取消选择" : "选择"}
+                                            onClick={(e) => { e.stopPropagation(); toggle(item.id); }}
+                                            className={`absolute right-1 top-1 w-6 h-6 rounded-full flex items-center justify-center shadow-sm transition ${
+                                                on ? "bg-blue-600 border-blue-600" : "bg-white/90 border border-slate-400"
+                                            }`}
+                                        >
+                                            <svg viewBox="0 0 24 24" className={`w-3.5 h-3.5 ${on ? "opacity-100" : "opacity-0"}`}
+                                                fill="none" stroke="#fff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+                                                <polyline points="20 6 9 17 4 12" />
+                                            </svg>
+                                        </button>
+
+                                        {practiced && (
+                                            <span className={`absolute left-1 top-1 rounded px-1 py-0.5 text-[10px] font-bold leading-none shadow-sm ${tone}`}>
+                                                错{wc}·对{cc}
+                                            </span>
+                                        )}
+                                        {!practiced && (
+                                            <span className="absolute left-1 top-1 rounded bg-white/85 px-1 py-0.5 text-[10px] leading-none text-slate-500 shadow-sm">
+                                                未练
+                                            </span>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                            {visibleItems.length === 0 && (
+                                <div className="col-span-full py-8 text-center text-sm text-muted-foreground">
+                                    这个条件下没有题目
+                                </div>
+                            )}
                         </div>
                     </div>
 
-                    {/* Item Selection Row */}
-                    <div className="rounded-md border bg-muted/20 p-3 space-y-2">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="text-sm font-medium">
-                                {t.printPreview?.selectItems || 'Select Items'} ({selectedItems.length}/{items.length})
-                            </div>
-                            <div className="flex gap-2">
-                                <Button variant="outline" size="sm" onClick={selectAllItems}>
-                                    {t.printPreview?.selectAll || 'Select All'}
-                                </Button>
-                                <Button variant="outline" size="sm" onClick={clearSelectedItems}>
-                                    {t.printPreview?.clearSelection || 'Clear Selection'}
-                                </Button>
-                            </div>
-                        </div>
-                        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 max-h-44 overflow-y-auto pr-1">
-                            {items.map((item, index) => (
-                                <label
-                                    key={item.id}
-                                    className="flex items-start gap-2 rounded border bg-background p-2 text-xs cursor-pointer hover:border-primary/50"
-                                >
-                                    <input
-                                        type="checkbox"
-                                        checked={selectedIds.has(item.id)}
-                                        onChange={() => toggleSelectedItem(item.id)}
-                                        className="mt-0.5 rounded border-gray-300 text-primary focus:ring-primary"
-                                    />
-                                    <span className="line-clamp-2">
-                                        <span className="font-semibold">
-                                            {t.printPreview?.questionNumber?.replace('{num}', String(index + 1)) || `Question ${index + 1}`}
-                                        </span>
-                                        {item.questionText ? `：${item.questionText}` : ''}
-                                    </span>
-                                </label>
-                            ))}
-                        </div>
+                    {/* 排版选项 */}
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-0.5 text-xs">
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                            <input type="checkbox" checked={showQuestionText} onChange={(e) => setShowQuestionText(e.target.checked)}
+                                className="rounded border-gray-300 accent-blue-600" />
+                            用文字（默认用原图）
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                            <input type="checkbox" checked={showAnswers} onChange={(e) => setShowAnswers(e.target.checked)}
+                                className="rounded border-gray-300 accent-blue-600" />
+                            附答案（放卷末）
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                            <input type="checkbox" checked={showAnalysis} onChange={(e) => setShowAnalysis(e.target.checked)}
+                                className="rounded border-gray-300 accent-blue-600" />
+                            附解析
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                            <input type="checkbox" checked={showTags} onChange={(e) => setShowTags(e.target.checked)}
+                                className="rounded border-gray-300 accent-blue-600" />
+                            知识点
+                        </label>
+                        <span className="flex items-center gap-1.5">
+                            作答区
+                            <select
+                                value={space}
+                                onChange={(e) => setSpace(e.target.value as SpaceKey)}
+                                className="rounded border border-slate-200 bg-white px-1.5 py-0.5"
+                            >
+                                <option value="none">不留</option>
+                                <option value="sm">小 4cm</option>
+                                <option value="md">中 6cm</option>
+                                <option value="lg">大 9cm</option>
+                            </select>
+                        </span>
+                        <span className="flex items-center gap-1.5">
+                            图宽
+                            <input type="range" min={30} max={100} value={imageScale}
+                                onChange={(e) => setImageScale(Number(e.target.value))}
+                                className="w-16 accent-blue-600" />
+                            {imageScale}%
+                        </span>
                     </div>
                 </div>
             </div>
 
-            {/* Print Content */}
-            <div className="max-w-4xl mx-auto p-8 print:p-0">
-                {selectedItems.map((item, index) => {
-                    // 优先使用 tags 关联，回退到 knowledgePoints
-                    let tags: string[] = [];
-                    if (item.tags && item.tags.length > 0) {
-                        tags = item.tags.map(t => t.name);
-                    } else {
-                        try {
-                            tags = JSON.parse(item.knowledgePoints || "[]");
-                        } catch (e) {
-                            tags = [];
-                        }
-                    }
-
-                    return (
-                        <div
-                            key={item.id}
-                            className={`mb-4 border-b last:border-b-0 print:break-inside-avoid ${reserveAnswerSpace ? "pb-20 print:pb-16" : "pb-6"}`}
-                        >
-                            {/* Question Header */}
-                            <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 leading-7">
-                                <span className="text-lg font-bold">
-                                    {t.printPreview?.questionNumber?.replace('{num}', String(index + 1)) || `Question ${index + 1}`}
-                                </span>
-                                {item.subject && (
-                                    <span className="text-sm text-muted-foreground">
-                                        {item.subject.name}
-                                    </span>
-                                )}
-                                {item.gradeSemester && (
-                                    <span className="text-sm text-muted-foreground">
-                                        {item.gradeSemester}
-                                    </span>
-                                )}
-                                {showTags && tags.length > 0 && (
-                                    <>
-                                        <span className="font-semibold">
-                                            {t.printPreview?.knowledgePoints || 'Knowledge Points'}:
+            {/* 打印内容 */}
+            <div className="max-w-4xl mx-auto px-4 py-6 print:p-0">
+                {selectedItems.length === 0 ? (
+                    <div className="text-center py-16 text-muted-foreground text-sm">
+                        {items.length === 0 ? "没有符合条件的错题" : "还没有选择题目"}
+                    </div>
+                ) : (
+                    <div className="space-y-8">
+                        {selectedItems.map((item, index) => {
+                            let tags: string[] = [];
+                            if (item.tags && item.tags.length > 0) tags = item.tags.map((t) => t.name);
+                            else {
+                                try { tags = JSON.parse(item.knowledgePoints || "[]"); } catch { tags = []; }
+                            }
+                            return (
+                                <div key={item.id} className="break-inside-avoid">
+                                    {/* 题号：纸上唯一的身份标识，批改时靠它定位 */}
+                                    <div className="flex items-baseline gap-2 mb-1">
+                                        <span className="font-mono text-[11px] tracking-wider text-slate-500 print:text-[9pt]">
+                                            #{item.shortCode || item.id.slice(-8)}
                                         </span>
-                                        {tags.map((tag, tagIndex) => (
-                                            <span
-                                                key={`${tag}-${tagIndex}`}
-                                                className="px-2 py-1 bg-muted rounded text-sm"
-                                            >
-                                                {tag}
-                                            </span>
-                                        ))}
-                                    </>
-                                )}
-                            </div>
+                                        <span className="text-base font-bold print:text-[12pt]">
+                                            第 {index + 1} 题
+                                        </span>
+                                        {item.subject && (
+                                            <span className="text-xs text-muted-foreground">{item.subject.name}</span>
+                                        )}
+                                        {showTags && tags.length > 0 && (
+                                            <span className="text-xs text-muted-foreground">{tags.join(" · ")}</span>
+                                        )}
+                                    </div>
 
-                            {/* Original Image or Text */}
-                            {showQuestionText && item.questionText ? (
-                                <div className="mb-4">
-                                    <MarkdownRenderer content={item.questionText} />
-                                </div>
-                            ) : item.originalImageUrl ? (
-                                <div className="mb-4">
-                                    <img
-                                        src={item.originalImageUrl}
-                                        alt={t.detail?.originalProblem || 'Question Image'}
-                                        className="h-auto border rounded"
-                                        style={{ maxWidth: `${imageScale}%` }}
-                                    />
-                                </div>
-                            ) : (
-                                <div className="mb-4 flex h-20 items-center justify-center rounded border bg-muted/30 text-xs text-muted-foreground print:hidden">
-                                    {t.printPreview?.imageLoading || '题目图片加载中…'}
-                                </div>
-                            )}
+                                    {showQuestionText && item.questionText ? (
+                                        <MarkdownRenderer content={item.questionText} />
+                                    ) : item.originalImageUrl ? (
+                                        <img
+                                            src={item.originalImageUrl}
+                                            alt="题目"
+                                            className="h-auto border rounded"
+                                            style={{ maxWidth: `${imageScale}%` }}
+                                        />
+                                    ) : (
+                                        <div className="h-16 flex items-center justify-center rounded border bg-muted/30 text-xs text-muted-foreground print:hidden">
+                                            题目图片加载中…
+                                        </div>
+                                    )}
 
-
-
-                            {/* Answer */}
-                            {showAnswers && item.answerText && (
-                                <div className="mb-4">
-                                    <h3 className="font-semibold mb-2">{t.printPreview?.referenceAnswer || 'Reference Answer'}:</h3>
-                                    <ReferenceAnswer text={item.answerText} />
+                                    {/* 作答框：把印刷体题干和学生手写隔开，扫描判分只看框内 */}
+                                    {reserveSpace && SPACE_CM[space] > 0 && (
+                                        <div
+                                            className="mt-2 w-full rounded border border-dashed border-slate-300 print:border-slate-400"
+                                            style={{ height: `${SPACE_CM[space]}cm` }}
+                                        />
+                                    )}
                                 </div>
-                            )}
+                            );
+                        })}
+                    </div>
+                )}
 
-                            {/* Analysis */}
-                            {showAnalysis && item.analysis && (
-                                <div className="mb-4">
-                                    <h3 className="font-semibold mb-2">{t.printPreview?.analysis || 'Analysis'}:</h3>
-                                    <MarkdownRenderer content={item.analysis} />
+                {/* 答案区：统一放卷末，避免做题时瞄到下一题答案 */}
+                {showAnswers && selectedItems.some((i) => i.answerText) && (
+                    <div className="mt-10 pt-6 border-t-2 border-dashed break-before-page print:break-before-page">
+                        <h2 className="text-base font-bold mb-3 print:text-[12pt]">参考答案</h2>
+                        <div className="space-y-2.5">
+                            {selectedItems.map((item, index) => (
+                                <div key={`ans-${item.id}`} className="flex gap-2 text-sm break-inside-avoid">
+                                    <span className="font-mono text-[10px] text-slate-400 pt-0.5 shrink-0">
+                                        #{item.shortCode || item.id.slice(-8)}
+                                    </span>
+                                    <span className="font-semibold shrink-0">{index + 1}.</span>
+                                    <div className="min-w-0 flex-1">
+                                        <ReferenceAnswer text={item.answerText || "（无）"} />
+                                        {showAnalysis && item.analysis && (
+                                            <div className="mt-1 text-xs text-muted-foreground">
+                                                <MarkdownRenderer content={item.analysis} />
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
-                            )}
+                            ))}
                         </div>
-                    );
-                })}
-
-                {emptyState && (
-                    <div className="text-center py-12 text-muted-foreground">
-                        {emptyState === 'noSelection'
-                            ? (t.printPreview?.noSelection || 'No items selected')
-                            : (t.printPreview?.noItems || 'No matching error items')}
                     </div>
                 )}
             </div>
+
+            {/* 大图：点缩略图进来，可左右翻、可直接选中 */}
+            {previewItem && (
+                <div className="fixed inset-0 z-50 bg-slate-950/95 flex flex-col print:hidden" onClick={() => setPreviewAt(null)}>
+                    <div className="flex items-center gap-3 px-4 py-3 text-white shrink-0" onClick={(e) => e.stopPropagation()}>
+                        <span className="font-mono text-xs text-slate-400">#{previewItem.shortCode || "—"}</span>
+                        <span className="text-xs text-slate-300">
+                            {(previewAt || 0) + 1} / {visibleItems.length}
+                        </span>
+                        <span className="text-xs">
+                            <span className="text-red-300 font-semibold">错 {previewItem.wrongCount || 0}</span>
+                            <span className="text-slate-500"> · </span>
+                            <span className="text-green-300 font-semibold">对 {previewItem.correctCount || 0}</span>
+                        </span>
+                        <button className="ml-auto w-8 h-8 rounded-full bg-white/10 text-white text-lg leading-none" onClick={() => setPreviewAt(null)}>
+                            ×
+                        </button>
+                    </div>
+                    <div className="flex-1 relative flex items-center justify-center overflow-auto px-2" onClick={(e) => e.stopPropagation()}>
+                        <button
+                            className="absolute left-2 w-10 h-10 rounded-full bg-white/10 text-white text-2xl disabled:opacity-25"
+                            disabled={previewAt === 0}
+                            onClick={() => setPreviewAt((v) => Math.max(0, (v || 0) - 1))}
+                        >‹</button>
+                        <img src={previewItem.originalImageUrl} alt="" className="max-w-full max-h-full object-contain bg-white rounded" />
+                        <button
+                            className="absolute right-2 w-10 h-10 rounded-full bg-white/10 text-white text-2xl disabled:opacity-25"
+                            disabled={(previewAt || 0) >= visibleItems.length - 1}
+                            onClick={() => setPreviewAt((v) => Math.min(visibleItems.length - 1, (v || 0) + 1))}
+                        >›</button>
+                    </div>
+                    <div className="shrink-0 px-4 pb-5 pt-2" onClick={(e) => e.stopPropagation()}>
+                        <p className="text-slate-300 text-xs line-clamp-3 mb-3">{previewItem.questionText || ""}</p>
+                        <button
+                            onClick={() => previewAt !== null && toggleAt(previewAt)}
+                            className={`w-full rounded-xl py-3 text-sm font-semibold border ${
+                                selectedIds.has(previewItem.id)
+                                    ? "bg-blue-600 border-blue-600 text-white"
+                                    : "border-white/30 text-white"
+                            }`}
+                        >
+                            {selectedIds.has(previewItem.id) ? "✓ 已选中，点击取消" : "选中这道"}
+                        </button>
+                    </div>
+                </div>
+            )}
         </>
     );
 }
 
 export default function PrintPreviewPage() {
-    const { t } = useLanguage();
     return (
-        <Suspense fallback={<div className="min-h-screen flex items-center justify-center">{t.common.loading}</div>}>
+        <Suspense fallback={<div className="min-h-screen flex items-center justify-center">加载中…</div>}>
             <PrintPreviewContent />
         </Suspense>
     );

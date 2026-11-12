@@ -69,9 +69,21 @@ export interface ErrorItem {
     gradeSemester?: string | null;
     paperLevel?: string | null;
 
+    /** 试卷上印的短编号：YYMMDD + 当日三位序号 + 一位校验，共 10 位 */
+    shortCode?: string | null;
+    wrongCount?: number;
+    correctCount?: number;
+    /** 连续答对次数：错一次归零，是「是否真掌握」的主信号 */
+    correctStreak?: number;
+    lastResult?: 'correct' | 'wrong' | 'skip' | null;
+    lastAttemptAt?: string | null;
+
     createdAt: string;
     updatedAt: string;
 }
+
+/** 一次作答的判定结果；skip = 空白未作答，不计错也不计对 */
+export type AttemptResult = 'correct' | 'wrong' | 'skip';
 
 // For creation/updates
 export interface CreateErrorItemRequest extends ParsedQuestion {

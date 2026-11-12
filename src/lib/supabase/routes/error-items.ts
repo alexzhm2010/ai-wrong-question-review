@@ -13,6 +13,8 @@ const LIST_FIELDS = [
   "id", "userId", "subjectId", "questionText", "ocrText", "mistakeStatus",
   "knowledgePoints", "source", "errorType", "userNotes", "masteryLevel",
   "gradeSemester", "paperLevel", "createdAt", "updatedAt",
+  // 题号与对错计数：选题区、打印页、批改页都要用
+  "shortCode", "wrongCount", "correctCount", "correctStreak", "lastResult", "lastAttemptAt",
 ];
 /** 打印预览同接口复用：需要答案/解析正文，再加原图 */
 const PRINT_FIELDS = [...LIST_FIELDS, "answerText", "analysis", "wrongAnswerText", "mistakeAnalysis"];
@@ -97,6 +99,44 @@ export async function linkTags(itemId: string, knowledgePoints: any[]): Promise<
       body: JSON.stringify({ A: itemId, B: tag.id }),
     }).catch(() => {});
   }
+}
+
+/**
+ * 记录一次作答并回写计数。
+ *
+ * 规则刻意保持可解释：连续答对是掌握信号，错一次立刻归零。
+ * masteryLevel 由 streak 派生（0/1/2），这样旧的「按掌握度筛选」不用改。
+ * 空白未作答（skip）只留痕，不计对也不计错——否则跳过的题会被误算成做错。
+ */
+async function recordAttempt(id: string, result: string): Promise<Record<string, any> | null> {
+  const rows = await restJson<any[]>(
+    `/ErrorItem?select=id,wrongCount,correctCount,correctStreak,masteryLevel` +
+      `&id=eq.${encodeURIComponent(id)}`,
+  ).catch(() => []);
+  const cur = rows?.[0];
+  if (!cur) return null;
+
+  const stamp = nowIso();
+  const patch: Record<string, any> = { lastResult: result, lastAttemptAt: stamp, updatedAt: stamp };
+  if (result === "skip") return { id, ...patch };
+
+  if (result === "correct") {
+    patch.correctCount = Number(cur.correctCount || 0) + 1;
+    patch.correctStreak = Number(cur.correctStreak || 0) + 1;
+  } else {
+    patch.wrongCount = Number(cur.wrongCount || 0) + 1;
+    patch.correctStreak = 0;
+    patch.mistakeStatus = "wrong_attempt";
+  }
+  const streak = Number(patch.correctStreak || 0);
+  patch.masteryLevel = streak >= 3 ? 2 : streak >= 2 ? 1 : 0;
+
+  const saved = await restJson<any[]>(byId("ErrorItem", id), {
+    method: "PATCH",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify(patch),
+  }).catch(() => null);
+  return saved?.[0] || { id, ...patch };
 }
 
 /** 固定子路径优先于 /:id，避免把 list、clear 当成 ID */
@@ -193,6 +233,32 @@ async function handleFixed(ctx: RouteContext, sub: string): Promise<Response | n
     await deleteMany(ids);
     return json({ success: true, deleted: ids.length });
   }
+  /**
+   * 批改页一次交一整页：逐条 PATCH，并发 6 条。
+   * 不用 RPC 是为了保持这条链路与列表接口同一套权限（RLS 下管理员必须显式带 userId）。
+   */
+  if (sub === "attempt-batch" && ctx.method === "POST") {
+    const raw: any[] = Array.isArray(ctx.body?.items) ? ctx.body.items : [];
+    const valid = raw
+      .map((x) => ({ id: String(x?.id || ""), result: String(x?.result || "") }))
+      .filter((x) => x.id && ["correct", "wrong", "skip"].includes(x.result))
+      .slice(0, 200);
+    if (!valid.length) return json({ success: true, updated: 0, items: [] });
+
+    const out: Record<string, any>[] = [];
+    const CONCURRENCY = 6;
+    let cursor = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, valid.length) }, async () => {
+        while (cursor < valid.length) {
+          const job = valid[cursor++];
+          const row = await recordAttempt(job.id, job.result).catch(() => null);
+          if (row) out.push(row);
+        }
+      }),
+    );
+    return json({ success: true, updated: out.length, items: out });
+  }
   if (sub === "clear" && ctx.method === "DELETE") {
     await requireUser();
     const rows = await restJson<any[]>("/ErrorItem?select=id").catch(() => []);
@@ -215,6 +281,23 @@ async function handleFixed(ctx: RouteContext, sub: string): Promise<Response | n
       `/ErrorItem?select=id,originalImageUrl&id=in.(${inList})`,
     ).catch(() => []);
     return json({ images: Array.isArray(rows) ? rows : [] });
+  }
+  /**
+   * 批改页按 id 取整题（含答案与原图）。一页最多 100 道，一次查完。
+   * 不复用 list 是因为批改只需要「这一批」，拉全库再过滤会白传几百 KB。
+   */
+  if (sub === "details" && ctx.method === "GET") {
+    const ids = (ctx.query.get("ids") || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 100);
+    if (!ids.length) return json({ items: [] });
+    const inList = ids.map((id) => `"${id.replace(/"/g, "")}"`).join(",");
+    const rows = await restJson<any[]>(
+      `/ErrorItem?select=${[...PRINT_FIELDS, "originalImageUrl"].join(",")}&id=in.(${inList})`,
+    ).catch(() => []);
+    return json({ items: Array.isArray(rows) ? rows : [] });
   }
   return null;
 }
@@ -315,6 +398,14 @@ export async function handleErrorItems(ctx: RouteContext): Promise<Response | nu
   if (action === "delete" && ctx.method === "DELETE") {
     await restJson(byId("ErrorItem", id), { method: "DELETE" }).catch(() => {});
     return json({ message: "Deleted successfully" });
+  }
+  if (action === "attempt" && ctx.method === "POST") {
+    const result = String(ctx.body?.result || "");
+    if (!["correct", "wrong", "skip"].includes(result)) {
+      return apiError(400, "result must be correct | wrong | skip");
+    }
+    const row = await recordAttempt(id, result);
+    return row ? json(row) : apiError(404, "Item not found");
   }
   if (action === "mastery" && (ctx.method === "PATCH" || ctx.method === "PUT")) {
     const rows = await restJson<any[]>(byId("ErrorItem", id), {

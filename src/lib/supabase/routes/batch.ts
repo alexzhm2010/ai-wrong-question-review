@@ -269,6 +269,7 @@ export const BATCH_HANDLERS: RouteHandler[] = [
         points: any[];
       };
       const candidates: Candidate[] = [];
+      const imageMissing: string[] = [];
       for (const item of rows || []) {
         if (item.status === "saved") { skipped++; continue; }
         if (!item.questionText) { skipped++; continue; }
@@ -302,19 +303,46 @@ export const BATCH_HANDLERS: RouteHandler[] = [
         const candIds = candidates
           .map((c) => `"${String(c.item.id).replace(/["\\]/g, "")}"`)
           .join(",");
-        try {
+        const imgById = new Map<string, string>();
+        const readImages = async () => {
           const imgs = await restJson<any[]>(
-            `/BatchItem?select=id,imageBase64&id=in.(${candIds})`,
+            `/BatchItem?select=id,imageBase64&id=in.(${candIds})&userId=eq.${encodeURIComponent(user.id)}`,
           );
-          const imgById = new Map<string, string>(
-            (imgs || []).map((x) => [String(x.id), String(x.imageBase64 || "")]),
-          );
-          for (const c of candidates) {
-            const b64 = imgById.get(String(c.item.id));
-            if (b64) c.row.originalImageUrl = `data:image/jpeg;base64,${b64}`;
+          for (const x of imgs || []) {
+            imgById.set(String(x.id), String(x.imageBase64 || ""));
           }
+        };
+        try {
+          await readImages();
         } catch {
-          /* 取原图失败保留缩略图，正文照常入库 */
+          /* 整批读失败（跨境链路上 600KB 响应超时很常见），下面逐条补 */
+        }
+
+        /**
+         * 缺图的条目逐条补一次。
+         *
+         * v1.18.36 修复：此前整批 catch 后直接保留 thumbBase64 当原图，
+         * 结果详情页永远是一张 240px 缩略图，用户重传多少次都一样 ——
+         * 因为缩略图是在入库时写死的，跟后来传什么无关。
+         */
+        const missingNow = candidates.filter((c) => !imgById.get(String(c.item.id)));
+        if (missingNow.length) {
+          await Promise.all(missingNow.map(async (c) => {
+            try {
+              const one = await restJson<any[]>(
+                `/BatchItem?select=imageBase64&id=eq.${encodeURIComponent(String(c.item.id))}&userId=eq.${encodeURIComponent(user.id)}&limit=1`,
+              );
+              const b64 = String(one?.[0]?.imageBase64 || "");
+              if (b64) imgById.set(String(c.item.id), b64);
+            } catch { /* 留空，绝不降级成缩略图 */ }
+          }));
+        }
+
+        for (const c of candidates) {
+          const b64 = imgById.get(String(c.item.id)) || "";
+          // 取不到原图就留空：让详情页明确"无图"，而不是塞一张永远糊的缩略图冒充原图。
+          c.row.originalImageUrl = b64 ? `data:image/jpeg;base64,${b64}` : "";
+          if (!b64) imageMissing.push(String(c.item.id));
         }
       }
 
@@ -325,9 +353,9 @@ export const BATCH_HANDLERS: RouteHandler[] = [
           body: JSON.stringify(row),
         });
 
-      // 一次批量插多行。只有批量失败（单行超长 / 网关 5xx）才回退逐条，
-      // 逐条仍保留「原图写不进 → 降级缩略图」这条 v1.18.26 的容错，
-      // 绝不让一条失败把整批一起拖垮。
+      // 一次批量插多行。只有批量失败（单行超长 / 网关 5xx）才回退逐条。
+      // 逐条时若「带原图」仍写不进，才降级用缩略图保底 —— 但会记进 imageMissing，
+      // 让调用方知道这条的原图是缺的，而不是以为存了一张高清图。
       const ok = new Set<string>();
       if (candidates.length) {
         try {
@@ -346,9 +374,19 @@ export const BATCH_HANDLERS: RouteHandler[] = [
               await insertOne(c.row);
               ok.add(c.errorItemId);
             } catch (first) {
+              // 原图本身为空时不做缩略图降级：降级只会把"无图"变成"糊图"，
+              // 用户看到的是一张不可用的图，还以为已经存好了。
+              if (!c.row.originalImageUrl) {
+                const msg = first instanceof Error ? first.message : String(first);
+                failed.push({ idx: c.item.idx, message: msg.slice(0, 120) });
+                continue;
+              }
               try {
                 await insertOne({ ...c.row, originalImageUrl: thumbUrl });
                 ok.add(c.errorItemId);
+                if (!imageMissing.includes(String(c.item.id))) {
+                  imageMissing.push(String(c.item.id));
+                }
               } catch {
                 const msg = first instanceof Error ? first.message : String(first);
                 failed.push({ idx: c.item.idx, message: msg.slice(0, 120) });
@@ -455,7 +493,7 @@ export const BATCH_HANDLERS: RouteHandler[] = [
         if (finished) await startNextQueued(user.id, jobId);
       }
 
-      return json({ success: true, saved, skipped, failed, createdIds, counts });
+      return json({ success: true, saved, skipped, failed, createdIds, counts, imageMissing });
     }
 
     /* ------------------------------- 重试 -------------------------------- */

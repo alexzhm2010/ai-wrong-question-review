@@ -8,6 +8,7 @@ const EDGE_ACTIONS: Record<string, string> = {
   "/api/geogebra-analyze": "geogebra_analyze",
   "/api/geogebra_analyze": "geogebra_analyze",
   "/api/ai/test": "test",
+  "/api/grade-page": "grade_page",
 };
 
 export async function handleAiRoute(ctx: RouteContext): Promise<Response> {

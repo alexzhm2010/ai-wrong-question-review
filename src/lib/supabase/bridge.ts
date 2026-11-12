@@ -76,7 +76,7 @@ export async function handleApi(pathname: string, init?: RequestInit): Promise<R
   if (
     root === "ai" ||
     root === "ai-quota" ||
-    ["analyze", "reanswer", "geogebra-analyze", "geogebra_analyze"].includes(root)
+    ["analyze", "reanswer", "geogebra-analyze", "geogebra_analyze", "grade-page"].includes(root)
   ) {
     return handleAiRoute(ctx);
   }

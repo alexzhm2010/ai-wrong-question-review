@@ -369,6 +369,57 @@ function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { ...CORS, "Content-Type": "application/json" } });
 }
 
+/** 两串等长数字的差异位数；长度不等直接判为大差异 */
+function hamming(a: string, b: string): number {
+  if (a.length !== b.length) return 99;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++;
+  return d;
+}
+
+/**
+ * 批改结果解析：模型偶尔会包一层 markdown 或加解释，这里只取最外层 JSON 数组。
+ *
+ * 关键一步是「候选纠错」：手写笔迹压住编号、或 0/O、1/7 混淆时，模型读出的编号
+ * 可能差一位。只要与某个候选编号仅差 1 位，就纠正为那个候选——因为这一批题目是
+ * 确定的，编号不会凭空冒出来。差 2 位以上不纠，宁可让它进人工复核，也不猜。
+ */
+function parseGradeResults(text: string, candidates: Array<{ code: string; answer: string }>) {
+  const start = text.indexOf("[");
+  const end = text.lastIndexOf("]");
+  let rows: any[] = [];
+  if (start >= 0 && end > start) {
+    try { rows = JSON.parse(text.slice(start, end + 1)); } catch { rows = []; }
+  }
+  const known = new Set(candidates.map((c) => c.code));
+  const out: any[] = [];
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const raw = String(row?.code || "").replace(/\D/g, "");
+    if (raw.length < 6) continue;
+    let code = raw;
+    if (!known.has(code) && candidates.length) {
+      let best = "", bestDist = 99;
+      for (const c of candidates) {
+        const d = hamming(raw, c.code);
+        if (d < bestDist) { bestDist = d; best = c.code; }
+      }
+      if (bestDist <= 1) code = best;
+    }
+    const v = String(row?.verdict || "").toLowerCase();
+    const verdict = v === "correct" ? "correct" : v === "blank" || v === "skip" ? "skip" : "wrong";
+    const conf = Number(row?.confidence);
+    out.push({
+      code,
+      matched: known.has(code),
+      verdict,
+      studentAnswer: String(row?.answer || "").slice(0, 300),
+      confidence: Number.isFinite(conf) ? Math.max(0, Math.min(1, conf)) : 0.5,
+    });
+  }
+  return out;
+}
+
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
@@ -518,6 +569,66 @@ Deno.serve(async (req: Request) => {
       if (lockedAnswer) parsed.answerText = lockedAnswer;
       return json({ ...parsed, finalResult: parsed, usedMode, degraded, answerLocked: !!lockedAnswer });
     }
+    // ---------------------------------------------------------------- 扫描批改
+    if (action === "grade_page") {
+      let imageBase64 = String(payload.imageBase64 || "");
+      let mimeType = "image/jpeg";
+      const gm = imageBase64.match(/^data:([^;]+);base64,(.+)$/);
+      if (gm) { mimeType = gm[1]; imageBase64 = gm[2]; }
+      if (!imageBase64) return json({ error: "Missing imageBase64" }, 400);
+
+      const candidates: Array<{ code: string; answer: string }> = Array.isArray(payload.candidates)
+        ? payload.candidates.slice(0, 40).map((c: any) => ({
+            code: String(c?.code || "").replace(/\D/g, ""),
+            answer: String(c?.answer || "").slice(0, 500),
+          })).filter((c: any) => c.code)
+        : [];
+
+      const list = candidates.length
+        ? candidates.map((c) => `#${c.code} 标准答案：${c.answer || "（未存答案）"}`).join("\n")
+        : "（未提供候选题目）";
+
+      const systemPrompt = `你是一名严谨的阅卷老师。输入是一张学生做完的试卷照片。
+
+卷面结构：
+- 每道题上方有一行小字编号，格式为 # 加 10 位数字，例如 #2611120174（前 6 位日期，中间 3 位序号，最后 1 位校验）。
+- 编号下方是题目本身（印刷体文字或图片）。
+- 题目下方有一个虚线方框，框内是学生手写的作答内容。
+
+任务：找出照片中出现的所有编号，逐个读取该编号正下方虚线框里的作答，再与标准答案比对。
+
+判定标准：
+- 框内完全空白 → verdict 为 "blank"
+- 作答与标准答案等价 → verdict 为 "correct"
+  · 选择题：选项集合必须与标准答案**完全一致**。多选题漏选（标准 "ACD"，学生写 "AC"）判 wrong；多选一个也判 wrong。只忽略顺序（"AB" 与 "BA" 等价）和分隔符（"A、B" 与 "AB" 等价）。
+  · 数值或表达式：化简后等价即算对（"1/2" 与 "0.5"、"x>1" 与 "x∈(1,+∞)"）
+  · 解答题：最终结论正确即算对，不要求步骤与标准答案一致
+- 明显不同、只写了一半、或结论错误 → verdict 为 "wrong"
+- 字迹无法辨认或照片模糊 → verdict 为 "wrong"，且 confidence 不高于 0.3
+
+注意事项：
+1. 编号可能被笔迹遮挡或有个别字符误读，请优先在候选编号列表里找最接近的一个。
+2. 绝不要把题干里的印刷文字当成学生作答。
+3. 照片里没有的题目不要凭空编造。
+4. 不要输出任何解释文字，只输出一个 JSON 数组。
+
+输出格式（严格遵守）：
+[{"code":"2611120174","verdict":"correct","answer":"学生写的答案","confidence":0.9}]`;
+
+      const userText = `本批候选题目及标准答案：\n${list}\n\n请批改照片中出现的题目。`;
+
+      const text = await chat({
+        systemPrompt,
+        userText,
+        imageBase64,
+        mimeType,
+        maxTokens: 2000,
+        reasoningMode: "fast",
+      });
+      const results = parseGradeResults(text, candidates);
+      return json({ results, model: MODEL });
+    }
+
     if (action === "geogebra_analyze") {
       const p = generateGeogebraPrompt(payload.questionText || "", payload.answerText || "", payload.analysis || "", payload.previousErrors);
       const text = await chat({ systemPrompt: p, userText: "生成 GeoGebra 命令", stream: false });
