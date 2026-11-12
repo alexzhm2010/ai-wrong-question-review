@@ -24,5 +24,5 @@ export const BASE_PATH =
 export const AI_EDGE = `${SUPABASE_URL}/functions/v1/ai-proxy`;
 export const UPLOAD_EDGE = `${SUPABASE_URL}/functions/v1/openclaw-upload`;
 
-export const APP_VERSION = "1.18.25";
+export const APP_VERSION = "1.18.26";
 export const APP_CHANNEL = "github-pages";

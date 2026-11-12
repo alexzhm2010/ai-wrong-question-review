@@ -211,17 +211,23 @@ function BatchDetail({ jobId }: { jobId: string }) {
         setSaving(true);
         let saved = 0;
         let skipped = 0;
+        let batchError = "";
         const fails: { idx: number; message: string }[] = [];
         try {
-            // 分批提交：一次搬 23 张大图容易撞网关上限，5 条一批更稳
+            // 分批提交：一次搬 23 张大图容易撞网关上限，5 条一批更稳。
+            // 每批独立 try/catch —— 某一批整体失败，后面的批次照常继续。
             for (let i = 0; i < target.length; i += 5) {
                 const chunk = target.slice(i, i + 5);
-                const res = await apiClient.post<{
-                    saved: number; skipped: number; failed?: { idx: number; message: string }[];
-                }>("/api/batch/save", { jobId, itemIds: chunk }, { timeout: 180000 });
-                saved += res.saved || 0;
-                skipped += res.skipped || 0;
-                if (res.failed?.length) fails.push(...res.failed);
+                try {
+                    const res = await apiClient.post<{
+                        saved: number; skipped: number; failed?: { idx: number; message: string }[];
+                    }>("/api/batch/save", { jobId, itemIds: chunk }, { timeout: 180000 });
+                    saved += res.saved || 0;
+                    skipped += res.skipped || 0;
+                    if (res.failed?.length) fails.push(...res.failed);
+                } catch (e: any) {
+                    batchError = e?.message || t.common.error;
+                }
             }
             if (saved) toast.success(b.savedToast.replace("{count}", String(saved)));
             if (skipped) toast.info(b.skippedToast.replace("{count}", String(skipped)));
@@ -230,12 +236,13 @@ function BatchDetail({ jobId }: { jobId: string }) {
                     .replace("{count}", String(fails.length))
                     .replace("{reason}", fails[0].message || "-"));
             }
+            if (batchError) toast.error(batchError);
             touched.current.clear();
             setChecked(new Set());
             await load();
             refreshActiveBatch();
         } catch (e: any) {
-            // 中途整批请求失败时，已经入库的部分要如实告诉用户，不能说"全失败"
+            // 兜底：已经入库的部分要如实告诉用户，不能说"全失败"
             if (saved) toast.success(b.savedToast.replace("{count}", String(saved)));
             toast.error(e?.message || t.common.error);
             await load().catch(() => {});
