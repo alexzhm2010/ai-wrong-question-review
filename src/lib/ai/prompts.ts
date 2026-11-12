@@ -201,7 +201,8 @@ export const DEFAULT_ANALYZE_TEMPLATE = `【角色与核心任务 (ROLE AND CORE
 
 <answer_text>
 在此处填写正确答案。使用 Markdown 和 LaTeX 符号。如果答案包含表格，遵循上述【表格处理规则】。
-* **必须逐字复制下方 <analysis> 末尾 <final_answer> 里的内容**：禁止另算、禁止只写某一种情况的中间范围、禁止把不等号方向写反。
+* **必须逐字复制 <analysis> 正文中最后一步推导得到的完整集合/区间**：此值必须与正文推理结论完全一致，禁止在标签里单独重算、改写、把不等号方向写反，也禁止只写某一种情况的中间范围。
+* 写完后用【静默自检】的步骤把该集合的边界点与外部反例点代回原题核验一遍：能取到则闭区间、不能取到则开区间、反例点必须不满足题干条件；若核验不通过，回到正文修正推导，并同步改写本标签与 <final_answer>，不得保留旧值。
 </answer_text>
 
 <analysis>
@@ -352,6 +353,42 @@ export function getMathTagsForGrade(
  * @param grade - Optional grade level (7-9:初中, 10-12:高中) for cumulative tag filtering
  * @param options - Optional customizations
  */
+/**
+ * 反向代入验算提示词：只做「代入检验」、不做解题。
+ * 给定原题与两个候选答案，让模型通过边界点/内部点/外部反例点逐一代入原条件，
+ * 判断哪个候选正确。两个候选以 A/B 中性呈现，不泄露归属，避免模型迁就某一侧。
+ */
+export function generateVerifyPrompt(
+  questionText: string,
+  candidateA: string,
+  candidateB: string,
+  language: "zh" | "en" = "zh",
+): string {
+  const langNote = language === "en"
+    ? "Respond in English."
+    : "使用简体中文。";
+  return `你是一名严谨的数学验算员。你的任务不是解题，而是【反向代入验算】：判断给定的两个候选答案哪一个正确。
+
+【原始题干】
+${questionText}
+
+【候选答案】
+候选 A：${candidateA}
+候选 B：${candidateB}
+
+【验算方法（必须执行）】
+1. 选取若干检验点：候选解集的边界点（开/闭端点）、内部典型点，以及候选解集之外的反例点；
+2. 将这些点逐一代入题干的原始条件，检查是否满足；
+3. 通过代入结果判定：哪个候选的解集能让所有检验点都满足题干条件、且外部反例点不满足；
+4. 若两个候选都不完全满足，选择满足度更高的那个，或直接判定为无解/需重解。
+
+${langNote}
+
+【输出格式】只输出以下两个标签，不要开场白、不要代码块：
+<verified>只输出经代入验算后正确的那个答案本身（例如 (−½, ½] 或 m∈(−½, ½]），严禁添加「候选」「A」「B」、序号或任何前缀与解释文字，只写答案</verified>
+<reason>不超过 80 字的代入验算依据</reason>`;
+}
+
 export function generateAnalyzePrompt(
   language: 'zh' | 'en',
   grade?: 7 | 8 | 9 | 10 | 11 | 12 | null,
@@ -532,12 +569,17 @@ export const DEFAULT_REANSWER_TEMPLATE = `【角色与核心任务 (ROLE AND COR
 <answer_text>
 在此处填写正确答案。使用 Markdown 和 LaTeX 符号。
 * **必须逐字复制下方 <analysis> 末尾 <final_answer> 里的内容**，禁止另算、禁止只写某一种情况的中间范围。
+* 公式必须各自用 $...$ 包裹，与正文交替书写；**禁止把整段答案塞进一对 $...$ 或 $$...$$ 里**，也不要输出不带定界符的裸 LaTeX。
+* 多问答案按「(1) $...$；(2) $...$」逐问分别包裹，每问单独一对 $...$。
+* 禁止 \\xin、\\xnotin 这类粘连写法：x∈R 必须写成 $x \\in \\mathbb{R}$（\\in 前留空格）。
 </answer_text>
 
 <analysis>
 在此处填写详细的步骤解析。
 * 必须使用简体中文。
 * **直接使用标准的 LaTeX 符号**（如 $\\frac{1}{2}$），**不要**进行 JSON 转义。
+* 行间公式用 $$...$$ **独占一行并成对闭合**；cases / aligned 等环境必须有 \\begin 与 \\end 配对，环境内换行必须写双反斜杠 \\\\。
+* 行内公式统一用 $...$，不要混用 \\( \\) 或 \\[ \\]；禁止把普通叙述文字包进公式。
 * 解析要清晰、完整，适合学生理解。
 * **推导结束后必须另起一行写 <final_answer>最终结论</final_answer>**：这是本题唯一的最终答案，必须包含完整的取值集合或区间。
 * 按【解析行文结构】组织：前提 → 分步推导 → 边界核验（用陈述句直接写，不加转折引导句）→ <final_answer>；不要出现「等等」「但注意」「再仔细看」这类口语化转折或设问。

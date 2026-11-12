@@ -83,9 +83,10 @@ export async function processImageFile(file: File): Promise<string> {
 
     console.log(`文件大小: ${fileSizeMB.toFixed(2)}MB`);
 
-    // 无论原图大小，都统一缩放到最长边 1600px，降低上传体积与视觉 token 数量，
-    // 显著缩短 AI 分析耗时（手机直出照片常见 3000-4000px，直接上传会让模型预处理变慢）。
-    return await compressImage(file, 1, 1600, 0.8);
+    // 最长边 2400px / 质量 0.88 / 上限 2MB：
+    // 题图既要给模型看，也要在详情页放大查看和打印导出，1600px 在 A4 上约 135dpi，字会发虚。
+    // 2400px 约 200dpi，放大到整屏仍清晰；体积约为原来的 2 倍，批量上传可接受。
+    return await compressImage(file, 2, 2400, 0.88);
 }
 
 /**

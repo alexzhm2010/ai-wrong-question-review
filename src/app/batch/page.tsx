@@ -55,6 +55,7 @@ interface BatchItem {
     autoDeepRetry?: boolean;
     answerConflict?: boolean;
     originalAnswerText?: string | null;
+    hasImage?: boolean;
 }
 
 /** 心跳超过该值即判定「可能已中断」：深度单张 80s，必须留出函数 150s 上限的余量 */
@@ -109,6 +110,22 @@ function BatchDetail({ jobId }: { jobId: string }) {
     const [checked, setChecked] = useState<Set<string>>(new Set());
     const [saving, setSaving] = useState(false);
     const [editing, setEditing] = useState<BatchItem | null>(null);
+    // 校对时展示的原图：先用 240px 缩略图占位，随后替换为按需拉取的清晰原图
+    const [editingImage, setEditingImage] = useState<string | null>(null);
+
+    const openEditor = (item: BatchItem) => {
+        setEditing(item);
+        setEditingImage(item.thumbBase64 ? `data:image/jpeg;base64,${item.thumbBase64}` : null);
+        if (!item.hasImage) return;
+        void apiClient
+            .get<{ imageBase64: string }>("/api/batch/item-image", { params: { itemId: item.id } })
+            .then((res) => {
+                if (res?.imageBase64) setEditingImage(`data:image/jpeg;base64,${res.imageBase64}`);
+            })
+            .catch(() => {
+                /* 拉取失败就保留缩略图，至少不影响改题 */
+            });
+    };
     const [clock, setClock] = useState(Date.now());
     const touched = useRef<Set<string>>(new Set());
     const initialized = useRef(false);
@@ -232,6 +249,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
                 },
             });
             setEditing(null);
+            setEditingImage(null);
             await load();
             toast.success(t.common.success);
         } catch (e: any) {
@@ -341,7 +359,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
 
                             <button
                                 className="flex min-w-0 flex-1 gap-2.5 text-left sm:gap-3"
-                                onClick={() => item.status === "done" && setEditing(item)}
+                                onClick={() => item.status === "done" && openEditor(item)}
                             >
                                 <div className="h-14 w-14 shrink-0 overflow-hidden rounded-md border bg-muted sm:h-16 sm:w-16">
                                     {item.thumbBase64 ? (
@@ -451,7 +469,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
             </div>
             )}
 
-            <Dialog open={!!editing} onOpenChange={(v) => !v && setEditing(null)}>
+            <Dialog open={!!editing} onOpenChange={(v) => { if (!v) { setEditing(null); setEditingImage(null); } }}>
                 <DialogContent className="max-h-[92svh] w-[calc(100vw_-_1rem)] max-w-4xl overflow-y-auto p-3 sm:p-6">
                     <DialogHeader className="pr-8">
                         <DialogTitle>{b.preview} #{editing ? editing.idx + 1 : ""}</DialogTitle>
@@ -470,9 +488,9 @@ function BatchDetail({ jobId }: { jobId: string }) {
                                 requiresImage: false,
                             }}
                             initialSubjectId={editing.subjectId || undefined}
-                            imagePreview={editing.thumbBase64 ? `data:image/jpeg;base64,${editing.thumbBase64}` : null}
+                            imagePreview={editingImage}
                             onSave={editSave}
-                            onCancel={() => setEditing(null)}
+                            onCancel={() => { setEditing(null); setEditingImage(null); }}
                             saveLabel={b.saveEdit}
                         />
                     )}

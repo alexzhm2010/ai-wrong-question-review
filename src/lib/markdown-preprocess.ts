@@ -31,11 +31,33 @@ function spaceTightMath(text: string): string {
     });
 }
 
+/**
+ * 模型输出的常见 LaTeX 粘连错误。
+ *
+ * 最高频的是 `x \in \mathbb{R}` 被写成 `\xin\mathbb{R}`：`\xin` 不是合法命令，
+ * KaTeX 会把它当未知命令整段原样输出，页面上就出现 `\xin` 这种源码。
+ * 这里只做确定安全的替换，不动正常命令（`\xi`、`\xrightarrow` 都不受影响）。
+ */
+function normalizeLatex(input: string): string {
+    let text = input;
+    // \xin / \xnotin → x \in / x \notin（后面不能再接字母，避免误伤 \xint 之类）
+    text = text.replace(/\\x(in|notin)(?![a-zA-Z])/g, "x \\$1");
+    // \[...\] → $$...$$，\(...\) → $...$
+    // 注意用函数替换：String.replace 的字符串参数里 "$$" 表示一个字面 $，
+    // 直接写 "$$" 会把行间公式降级成行内公式。
+    text = text.replace(/\\\[/g, () => "$$").replace(/\\\]/g, () => "$$");
+    text = text.replace(/\\\(/g, () => "$").replace(/\\\)/g, () => "$");
+    return text;
+}
+
 export function preprocessMarkdown(content: string): string {
     if (!content) return '';
 
-    // ① 先修正公式定界符间距（此时公式还是原文）
-    let text = spaceTightMath(content);
+    // ⓪ 先修模型侧的粘连/定界符错误
+    let text = normalizeLatex(content);
+
+    // ① 再修正公式定界符间距（此时公式还是原文）
+    text = spaceTightMath(text);
 
     // ② 暂存数学区：占位符不含反斜杠与换行，后续规则无法伤及其中内容
     const mathBlocks: string[] = [];

@@ -188,6 +188,23 @@ export const BATCH_HANDLERS: RouteHandler[] = [
       return json({ job, items: (items || []).map(publicItem) });
     }
 
+    /* ------------------------------ 单条原图 ------------------------------ */
+    // 详情接口刻意不返回 imageBase64（30 张会把响应拖到几十 MB）。
+    // 打开某一条校对时才按需拉这一张，保证「题目原图」看到的是清晰原图而非 240px 缩略图。
+    if (action === "item-image" && ctx.method === "GET") {
+      const itemId = ctx.query.get("itemId") || "";
+      if (!itemId) return apiError(400, "缺少 itemId");
+      const rows = await restJson<any[]>(
+        `/BatchItem?select=id,imageBase64,thumbBase64&id=eq.${encodeURIComponent(itemId)}&userId=eq.${encodeURIComponent(user.id)}&limit=1`,
+      ).catch(() => []);
+      if (!rows?.length) return apiError(404, "条目不存在");
+      const row = rows[0];
+      return json({
+        imageBase64: row.imageBase64 || "",
+        thumbBase64: row.thumbBase64 || "",
+      });
+    }
+
     /* ---------------------------- 编辑单条结果 ---------------------------- */
     if (action === "update" && ctx.method === "POST") {
       const { itemId, patch } = ctx.body || {};
