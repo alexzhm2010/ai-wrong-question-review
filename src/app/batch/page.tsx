@@ -116,7 +116,8 @@ function BatchDetail({ jobId }: { jobId: string }) {
     const openEditor = (item: BatchItem) => {
         setEditing(item);
         setEditingImage(item.thumbBase64 ? `data:image/jpeg;base64,${item.thumbBase64}` : null);
-        if (!item.hasImage) return;
+        // 详情接口不返回原图（避免一次拉几十 MB），点开这一条时单独取；
+        // 不依赖 hasImage 判断，取不到就继续用缩略图占位。
         void apiClient
             .get<{ imageBase64: string }>("/api/batch/item-image", { params: { itemId: item.id } })
             .then((res) => {
