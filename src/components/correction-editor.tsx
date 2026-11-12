@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Save, RefreshCw, Loader2, ChevronDown, ChevronUp, Pencil, Undo2 } from "lucide-react";
+import { Save, RefreshCw, Loader2, ChevronDown, ChevronUp, Pencil, Undo2, Check } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { frontendLogger } from "@/lib/frontend-logger";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
@@ -617,7 +617,7 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                                     />
                                     <div className="flex gap-2">
                                         <Button size="sm" onClick={commitEditing}>
-                                            <Save className="mr-1 h-4 w-4" />{t.common?.save || "保存"}
+                                            <Check className="mr-1 h-4 w-4" />{t.editor?.applyEdit || "确定"}
                                         </Button>
                                         <Button size="sm" variant="outline" onClick={() => setEditingField(null)}>
                                             {t.common?.cancel || "取消"}
@@ -668,7 +668,7 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                                     />
                                     <div className="flex gap-2">
                                         <Button size="sm" onClick={commitEditing}>
-                                            <Save className="mr-1 h-4 w-4" />{t.common?.save || "保存"}
+                                            <Check className="mr-1 h-4 w-4" />{t.editor?.applyEdit || "确定"}
                                         </Button>
                                         <Button size="sm" variant="outline" onClick={() => setEditingField(null)}>
                                             {t.common?.cancel || "取消"}
@@ -708,7 +708,7 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                                     />
                                     <div className="flex gap-2">
                                         <Button size="sm" onClick={commitEditing}>
-                                            <Save className="mr-1 h-4 w-4" />{t.common?.save || "保存"}
+                                            <Check className="mr-1 h-4 w-4" />{t.editor?.applyEdit || "确定"}
                                         </Button>
                                         <Button size="sm" variant="outline" onClick={() => setEditingField(null)}>
                                             {t.common?.cancel || "取消"}
