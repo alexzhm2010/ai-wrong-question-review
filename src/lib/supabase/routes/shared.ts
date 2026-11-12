@@ -80,27 +80,45 @@ export async function attachRelations(
   };
 }
 
-/** 错题本列表：首次使用时自动建「数学 / 英语」两个默认本 */
+/**
+ * 错题本列表：只列当前用户自己的本。
+ *
+ * 两个必须守住的点：
+ * 1. RLS 里 is_admin() 允许管理员读到所有用户的 Subject，所以这里必须显式
+ *    按 userId 过滤；否则管理员会把别人名下的「数学 / 英语」一起列出来，
+ *    看起来就像凭空多出了几个重复的错题本。
+ * 2. 查询失败绝不能被当成「一个本都没有」。旧实现用 .catch(() => [])
+ *    吞掉 401 / 网络错误后直接补建「数学 / 英语」，在 token 刷新窗口或
+ *    网络抖动时会凭空插入两个空本。
+ */
 export async function listNotebooks(): Promise<any[]> {
   const user = await appUser();
-  let subjects = await restJson<any[]>("/Subject?select=*&order=createdAt.desc").catch(() => []);
-  const items = await restJson<any[]>("/ErrorItem?select=id,subjectId").catch(() => []);
+  if (!user?.id) return [];
 
-  if (subjects.length === 0 && user) {
+  const scope = `userId=eq.${encodeURIComponent(user.id)}`;
+  // 查询失败直接冒泡（由上层返回错误），绝不降级成空数组
+  let subjects = await restJson<any[]>(`/Subject?select=*&${scope}&order=createdAt.desc`);
+  const items = await restJson<any[]>("/ErrorItem?select=id,subjectId");
+
+  // 只有「查询成功且确实 0 条」才补默认本；插入失败（并发撞唯一约束）就跳过，
+  // 不把没写进库的行显示出来。
+  if (subjects.length === 0) {
     for (const name of ["数学", "英语"]) {
-      await restJson("/Subject", {
+      const row = {
+        id: cuid(),
+        name,
+        userId: user.id,
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      };
+      const created = await restJson<any[]>("/Subject", {
         method: "POST",
-        body: JSON.stringify({
-          id: cuid(),
-          name,
-          userId: user.id,
-          createdAt: nowIso(),
-          updatedAt: nowIso(),
-        }),
-      }).catch(() => {});
+        body: JSON.stringify(row),
+      }).catch(() => null);
+      if (created?.[0]) subjects.push(created[0]);
     }
-    subjects = await restJson<any[]>("/Subject?select=*&order=createdAt.desc").catch(() => []);
   }
+
   return subjects.map((s) => ({
     ...s,
     _count: { errorItems: items.filter((i) => i.subjectId === s.id).length },

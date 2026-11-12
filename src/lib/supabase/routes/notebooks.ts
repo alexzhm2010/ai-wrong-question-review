@@ -14,7 +14,12 @@ export async function handleNotebooks(ctx: RouteContext): Promise<Response | nul
       const user = await requireUser();
       const name = String(ctx.body?.name || "").trim();
       if (!name) return apiError(400, "Notebook name is required");
-      const existing = await restJson<any[]>("/Subject?select=id,name").catch(() => []);
+      // 只按自己的本查重：管理员既不该被别人的同名本挡住，也不该漏掉自己的。
+      // 查询失败要明确报错，不能静默当成「没有重名」继续创建。
+      const existing = await restJson<any[]>(
+        `/Subject?select=id,name&userId=eq.${encodeURIComponent(user.id)}`,
+      ).catch(() => null);
+      if (existing === null) return apiError(503, "Unable to verify notebook name, please retry");
       if (existing.some((s) => s.name === name)) {
         return apiError(409, "Notebook with this name already exists");
       }
@@ -25,10 +30,17 @@ export async function handleNotebooks(ctx: RouteContext): Promise<Response | nul
         createdAt: nowIso(),
         updatedAt: nowIso(),
       };
-      const created = await restJson<any[]>("/Subject", {
-        method: "POST",
-        body: JSON.stringify(row),
-      });
+      // (name, userId) 上有唯一约束；并发重复创建会 409，转成明确提示
+      let created: any[];
+      try {
+        created = await restJson<any[]>("/Subject", {
+          method: "POST",
+          body: JSON.stringify(row),
+        });
+      } catch (e: any) {
+        if (e?.status === 409) return apiError(409, "Notebook with this name already exists");
+        throw e;
+      }
       return json({ ...(created?.[0] || row), _count: { errorItems: 0 } }, 201);
     }
     return null;

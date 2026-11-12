@@ -33,9 +33,21 @@ export default function NotebooksPage() {
     const fetchNotebooks = async () => {
         try {
             const data = await apiClient.get<Notebook[]>("/api/notebooks");
-            setNotebooks(data);
+            // 防御性去重：即便后端或缓存里返回了同名错题本，界面也只保留
+            // 题目数最多的那一个，避免出现「两个英语 / 两个数学」。
+            const byName = new Map<string, Notebook>();
+            for (const nb of Array.isArray(data) ? data : []) {
+                const key = (nb.name || "").trim();
+                const prev = byName.get(key);
+                if (!prev || (nb._count?.errorItems || 0) > (prev._count?.errorItems || 0)) {
+                    byName.set(key, nb);
+                }
+            }
+            setNotebooks([...byName.values()]);
         } catch (error) {
+            // 失败时保留上一次的列表，不清空成空态（避免误以为错题本没了）
             console.error("Failed to fetch notebooks:", error);
+            toast.error(t.notebooks?.loadFailed || "加载失败，请重试");
         } finally {
             setLoading(false);
         }
