@@ -248,6 +248,7 @@ export const BATCH_HANDLERS: RouteHandler[] = [
       let saved = 0;
       let skipped = 0;
       const createdIds: string[] = [];
+      const failed: { idx: number; message: string }[] = [];
 
       for (const item of rows || []) {
         if (item.status === "saved") { skipped++; continue; }
@@ -258,24 +259,51 @@ export const BATCH_HANDLERS: RouteHandler[] = [
         const points = (() => {
           try { return JSON.parse(item.knowledgePoints || "[]"); } catch { return []; }
         })();
-        const row = buildItem({
-          originalImageUrl: item.imageBase64 ? `data:image/jpeg;base64,${item.imageBase64}` : (item.thumbBase64 || ""),
-          questionText: item.questionText,
-          answerText: item.answerText,
-          analysis: item.analysis,
-          subjectId: item.subjectId || null,
-          knowledgePoints: points,
-          gradeSemester: item.gradeSemester || null,
-          source: "batch",
-        }, user.id);
+        const fullImage = item.imageBase64 ? `data:image/jpeg;base64,${item.imageBase64}` : (item.thumbBase64 || "");
+        const makeRow = (image: string) =>
+          buildItem({
+            originalImageUrl: image,
+            questionText: item.questionText,
+            answerText: item.answerText,
+            analysis: item.analysis,
+            subjectId: item.subjectId || null,
+            knowledgePoints: points,
+            gradeSemester: item.gradeSemester || null,
+            source: "batch",
+          }, user.id);
 
-        const created = await restJson<any[]>("/ErrorItem", {
-          method: "POST",
-          headers: { Prefer: "return=representation" },
-          body: JSON.stringify(row),
-        });
-        const errorItemId = created?.[0]?.id || row.id;
-        if (points.length) await linkTags(errorItemId, points);
+        // 逐条独立：某一条失败（体积/超时/网关 5xx）不能把整批 23 条一起拖垮
+        let errorItemId = "";
+        try {
+          const created = await restJson<any[]>("/ErrorItem", {
+            method: "POST",
+            headers: { Prefer: "return=representation" },
+            body: JSON.stringify(makeRow(fullImage)),
+          });
+          errorItemId = created?.[0]?.id || "";
+        } catch (first) {
+          // 带原图的写入偶发失败时，退一步只存缩略图，先保证题目进库
+          try {
+            const created = await restJson<any[]>("/ErrorItem", {
+              method: "POST",
+              headers: { Prefer: "return=representation" },
+              body: JSON.stringify(makeRow(item.thumbBase64 ? `data:image/jpeg;base64,${item.thumbBase64}` : "")),
+            });
+            errorItemId = created?.[0]?.id || "";
+          } catch {
+            const msg = first instanceof Error ? first.message : String(first);
+            failed.push({ idx: item.idx, message: msg.slice(0, 120) });
+            await restJson(`/BatchItem?id=eq.${encodeURIComponent(item.id)}`, {
+              method: "PATCH",
+              headers: { Prefer: "return=minimal" },
+              body: JSON.stringify({ failureReason: `入库失败：${msg.slice(0, 80)}`, updatedAt: nowIso() }),
+            }).catch(() => {});
+            continue;
+          }
+        }
+        if (!errorItemId) errorItemId = cuid();
+
+        if (points.length) await linkTags(errorItemId, points).catch(() => {});
         existingTexts.add(key);
         createdIds.push(errorItemId);
         saved++;
@@ -283,7 +311,7 @@ export const BATCH_HANDLERS: RouteHandler[] = [
           method: "PATCH",
           headers: { Prefer: "return=minimal" },
           body: JSON.stringify({ status: "saved", errorItemId, updatedAt: nowIso() }),
-        });
+        }).catch(() => {});
       }
 
       const all = await restJson<any[]>(
@@ -313,7 +341,7 @@ export const BATCH_HANDLERS: RouteHandler[] = [
       // 本批收尾 → 拉起排队的下一批
       if (finished) await startNextQueued(user.id, jobId);
 
-      return json({ success: true, saved, skipped, createdIds, counts });
+      return json({ success: true, saved, skipped, failed, createdIds, counts });
     }
 
     /* ------------------------------- 重试 -------------------------------- */

@@ -205,22 +205,41 @@ function BatchDetail({ jobId }: { jobId: string }) {
     };
 
     const saveSelected = async (ids?: string[]) => {
-        const target = ids && ids.length ? ids : [...checked];
+        // 有勾选就存勾选的，没勾选就是「全部入库」
+        const target = ids && ids.length ? ids : (checked.size ? [...checked] : selectable.map((i) => i.id));
         if (!target.length || saving) return;
         setSaving(true);
+        let saved = 0;
+        let skipped = 0;
+        const fails: { idx: number; message: string }[] = [];
         try {
-            const res = await apiClient.post<{ saved: number; skipped: number }>("/api/batch/save", {
-                jobId,
-                itemIds: target,
-            }, { timeout: 180000 });
-            toast.success(b.savedToast.replace("{count}", String(res.saved)));
-            if (res.skipped) toast.info(b.skippedToast.replace("{count}", String(res.skipped)));
+            // 分批提交：一次搬 23 张大图容易撞网关上限，5 条一批更稳
+            for (let i = 0; i < target.length; i += 5) {
+                const chunk = target.slice(i, i + 5);
+                const res = await apiClient.post<{
+                    saved: number; skipped: number; failed?: { idx: number; message: string }[];
+                }>("/api/batch/save", { jobId, itemIds: chunk }, { timeout: 180000 });
+                saved += res.saved || 0;
+                skipped += res.skipped || 0;
+                if (res.failed?.length) fails.push(...res.failed);
+            }
+            if (saved) toast.success(b.savedToast.replace("{count}", String(saved)));
+            if (skipped) toast.info(b.skippedToast.replace("{count}", String(skipped)));
+            if (fails.length) {
+                toast.error(b.failedToast
+                    .replace("{count}", String(fails.length))
+                    .replace("{reason}", fails[0].message || "-"));
+            }
             touched.current.clear();
             setChecked(new Set());
             await load();
             refreshActiveBatch();
         } catch (e: any) {
+            // 中途整批请求失败时，已经入库的部分要如实告诉用户，不能说"全失败"
+            if (saved) toast.success(b.savedToast.replace("{count}", String(saved)));
             toast.error(e?.message || t.common.error);
+            await load().catch(() => {});
+            refreshActiveBatch();
         } finally {
             setSaving(false);
         }
@@ -257,16 +276,24 @@ function BatchDetail({ jobId }: { jobId: string }) {
             // 校对完点保存 = 确认入库，不用再回到底部勾选一次
             let savedNow = 0;
             if (willSave) {
-                const res = await apiClient.post<{ saved: number; skipped: number }>("/api/batch/save", {
+                const res = await apiClient.post<{
+                    saved: number; skipped: number; failed?: { idx: number; message: string }[];
+                }>("/api/batch/save", {
                     jobId,
                     itemIds: [editing.id],
                 }, { timeout: 120000 }).catch(() => null);
                 savedNow = res?.saved || 0;
-                if (res && !savedNow) toast.info(b.skippedToast.replace("{count}", "1"));
+                if (res?.failed?.length) {
+                    toast.error(b.failedToast
+                        .replace("{count}", String(res.failed.length))
+                        .replace("{reason}", res.failed[0].message || "-"));
+                } else if (res && !savedNow) {
+                    toast.info(b.skippedToast.replace("{count}", "1"));
+                }
             }
             await load();
             refreshActiveBatch();
-            toast.success(savedNow ? b.savedOneToast : t.common.success);
+            if (savedNow) toast.success(b.savedOneToast);
         } catch (e: any) {
             toast.error(e?.message || t.common.error);
         }
@@ -485,17 +512,15 @@ function BatchDetail({ jobId }: { jobId: string }) {
                             </Button>
                         )}
                         <div className="flex-1" />
-                        {!!selectable.length && (
-                            <Button
-                                variant="outline" size="sm" className="shrink-0" disabled={saving}
-                                onClick={() => saveSelected(selectable.map((i) => i.id))}
-                            >
-                                {b.saveAll.replace("{count}", String(selectable.length))}
-                            </Button>
-                        )}
-                        <Button size="sm" className="shrink-0" disabled={!checked.size || saving} onClick={() => saveSelected()}>
+                        <Button
+                            size="sm" className="shrink-0"
+                            disabled={(!checked.size && !selectable.length) || saving}
+                            onClick={() => saveSelected()}
+                        >
                             {saving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
-                            {b.saveSelected.replace("{count}", String(checked.size))}
+                            {checked.size
+                                ? b.saveSelected.replace("{count}", String(checked.size))
+                                : b.saveAll.replace("{count}", String(selectable.length))}
                         </Button>
                     </div>
                 </div>
