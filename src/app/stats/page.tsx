@@ -25,7 +25,10 @@ export default function StatsPage() {
                         {t.stats?.headerDesc || "View your learning progress and data analysis"}
                     </p>
                 </div>
-                <div className="ml-auto flex items-center">
+                <div className="ml-auto flex items-center gap-2">
+                    <Link href="/mastery">
+                        <Button variant="outline" size="sm">掌握度</Button>
+                    </Link>
                     <Link href="/">
                         <Button variant="ghost" size="icon">
                             <House className="h-5 w-5" />

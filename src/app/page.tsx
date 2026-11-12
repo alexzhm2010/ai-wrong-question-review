@@ -11,7 +11,7 @@ import { AnalyzeResponse, Notebook, AppConfig } from "@/types/api";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { processImageFile } from "@/lib/image-utils";
-import { Upload, BookOpen, Tags, LogOut, BarChart3, Images, ChevronRight } from "lucide-react";
+import { Upload, BookOpen, Tags, LogOut, BarChart3, Images, ChevronRight, Sparkles } from "lucide-react";
 import { BroadcastNotification } from "@/components/broadcast-notification";
 import { VersionBadge } from "@/components/version-badge";
 import { signOut } from "@/lib/supabase/session";
@@ -564,6 +564,25 @@ function HomeContent() {
                 </div>
 
                 <BatchBanner />
+
+                {/* 每日入口：打开就想先做今天这几道，所以放在最上面 */}
+                {!initialNotebookId && (
+                    <Link
+                        href="/review"
+                        className="shrink-0 rounded-xl border bg-white px-3 py-2.5 flex items-center gap-3 hover:border-primary/40 transition-colors"
+                    >
+                        <span className="w-9 h-9 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
+                            <Sparkles className="h-4 w-4" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                            <span className="block text-sm font-semibold leading-tight">今日复习</span>
+                            <span className="block text-[11px] text-muted-foreground leading-tight">
+                                按「错得多、放得久」挑好题，一键生成卷子打印
+                            </span>
+                        </span>
+                        <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />
+                    </Link>
+                )}
 
                 {/* Action Center */}
                 <div className={initialNotebookId ? "flex shrink-0 justify-center" : "grid shrink-0 grid-cols-2 gap-2 sm:gap-4 md:grid-cols-4"}>

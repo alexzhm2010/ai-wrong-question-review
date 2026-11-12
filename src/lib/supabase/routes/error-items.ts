@@ -129,7 +129,10 @@ async function recordAttempt(id: string, result: string): Promise<Record<string,
     patch.mistakeStatus = "wrong_attempt";
   }
   const streak = Number(patch.correctStreak || 0);
-  patch.masteryLevel = streak >= 3 ? 2 : streak >= 2 ? 1 : 0;
+  // 已归档（masteryLevel=3）的题，答对就保持归档；答错自动回到待攻克
+  const wasArchived = Number(cur.masteryLevel || 0) >= 3;
+  patch.masteryLevel =
+    wasArchived && result === "correct" ? 3 : streak >= 3 ? 2 : streak >= 2 ? 1 : 0;
 
   const saved = await restJson<any[]>(byId("ErrorItem", id), {
     method: "PATCH",
@@ -156,6 +159,15 @@ async function handleFixed(ctx: RouteContext, sub: string): Promise<Response | n
     params.set("offset", String((page - 1) * pageSize));
 
     // 只把「简单相等/范围」条件放顶层，PostgREST 天然按 AND 组合
+    // ids 用于「今日卷 / 指定必刷」：只取点名的这几道，不再拉全库回来过滤
+    const ids = (q.get("ids") || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 200);
+    if (ids.length) {
+      params.set("id", `in.(${ids.map((id) => `"${id.replace(/"/g, "")}"`).join(",")})`);
+    }
     const subjectId = qget(q, "subjectId");
     const grade = qget(q, "gradeSemester");
     const mastery = qget(q, "mastery", "masteryLevel");
@@ -232,6 +244,35 @@ async function handleFixed(ctx: RouteContext, sub: string): Promise<Response | n
     const ids: string[] = (ctx.body?.ids || []).filter(Boolean);
     await deleteMany(ids);
     return json({ success: true, deleted: ids.length });
+  }
+  /**
+   * 归档 / 取消归档：masteryLevel=3 表示「已掌握，不再进日常复习」。
+   * 单开一个接口而不是逐条 PATCH，是为了 80 道题也只发一次请求。
+   */
+  if (sub === "archive" && ctx.method === "POST") {
+    const ids: string[] = (ctx.body?.ids || []).map(String).filter(Boolean).slice(0, 300);
+    if (!ids.length) return json({ success: true, updated: 0 });
+    const level = ctx.body?.archived === false ? 0 : 3;
+    const stamp = nowIso();
+    const inList = ids.map((id) => `"${id.replace(/"/g, "")}"`).join(",");
+    const ok = await restJson(`/ErrorItem?id=in.(${inList})`, {
+      method: "PATCH",
+      body: JSON.stringify({ masteryLevel: level, updatedAt: stamp }),
+    })
+      .then(() => true)
+      .catch(() => false);
+    if (!ok) {
+      // RLS 挡住批量 PATCH 时退回逐条，功能不能因为权限配置挂掉
+      await Promise.all(
+        ids.map((id) =>
+          restJson(byId("ErrorItem", id), {
+            method: "PATCH",
+            body: JSON.stringify({ masteryLevel: level, updatedAt: stamp }),
+          }).catch(() => {}),
+        ),
+      );
+    }
+    return json({ success: true, updated: ids.length, masteryLevel: level });
   }
   /**
    * 批改页一次交一整页：逐条 PATCH，并发 6 条。

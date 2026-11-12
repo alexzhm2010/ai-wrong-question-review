@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useRef, Suspense } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,8 @@ import { apiClient } from "@/lib/api-client";
 import { ErrorItem, PaginatedResponse } from "@/types/api";
 import { PRINT_PREVIEW_PAGE_SIZE } from "@/lib/constants/pagination";
 import { getSelectedPrintItems } from "@/lib/print-preview";
+import { AutoCropImage } from "@/components/auto-crop-image";
+import { autoCrop } from "@/lib/image-autocrop";
 
 type FilterKey = "all" | "w2" | "w3" | "never" | "streak";
 type SpaceKey = "none" | "sm" | "md" | "lg";
@@ -39,7 +41,35 @@ function PrintPreviewContent() {
     const [space, setSpace] = useState<SpaceKey>("sm");
     const [previewAt, setPreviewAt] = useState<number | null>(null);
     const [imageProgress, setImageProgress] = useState({ loaded: 0, total: 0 });
+    const [autoCropOn, setAutoCropOn] = useState(true);
+    const [cropSum, setCropSum] = useState({ count: 0, saved: 0 });
+    const [printCrops, setPrintCrops] = useState<Record<string, string>>({});
+    const [preparing, setPreparing] = useState(false);
     const imageLoadStarted = useRef(false);
+
+    useEffect(() => {
+        try {
+            const saved = localStorage.getItem("wq:autocrop");
+            if (saved === "0") setAutoCropOn(false);
+        } catch {
+            /* 隐私模式读不到就用默认值 */
+        }
+    }, []);
+
+    const toggleAutoCrop = (next: boolean) => {
+        setAutoCropOn(next);
+        setCropSum({ count: 0, saved: 0 });
+        try {
+            localStorage.setItem("wq:autocrop", next ? "1" : "0");
+        } catch {
+            /* 写不进去不影响本次使用 */
+        }
+    };
+
+    const onCropDone = useCallback((saved: number) => {
+        if (saved <= 0) return;
+        setCropSum((s) => ({ count: s.count + 1, saved: s.saved + saved }));
+    }, []);
 
     useEffect(() => {
         fetchItems();
@@ -52,8 +82,20 @@ function PrintPreviewContent() {
             const response = await apiClient.get<PaginatedResponse<ErrorItem>>(
                 `/api/error-items/list?${params.toString()}`,
             );
-            setItems(response.items);
-            setSelectedIds(new Set(response.items.map((item) => item.id)));
+            // 带 ids 进来（今日卷 / 指定必刷）时按传入顺序排，卷子顺序就是推荐顺序
+            const wanted = (searchParams.get("ids") || "")
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean);
+            let list = response.items;
+            if (wanted.length) {
+                const rank = new Map(wanted.map((id, i) => [id, i]));
+                list = list
+                    .filter((i) => rank.has(i.id))
+                    .sort((a, b) => (rank.get(a.id) || 0) - (rank.get(b.id) || 0));
+            }
+            setItems(list);
+            setSelectedIds(new Set(list.map((item) => item.id)));
         } catch (error) {
             console.error(error);
         } finally {
@@ -116,7 +158,51 @@ function PrintPreviewContent() {
     }, [items, filter]);
 
     const selectedItems = getSelectedPrintItems(items, selectedIds);
+    const selectedKey = selectedItems.map((i) => i.id).join(",");
+    /**
+     * 图片是分批补进来的，selectedKey 在补图前后都一样，
+     * 所以这里要单独盯着「哪些题已经有图了」，否则第一轮跑完就再也不跑了。
+     */
+    const imageKey = items
+        .map((i) => (i.originalImageUrl ? `${i.id}:${i.originalImageUrl.length}` : ""))
+        .filter(Boolean)
+        .join(",");
     const reserveSpace = !showAnswers && !showAnalysis;
+
+    /**
+     * 打印区的高清裁边图：选中后就在后台一张张算，进打印对话框前已经备好，
+     * 用户看到的排版就是印出来的排版。每次只算一张并让出主线程，页面不会卡。
+     */
+    const cropJobs = useRef<Set<string>>(new Set());
+    const cropInflight = useRef<Set<string>>(new Set());
+    useEffect(() => {
+        if (!autoCropOn || !selectedKey) return;
+        let cancelled = false;
+        const byId = new Map(items.map((i) => [i.id, i]));
+        const queue = selectedKey.split(",").slice(0, 80);
+        (async () => {
+            for (const id of queue) {
+                if (cancelled) return;
+                const item = byId.get(id);
+                const url = item?.originalImageUrl;
+                if (!url || cropJobs.current.has(id) || cropInflight.current.has(id)) continue;
+                cropInflight.current.add(id);
+                const res = await autoCrop(url, 1200).catch(() => null);
+                cropInflight.current.delete(id);
+                if (!res) continue;
+                if (res.changed) {
+                    cropJobs.current.add(id);
+                    setPrintCrops((prev) => ({ ...prev, [id]: res.url }));
+                }
+                await new Promise<void>((r) => setTimeout(r, 0));
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+        // items 每次补图都会变，但这里只关心「有没有图、图换没换」
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedKey, autoCropOn, imageKey]);
 
     const toggle = (id: string) => {
         setSelectedIds((prev) => {
@@ -135,7 +221,7 @@ function PrintPreviewContent() {
      * 打印的同时把这批题目记到本地：用户做完卷子回来点「批改」，
      * 不用再从列表里一道道挑，直接就是刚才打印的这一批。
      */
-    const handlePrint = () => {
+    const handlePrint = async () => {
         try {
             localStorage.setItem(
                 "wq:last-print",
@@ -143,6 +229,32 @@ function PrintPreviewContent() {
             );
         } catch {
             /* 隐私模式下写不进去，不影响打印 */
+        }
+
+        /**
+         * 打印前把这一批题的高清裁边图算好再进打印对话框。
+         * 不放任 <img> 自己裁，是因为打印区默认全选会有七八十张，
+         * 每张 1200px 重编码会白烧内存；只在真正要印的时候算这一次。
+         */
+        if (autoCropOn && selectedItems.length) {
+            setPreparing(true);
+            const targets = selectedItems.filter((i) => i.originalImageUrl).slice(0, 60);
+            try {
+                const results = await Promise.all(
+                    targets.map((i) =>
+                        autoCrop(i.originalImageUrl as string, 1200)
+                            .then((r) => [i.id, r.changed ? r.url : ""] as const)
+                            .catch(() => [i.id, ""] as const),
+                    ),
+                );
+                const map: Record<string, string> = {};
+                for (const [id, url] of results) if (url) map[id] = url;
+                setPrintCrops(map);
+                // 等 React 把新图刷进 DOM，否则打印出来还是原图
+                await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+            } finally {
+                setPreparing(false);
+            }
         }
         window.print();
     };
@@ -187,16 +299,25 @@ function PrintPreviewContent() {
                                 {imageProgress.total > 0 && imageProgress.loaded < imageProgress.total
                                     ? ` · 图片 ${imageProgress.loaded}/${imageProgress.total}`
                                     : ""}
+                                {cropSum.count > 0
+                                    ? ` · 已裁边 ${cropSum.count} 张，省 ${Math.round((cropSum.saved / cropSum.count) * 100)}% 空白`
+                                    : ""}
                             </div>
                         </div>
+                        <Link
+                            href="/review"
+                            className="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-600 whitespace-nowrap"
+                        >
+                            今日卷
+                        </Link>
                         <Link
                             href="/grade"
                             className="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-600 whitespace-nowrap"
                         >
                             批改
                         </Link>
-                        <Button onClick={handlePrint} size="sm" className="whitespace-nowrap" disabled={selectedItems.length === 0}>
-                            打印 / PDF
+                        <Button onClick={handlePrint} size="sm" className="whitespace-nowrap" disabled={selectedItems.length === 0 || preparing}>
+                            {preparing ? "准备图片…" : "打印 / PDF"}
                         </Button>
                     </div>
 
@@ -258,8 +379,11 @@ function PrintPreviewContent() {
                                         onClick={() => setPreviewAt(index)}
                                     >
                                         {item.originalImageUrl ? (
-                                            <img
+                                            <AutoCropImage
                                                 src={item.originalImageUrl}
+                                                maxWidth={420}
+                                                enabled={autoCropOn}
+                                                onCrop={onCropDone}
                                                 alt=""
                                                 loading="lazy"
                                                 className={`w-full h-full object-contain bg-white transition-opacity ${on ? "opacity-80" : ""}`}
@@ -317,6 +441,11 @@ function PrintPreviewContent() {
                             <input type="checkbox" checked={showQuestionText} onChange={(e) => setShowQuestionText(e.target.checked)}
                                 className="rounded border-gray-300 accent-blue-600" />
                             用文字（默认用原图）
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer" title="去掉手机状态栏与四周白边，题会印得更大更清楚">
+                            <input type="checkbox" checked={autoCropOn} onChange={(e) => toggleAutoCrop(e.target.checked)}
+                                className="rounded border-gray-300 accent-blue-600" />
+                            自动裁边
                         </label>
                         <label className="flex items-center gap-1.5 cursor-pointer">
                             <input type="checkbox" checked={showAnswers} onChange={(e) => setShowAnswers(e.target.checked)}
@@ -393,7 +522,7 @@ function PrintPreviewContent() {
                                         <MarkdownRenderer content={item.questionText} />
                                     ) : item.originalImageUrl ? (
                                         <img
-                                            src={item.originalImageUrl}
+                                            src={printCrops[item.id] || item.originalImageUrl}
                                             alt="题目"
                                             className="h-auto border rounded"
                                             style={{ maxWidth: `${imageScale}%` }}

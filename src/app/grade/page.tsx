@@ -182,6 +182,9 @@ function GradeContent() {
                         <Link href="/print-preview" className="block w-full text-center rounded-lg bg-slate-900 text-white py-3 text-sm font-semibold">
                             再打印一批
                         </Link>
+                        <Link href="/mastery" className="block w-full text-center rounded-lg border py-3 text-sm">
+                            看掌握度变化
+                        </Link>
                         <Link href="/notebooks" className="block w-full text-center rounded-lg border py-3 text-sm">
                             返回错题本
                         </Link>
