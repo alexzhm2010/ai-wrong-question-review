@@ -261,8 +261,21 @@ let cachedUser: Record<string, any> | null = null;
  */
 export async function appUser(force = false): Promise<Record<string, any> | null> {
   if (cachedUser && !force) return cachedUser;
-  if (!getSession()) return null;
-  const rows = await restJson<any[]>("/User?select=*&limit=1");
+  const session = getSession();
+  if (!session) return null;
+  // 管理员的 RLS 允许读到所有 User 行，单靠 limit=1 可能拿到别人的记录，
+  // 进而把别人的错题本当成自己的。用 auth uid 精确定位；老数据缺
+  // auth_user_id 时回退原逻辑，保证兼容。
+  const uid = session.user?.id;
+  let rows: any[] = [];
+  if (uid) {
+    rows = await restJson<any[]>(
+      `/User?select=*&auth_user_id=eq.${encodeURIComponent(uid)}&limit=1`,
+    ).catch(() => []);
+  }
+  if (!rows?.length) {
+    rows = await restJson<any[]>("/User?select=*&limit=1");
+  }
   cachedUser = rows?.[0] || null;
   return cachedUser;
 }
