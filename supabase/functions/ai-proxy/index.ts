@@ -24,7 +24,23 @@ const API_KEY = Deno.env.get("OPENAI_API_KEY") || "";
 const BASE_URL = Deno.env.get("OPENAI_BASE_URL") || "https://ark.cn-beijing.volces.com/api/v3";
 const MODEL = Deno.env.get("OPENAI_MODEL") || "doubao-seed-2-1-lite-260915";
 
+/**
+ * 重新解题里「深度思考」的时间预算（毫秒）。
+ * Edge Function 单次请求墙钟上限 150s，超时会被平台直接杀掉（546 WORKER_RESOURCE_LIMIT），
+ * 前端只能看到一句「重新解题失败」。留 95s 给 deep，剩余 ~50s 给快速模式兜底。
+ */
+const REANSWER_DEEP_BUDGET_MS = 95_000;
+
 function extractTag(text: string, tag: string) { return extractTagSafe(text, tag, tag === "analysis"); }
+
+/** data URL 或裸 base64 → 可直接喂给 chat() 的 { imageBase64, mimeType } */
+function parseImagePayload(raw: unknown): { imageBase64?: string; mimeType?: string } {
+  const value = String(raw || "");
+  if (!value) return {};
+  const m = value.match(/^data:([^;]+);base64,([\s\S]+)$/);
+  if (m) return { imageBase64: m[2].trim(), mimeType: m[1] || "image/jpeg" };
+  return { imageBase64: value.trim(), mimeType: "image/jpeg" };
+}
 
 /** 与 src/lib/ai/openai-provider.ts#parseResponse 同源 */
 function parseResponse(text: string, fallbackQuestionText?: string) {
@@ -455,10 +471,52 @@ Deno.serve(async (req: Request) => {
   // ---------------------------------------------------------------- 其它 AI 动作
   try {
     if (action === "reanswer") {
-      const p = generateReanswerPrompt(language, payload.questionText || "", payload.subject || null, options, payload.gradeSemester ?? null);
-      const text = await chat({ systemPrompt: p, userText: payload.imageBase64 ? undefined : "请重新解答", stream: false, reasoningMode });
+      const userGuidance = String(payload.guidance || "").trim();
+      const lockedAnswer = String(payload.lockedAnswerText || "").trim();
+      const p = generateReanswerPrompt(
+        language, payload.questionText || "", payload.subject || null, options,
+        payload.gradeSemester ?? null, userGuidance, lockedAnswer,
+      );
+      const image = parseImagePayload(payload.imageBase64);
+      const startedAt = Date.now();
+      const base = {
+        systemPrompt: p,
+        ...image,
+        userText: image.imageBase64 ? undefined : "请重新解答",
+        stream: false,
+        // 与 analyze 对齐：思考 + 作答都算 completion tokens，给足空间避免被截断
+        maxTokens: 16000,
+      };
+
+      // 平台硬限制：单次请求 150s 墙钟（Free plan），超过直接被 worker 杀掉返回 546。
+      // 深度思考遇到长题很容易突破 150s，所以给 deep 留一条明确的预算线，
+      // 超预算立刻降级为快速模式，保证用户一定能拿到结果，并如实告知降级。
+      let text = "";
+      let usedMode: "deep" | "fast" = reasoningMode;
+      let degraded = false;
+      if (reasoningMode === "deep") {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), REANSWER_DEEP_BUDGET_MS);
+        try {
+          text = await chat({ ...base, reasoningMode: "deep", signal: controller.signal });
+          console.log(`[ai-proxy] reanswer deep ok in ${Date.now() - startedAt}ms`);
+        } catch (e) {
+          if (!controller.signal.aborted) throw e;
+          console.warn(`[ai-proxy] reanswer deep aborted at ${REANSWER_DEEP_BUDGET_MS}ms, fallback to fast`);
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+      if (!text) {
+        if (reasoningMode === "deep") degraded = true;
+        usedMode = "fast";
+        text = await chat({ ...base, reasoningMode: "fast" });
+        console.log(`[ai-proxy] reanswer fast done in ${Date.now() - startedAt}ms`);
+      }
       const parsed = parseResponse(text, payload.questionText || "");
-      return json({ ...parsed, finalResult: parsed });
+      // 用户锁定答案时，答案以用户为准，模型只贡献解析（防止它又把答案改回去）
+      if (lockedAnswer) parsed.answerText = lockedAnswer;
+      return json({ ...parsed, finalResult: parsed, usedMode, degraded, answerLocked: !!lockedAnswer });
     }
     if (action === "geogebra_analyze") {
       const p = generateGeogebraPrompt(payload.questionText || "", payload.answerText || "", payload.analysis || "", payload.previousErrors);

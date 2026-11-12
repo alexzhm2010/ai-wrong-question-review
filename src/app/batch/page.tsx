@@ -55,6 +55,7 @@ interface BatchItem {
     autoDeepRetry?: boolean;
     answerConflict?: boolean;
     originalAnswerText?: string | null;
+    userGuidance?: string | null;
     hasImage?: boolean;
 }
 
@@ -263,7 +264,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
         }
     };
 
-    const editSave = async (data: ParsedQuestion & { subjectId?: string; gradeSemester?: string }) => {
+    const editSave = async (data: ParsedQuestion & { subjectId?: string; gradeSemester?: string; userGuidance?: string }) => {
         if (!editing) return;
         const willSave = editing.status !== "saved";
         try {
@@ -276,6 +277,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
                     subjectId: data.subjectId,
                     gradeSemester: data.gradeSemester,
                     knowledgePoints: data.knowledgePoints,
+                    userGuidance: data.userGuidance || null,
                 },
             });
             setEditing(null);
@@ -553,6 +555,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
                                 requiresImage: false,
                             }}
                             initialSubjectId={editing.subjectId || undefined}
+                            initialGuidance={editing.userGuidance || ""}
                             imagePreview={editingImage}
                             onSave={editSave}
                             onCancel={() => { setEditing(null); setEditingImage(null); }}

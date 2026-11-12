@@ -183,6 +183,28 @@ describe('AI Prompts', () => {
             expect(prompt).not.toContain('{{question_text}}');
             expect(prompt).not.toContain('{{language_instruction}}');
             expect(prompt).not.toContain('{{provider_hints}}');
+            expect(prompt).not.toContain('{{user_constraints}}');
+        });
+
+        it('人工补充说明应注入用户约束段，并声明优先级', () => {
+            const prompt = generateReanswerPrompt('zh', questionText, '化学', undefined, '高一上',
+                '正确答案是偏低，因为俯视读数偏大');
+            expect(prompt).toContain('正确答案是偏低，因为俯视读数偏大');
+            expect(prompt).toContain('人工修正说明');
+            expect(prompt).toContain('最高优先级');
+        });
+
+        it('锁定答案时应要求答案逐字一致、只补解析', () => {
+            const prompt = generateReanswerPrompt('zh', questionText, '化学', undefined, '高一上',
+                null, '偏低');
+            expect(prompt).toContain('参考答案已由用户锁定');
+            expect(prompt).toContain('偏低');
+            expect(prompt).toContain('禁止修改该答案');
+        });
+
+        it('无约束时用户约束段应给出无约束说明，不留下空占位', () => {
+            const prompt = generateReanswerPrompt('zh', questionText, '数学');
+            expect(prompt).toContain('（无，按题目文本独立求解）');
         });
 
         it('重新解题提示词应该要求同步输出新的错因分析', () => {

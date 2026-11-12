@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Save, RefreshCw, Loader2, ChevronDown, ChevronUp } from "lucide-react";
+import { Save, RefreshCw, Loader2, ChevronDown, ChevronUp, Pencil, Undo2 } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { frontendLogger } from "@/lib/frontend-logger";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
@@ -14,6 +14,7 @@ import { ReferenceAnswer } from "@/components/reference-answer";
 import { TagInput } from "@/components/tag-input";
 import { NotebookSelector } from "@/components/notebook-selector";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { apiClient } from "@/lib/api-client";
 import { UserProfile, Notebook } from "@/types/api";
 import { inferSubjectFromName } from "@/lib/knowledge-tags";
@@ -33,6 +34,8 @@ interface ParsedQuestionWithSubject extends ParsedQuestion {
     subjectId?: string;
     gradeSemester?: string;
     geogebraCommands?: string;
+    /** 人工纠错说明：随「重新解题」发给 AI，并保存在本题 */
+    userGuidance?: string;
 }
 
 interface CorrectionEditorProps {
@@ -41,6 +44,7 @@ interface CorrectionEditorProps {
     onCancel: () => void;
     imagePreview?: string | null;
     initialSubjectId?: string;
+    initialGuidance?: string;
     aiTimeout?: number;
     /** 保存按钮文案覆盖：批量确认场景只是「保存修改」，不是直接入库 */
     saveLabel?: string;
@@ -54,7 +58,7 @@ type ReanswerErrorMessages = {
     timeout?: string;
 };
 
-export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, initialSubjectId, aiTimeout, saveLabel }: CorrectionEditorProps) {
+export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, initialSubjectId, initialGuidance, aiTimeout, saveLabel }: CorrectionEditorProps) {
     // 重新解题同样按「这一题」的思考深度走，默认沿用首页选择
     const [thinkingMode, setThinkingMode] = useThinkingMode();
     const [data, setData] = useState<ParsedQuestionWithSubject>(() => {
@@ -86,6 +90,17 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
     const [imageExpanded, setImageExpanded] = useState(false);
     const [mistakePreviewExpanded, setMistakePreviewExpanded] = useState(false);
 
+    // —— 人工接管：题干 / 答案 / 解析可直接编辑，并保留上一版可撤销 ——
+    const [editingField, setEditingField] = useState<"questionText" | "answerText" | "analysis" | null>(null);
+    const [fieldDraft, setFieldDraft] = useState("");
+    const [manualFields, setManualFields] = useState<Set<"questionText" | "answerText" | "analysis">>(new Set());
+    const [undoSnapshot, setUndoSnapshot] = useState<
+        { questionText: string; answerText: string; analysis: string } | null
+    >(null);
+    // —— 给 AI 的纠错说明 / 锁定答案 ——
+    const [guidance, setGuidance] = useState(initialGuidance || "");
+    const [lockAnswer, setLockAnswer] = useState(false);
+
     // 参考答案由后端经「反向代入验算」自动定夺，前端不再做答案/解析一致性的人工判断 UI。
     const [educationStage, setEducationStage] = useState<string | undefined>(undefined);
 
@@ -115,10 +130,41 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
         setData(prev => prev.subjectId ? prev : { ...prev, subjectId: initialSubjectId });
     }, [initialSubjectId]);
 
+    // 「人可以直接改」：题干 / 参考答案 / 解析都支持手动编辑，并保留上一版可撤销
+    type EditableField = "questionText" | "answerText" | "analysis";
+
+    const startEditing = (field: EditableField) => {
+        setEditingField(field);
+        setFieldDraft(String(data[field] || ""));
+    };
+
+    const commitEditing = () => {
+        if (!editingField) return;
+        const field = editingField;
+        setUndoSnapshot({ questionText: data.questionText, answerText: data.answerText, analysis: data.analysis });
+        setData(prev => ({ ...prev, [field]: fieldDraft }));
+        setManualFields(prev => new Set(prev).add(field));
+        setEditingField(null);
+        setFieldDraft("");
+    };
+
+    const undoManualEdit = () => {
+        if (!undoSnapshot) return;
+        setData(prev => ({ ...prev, ...undoSnapshot }));
+        setManualFields(new Set());
+        setUndoSnapshot(null);
+        toast.info(t.editor.undoDone || "已恢复上一版答案与解析");
+    };
+
     // 重新解题函数
     const handleReanswer = async () => {
         if (!data.questionText.trim()) {
             toast.info(t.editor.enterQuestionFirst || 'Please enter question text first');
+            return;
+        }
+        // 重解会覆盖答案/解析；已经人工改过就先确认，避免一句话丢掉手工成果
+        const willOverwrite = manualFields.has("analysis") || (!lockAnswer && manualFields.has("answerText"));
+        if (willOverwrite && !window.confirm(t.editor.overwriteManualConfirm || "重新解题会覆盖你手动修改的答案/解析，继续吗？")) {
             return;
         }
 
@@ -132,6 +178,8 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                 imagePreview,
                 gradeSemester: data.gradeSemester,
                 reasoningMode: thinkingMode,
+                guidance,
+                lockedAnswerText: lockAnswer ? data.answerText : undefined,
             });
 
             if (requestBody.imageBase64) {
@@ -144,6 +192,9 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
 
             const result = await apiClient.post<ReanswerQuestionResult>("/api/reanswer", requestBody, { timeout: aiTimeout || 180000 });
 
+            // 覆盖前留一版快照，重解结果不满意时可一键退回
+            setUndoSnapshot({ questionText: data.questionText, answerText: data.answerText, analysis: data.analysis });
+            setManualFields(new Set());
             setData(prev => {
                 const mistake = reconcileMistakeFields({
                     answerText: result.answerText,
@@ -153,7 +204,8 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                 });
                 return {
                     ...prev,
-                    answerText: result.answerText,
+                    // 锁定答案时只接受解析，答案永远以用户当前值为准
+                    answerText: lockAnswer ? prev.answerText : result.answerText,
                     analysis: result.analysis,
                     knowledgePoints: result.knowledgePoints,
                     wrongAnswerText: mistake.wrongAnswerText,
@@ -264,6 +316,7 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
             );
             await onSave({
                 ...data,
+                userGuidance: guidance.trim() || undefined,
                 mistakeStatus: status,
                 // 答对时不保留「错误解答 / 错因」，避免把正确答案误标为错误
                 wrongAnswerText: status === 'correct' ? '' : data.wrongAnswerText,
@@ -391,6 +444,40 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                             </>
                         )}
                     </Button>
+
+                    {/* 人给 AI 的约束：说明为什么错 / 正确答案是什么；锁答案后只让它补解析 */}
+                    <div className="space-y-2 rounded-lg border bg-muted/20 p-2.5">
+                        <div className="flex items-center justify-between">
+                            <Label className="text-xs">{t.editor.guidanceLabel || "给 AI 的补充说明（可选）"}</Label>
+                            <span className="text-[10px] text-muted-foreground">保存在本题</span>
+                        </div>
+                        <Textarea
+                            value={guidance}
+                            onChange={(e) => setGuidance(e.target.value)}
+                            rows={3}
+                            className="text-sm"
+                            placeholder={t.editor.guidancePlaceholder || "例：正确答案是偏低——俯视量筒读数偏大，实际取液偏少；请按这个结论写解析"}
+                        />
+                        <div className="flex items-center justify-between gap-2 pt-1">
+                            <div>
+                                <div className="text-xs font-medium">{t.editor.lockAnswer || "锁定当前答案，只重写解析"}</div>
+                                <div className="text-[10px] text-muted-foreground">AI 不得改动上面的参考答案</div>
+                            </div>
+                            <Switch
+                                checked={lockAnswer}
+                                onCheckedChange={setLockAnswer}
+                                disabled={!data.answerText.trim()}
+                            />
+                        </div>
+                    </div>
+
+                    {undoSnapshot && (
+                        <Button variant="outline" size="sm" className="w-full" onClick={undoManualEdit}>
+                            <Undo2 className="mr-2 h-4 w-4" />
+                            {t.editor.undoEdit || "恢复上一版答案与解析"}
+                        </Button>
+                    )}
+
                     {thinkingMode === 'deep' && !reanswerDegraded && (
                         <p className="text-xs text-muted-foreground">
                             {t.editor.deepBudgetHint || '⏳ 深度思考最长约 95 秒，超时会自动改用快速模式'}
@@ -501,14 +588,45 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                     </Card>
                 </div>
 
-                {/* 右侧：预览区 */}
+                {/* 右侧：预览区（题干 / 答案 / 解析都可以手动改，改过会标「人工修正」） */}
                 <div className="space-y-6">
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>{t.editor.preview?.question || "题目内容"}</CardTitle>
+                    <Card className={manualFields.has("questionText") ? "border-amber-300" : undefined}>
+                        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+                            <CardTitle className="flex items-center gap-2">
+                                {t.editor.preview?.question || "题目内容"}
+                                {manualFields.has("questionText") && (
+                                    <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-normal text-amber-800">人工修正</span>
+                                )}
+                            </CardTitle>
+                            {editingField !== "questionText" && (
+                                <Button variant="ghost" size="sm" onClick={() => startEditing("questionText")}>
+                                    <Pencil className="mr-1 h-4 w-4" />
+                                    {t.common?.edit || "编辑"}
+                                </Button>
+                            )}
                         </CardHeader>
                         <CardContent>
-                            <MarkdownRenderer content={data.questionText} />
+                            {editingField === "questionText" ? (
+                                <div className="space-y-2">
+                                    <Textarea
+                                        value={fieldDraft}
+                                        onChange={(e) => setFieldDraft(e.target.value)}
+                                        rows={10}
+                                        className="font-mono text-sm"
+                                        placeholder="支持 Markdown / LaTeX"
+                                    />
+                                    <div className="flex gap-2">
+                                        <Button size="sm" onClick={commitEditing}>
+                                            <Save className="mr-1 h-4 w-4" />{t.common?.save || "保存"}
+                                        </Button>
+                                        <Button size="sm" variant="outline" onClick={() => setEditingField(null)}>
+                                            {t.common?.cancel || "取消"}
+                                        </Button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <MarkdownRenderer content={data.questionText} />
+                            )}
                         </CardContent>
                     </Card>
 
@@ -523,21 +641,83 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                         />
                     ) : null}
 
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>{t.editor.preview?.answer || "参考答案"}</CardTitle>
+                    <Card className={manualFields.has("answerText") ? "border-amber-300" : undefined}>
+                        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+                            <CardTitle className="flex items-center gap-2">
+                                {t.editor.preview?.answer || "参考答案"}
+                                {manualFields.has("answerText") && (
+                                    <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-normal text-amber-800">人工修正</span>
+                                )}
+                            </CardTitle>
+                            {editingField !== "answerText" && (
+                                <Button variant="ghost" size="sm" onClick={() => startEditing("answerText")}>
+                                    <Pencil className="mr-1 h-4 w-4" />
+                                    {t.common?.edit || "编辑"}
+                                </Button>
+                            )}
                         </CardHeader>
                         <CardContent>
-                            <ReferenceAnswer text={data.answerText} />
+                            {editingField === "answerText" ? (
+                                <div className="space-y-2">
+                                    <Textarea
+                                        value={fieldDraft}
+                                        onChange={(e) => setFieldDraft(e.target.value)}
+                                        rows={4}
+                                        className="font-mono text-sm"
+                                        placeholder="支持 Markdown / LaTeX"
+                                    />
+                                    <div className="flex gap-2">
+                                        <Button size="sm" onClick={commitEditing}>
+                                            <Save className="mr-1 h-4 w-4" />{t.common?.save || "保存"}
+                                        </Button>
+                                        <Button size="sm" variant="outline" onClick={() => setEditingField(null)}>
+                                            {t.common?.cancel || "取消"}
+                                        </Button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <ReferenceAnswer text={data.answerText} />
+                            )}
                         </CardContent>
                     </Card>
 
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>{t.editor.preview?.analysis || "解析思路"}</CardTitle>
+                    <Card className={manualFields.has("analysis") ? "border-amber-300" : undefined}>
+                        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+                            <CardTitle className="flex items-center gap-2">
+                                {t.editor.preview?.analysis || "解析思路"}
+                                {manualFields.has("analysis") && (
+                                    <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-normal text-amber-800">人工修正</span>
+                                )}
+                            </CardTitle>
+                            {editingField !== "analysis" && (
+                                <Button variant="ghost" size="sm" onClick={() => startEditing("analysis")}>
+                                    <Pencil className="mr-1 h-4 w-4" />
+                                    {t.common?.edit || "编辑"}
+                                </Button>
+                            )}
                         </CardHeader>
                         <CardContent>
-                            <MarkdownRenderer content={data.analysis} />
+                            {editingField === "analysis" ? (
+                                <div className="space-y-2">
+                                    <Textarea
+                                        value={fieldDraft}
+                                        onChange={(e) => setFieldDraft(e.target.value)}
+                                        rows={14}
+                                        className="font-mono text-sm"
+                                        placeholder="支持 Markdown / LaTeX，行间公式用 $$...$$"
+                                    />
+                                    <div className="flex gap-2">
+                                        <Button size="sm" onClick={commitEditing}>
+                                            <Save className="mr-1 h-4 w-4" />{t.common?.save || "保存"}
+                                        </Button>
+                                        <Button size="sm" variant="outline" onClick={() => setEditingField(null)}>
+                                            {t.common?.cancel || "取消"}
+                                        </Button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <MarkdownRenderer content={data.analysis} />
+                            )}
                         </CardContent>
                     </Card>
 

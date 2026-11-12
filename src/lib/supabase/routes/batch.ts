@@ -183,7 +183,7 @@ export const BATCH_HANDLERS: RouteHandler[] = [
       if (!job) return apiError(404, "批次不存在");
       // 明确列字段：不返回 imageBase64
       const items = await restJson<any[]>(
-        `/BatchItem?select=id,jobId,idx,status,thumbBase64,questionText,answerText,analysis,subjectId,subjectName,gradeSemester,knowledgePoints,errorItemId,failureReason,attempts,autoDeepRetry,answerConflict,originalAnswerText,createdAt,updatedAt&jobId=eq.${encodeURIComponent(id)}&order=idx.asc`,
+        `/BatchItem?select=id,jobId,idx,status,thumbBase64,questionText,answerText,analysis,subjectId,subjectName,gradeSemester,knowledgePoints,errorItemId,failureReason,attempts,autoDeepRetry,answerConflict,originalAnswerText,userGuidance,createdAt,updatedAt&jobId=eq.${encodeURIComponent(id)}&order=idx.asc`,
       ).catch(() => []);
       return json({ job, items: (items || []).map(publicItem) });
     }
@@ -212,7 +212,7 @@ export const BATCH_HANDLERS: RouteHandler[] = [
         `/BatchItem?select=id,jobId&id=eq.${encodeURIComponent(itemId || "")}&userId=eq.${encodeURIComponent(user.id)}&limit=1`,
       ).catch(() => []);
       if (!rows?.length) return apiError(404, "条目不存在");
-      const allowed = ["questionText", "answerText", "analysis", "subjectId", "subjectName", "gradeSemester", "errorItemId"];
+      const allowed = ["questionText", "answerText", "analysis", "subjectId", "subjectName", "gradeSemester", "errorItemId", "userGuidance"];
       const next: Record<string, any> = { updatedAt: nowIso() };
       for (const k of allowed) if (patch && k in patch) next[k] = patch[k];
       if (patch && Array.isArray(patch.knowledgePoints)) {

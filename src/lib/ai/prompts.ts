@@ -542,8 +542,11 @@ export const DEFAULT_REANSWER_TEMPLATE = `【角色与核心任务 (ROLE AND COR
 【学科提示 (SUBJECT HINT)】
 {{subject_hint}}
 
+【用户约束（最高优先级，优先于本模板后文所有规定）】
+{{user_constraints}}
+
 【工作顺序：先独立解题，再评判作答 (CRITICAL WORKFLOW)】
-① 只依据上面的题目文本独立求解；若图片中存在学生作答、批注、对勾/叉号，此阶段一律忽略。
+① 只依据上面的题目文本与【用户约束】独立求解；若图片中存在学生作答、批注、对勾/叉号，此阶段一律忽略。
 ② 静默自检：把答案代回原题；选择题/取值范围题把端点代入题干验证；区间/解集题先写成明确区间再判断。**自检只做一次，通过后即锁定结论**；自检必须在动笔写解析之前于内部完成，其结果直接写成解析里的常规推导步骤，不要写出检查过程、提醒句或改判独白。严禁引用或比对任何「标准答案」「权威解法」「常见答案」「某资料 / 某模拟题」，不得因外部印象反复重算或改写已验证的结论。
 ③ 确定正确答案后，才看图片中的作答区域。**若没有任何作答痕迹**（只有印刷题干与空白横线 / 空白区域），直接判为 not_attempted 并**整段跳过作答判定输出**：不输出下面三个判定标签，写完 </analysis> 与 </knowledge_points> 即结束响应；严禁臆测、补写学生作答，严禁把空白当成错误答案，严禁在解析里提及学生作答、红叉或任何虚构答案。确有作答时再比对并输出判定标签。
 
@@ -765,7 +768,9 @@ export function generateReanswerPrompt(
   questionText: string,
   subject?: string | null,
   options?: PromptOptions,
-  gradeSemester?: string | null
+  gradeSemester?: string | null,
+  userGuidance?: string | null,
+  lockedAnswer?: string | null
 ): string {
   const langInstruction = language === 'zh'
     ? "IMPORTANT: 解析必须使用简体中文。如果题目是英文，答案保持英文，但解析用中文。"
@@ -775,12 +780,33 @@ export function generateReanswerPrompt(
     ? `本题学科：${subject}`
     : "请根据题目内容判断学科。";
 
+  // 人工纠错说明 / 锁定答案：用户已经给出结论时，模型只负责把解析写对，不再自行改判
+  const constraintLines: string[] = [];
+  const guidance = (userGuidance || '').trim();
+  const locked = (lockedAnswer || '').trim();
+  if (guidance) {
+    constraintLines.push(
+      `- 人工修正说明（用户给定，视为正确答案/方法约束）：${guidance}\n` +
+      `  处理要求：直接采纳，禁止质疑、禁止重新论证其是否成立；解析必须按该说明的思路展开，最终结论必须与之一致。`
+    );
+  }
+  if (locked) {
+    constraintLines.push(
+      `- 参考答案已由用户锁定：${locked}\n` +
+      `  处理要求：禁止修改该答案；<answer_text> 与 <final_answer> 必须与它完全一致；你只负责补全解析，且推导必须收敛到该答案。`
+    );
+  }
+  const userConstraints = constraintLines.length
+    ? constraintLines.join('\n')
+    : '（无，按题目文本独立求解）';
+
   const template = options?.customTemplate || DEFAULT_REANSWER_TEMPLATE;
 
   return replaceVariables(template, {
     language_instruction: langInstruction,
     question_text: questionText,
     subject_hint: subjectHint,
+    user_constraints: userConstraints,
     grade_instruction: generateGradeInstruction(gradeSemester),
     provider_hints: options?.providerHints || ''
   }).trim();
