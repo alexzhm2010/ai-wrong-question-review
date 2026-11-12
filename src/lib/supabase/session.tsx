@@ -6,12 +6,13 @@
  * 旧版页面里大量使用 useSession / signIn / signOut，为了让 214 个前端文件
  * 零改动，这里保持完全相同的调用签名，只把底层换成 Supabase Auth。
  */
-import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { SUPABASE_URL, SUPABASE_ANON_KEY, BASE_PATH } from "./config";
 import {
   clearSession,
   getSession,
   setSession,
+  ensureFreshToken,
   invalidateAppUser,
   appUser,
   resolveLoginEmail,
@@ -55,33 +56,44 @@ function toSession(raw: StaticSession | null): Session | null {
 }
 
 async function refreshToken(): Promise<boolean> {
-  const raw = getSession();
-  if (!raw) return false;
-  if (Date.now() < raw.expires_at) return true;
-  try {
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
-      method: "POST",
-      headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: raw.refresh_token }),
-    });
-    if (!res.ok) throw new Error("refresh failed");
-    const data = await res.json();
-    setSession({
-      ...raw,
-      access_token: data.access_token,
-      refresh_token: data.refresh_token || raw.refresh_token,
-      expires_at: Date.now() + 1000 * (data.expires_in || 3600),
-    });
-    return true;
-  } catch {
-    clearSession();
-    return false;
-  }
+  // 交给 core 的单例刷新锁处理：SessionProvider 与首屏 API 请求不会再各刷各的，
+  // 避免 refresh token 被并发轮换后互相踢下线。
+  if (!getSession()) return false;
+  const token = await ensureFreshToken();
+  return Boolean(token);
 }
 
 export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [data, setData] = useState<Session | null>(null);
   const [status, setStatus] = useState<SessionStatus>("loading");
+  // 登录时若 User 表没读到（RLS/网络抖动），role 会停在默认的 user；
+  // 这里在后续启动时补一次校正，避免管理员每次都被降级。
+  const roleSyncRef = useRef(false);
+
+  const syncRole = useCallback(async (base: StaticSession | null) => {
+    if (!base || base.roleVerified === true || roleSyncRef.current) return;
+    roleSyncRef.current = true;
+    try {
+      const row = await appUser(true);
+      if (!row?.role) return;
+      const updated: StaticSession = {
+        ...base,
+        roleVerified: true,
+        user: {
+          ...base.user,
+          role: row.role,
+          username: row.username || base.user.username,
+          name: base.user.name || row.name || "",
+        },
+      };
+      setSession(updated, { silent: true });
+      setData(toSession(updated));
+    } catch {
+      // 下次启动再试
+    } finally {
+      roleSyncRef.current = false;
+    }
+  }, []);
 
   const update = useCallback(async () => {
     const raw = getSession();
@@ -90,16 +102,22 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setStatus("unauthenticated");
       return null;
     }
-    if (!(await refreshToken())) {
+    const ok = await refreshToken();
+    const current = getSession();
+    if (!ok && !current) {
+      // 只有会话真的被清掉了才算登出
       setData(null);
       setStatus("unauthenticated");
       return null;
     }
-    const next = toSession(getSession());
+    // 刷新失败但盘上会话还在（弱网/服务端抖动）：继续当作已登录，
+    // 不要因为一次请求失败就让界面掉成「欢迎回来，User」。
+    const next = toSession(current || raw);
     setData(next);
     setStatus("authenticated");
+    void syncRole(current || raw);
     return next;
-  }, []);
+  }, [syncRole]);
 
   useEffect(() => {
     void update();
@@ -185,13 +203,17 @@ export async function signIn(
     // 读出真实角色与用户名，保证管理员后台与界面展示可用
     try {
       const row = await appUser(true);
-      if (row?.role) session.user.role = row.role;
+      if (row?.role) {
+        session.user.role = row.role;
+        // 只有在真正读到 User 表后才标记，读不到时留给下次启动补校正
+        session.roleVerified = true;
+      }
       if (row?.username) session.user.username = row.username;
       if (!session.user.name && row?.name) session.user.name = row.name;
-      setSession(session);
     } catch {
       /* RLS 未就绪时忽略 */
     }
+    setSession(session);
     return { ok: true, error: null, status: 200, url: options.callbackUrl || "/" };
   } catch {
     return { ok: false, error: "CredentialsSignin", status: 500, url: null };

@@ -25,6 +25,8 @@ export interface StaticSession {
   expires_at: number;
   token_type: string;
   user: SessionUser;
+  /** 是否已从 User 表确认过真实角色；未确认时下次启动会补一次校正 */
+  roleVerified?: boolean;
 }
 
 /** 带 HTTP 状态码的错误，供 fetch 桥接层转换成 Response */
@@ -50,14 +52,16 @@ export function getSession(): StaticSession | null {
   }
 }
 
-export function setSession(session: StaticSession | null): void {
+export function setSession(session: StaticSession | null, options?: { silent?: boolean }): void {
   try {
     if (session) localStorage.setItem(SESSION_KEY, JSON.stringify(session));
     else localStorage.removeItem(SESSION_KEY);
   } catch {
     /* 隐私模式下 localStorage 可能不可写，降级为内存态由调用方处理 */
   }
-  window.dispatchEvent(new CustomEvent("sb-session-change", { detail: session }));
+  if (!options?.silent) {
+    window.dispatchEvent(new CustomEvent("sb-session-change", { detail: session }));
+  }
 }
 
 export function clearSession(): void {
@@ -85,7 +89,15 @@ async function refreshSession(session: StaticSession): Promise<string> {
       body: JSON.stringify({ refresh_token: session.refresh_token }),
     });
     if (!res.ok) {
-      clearSession();
+      // Supabase 的 refresh token 是一次性轮换的。并发刷新时，后到的请求会拿到
+      // 「已使用」的 400，但此时另一个请求早已把新 token 写进 localStorage。
+      // 先看盘上是不是已经换过了，换过就直接用，绝不能把好会话清掉。
+      const latest = getSession();
+      if (latest && latest.refresh_token !== session.refresh_token) {
+        return latest.access_token;
+      }
+      // 只有 refresh token 明确失效（4xx）才登出；5xx 是服务端临时故障，保留会话
+      if (res.status === 400 || res.status === 401) clearSession();
       return "";
     }
     const data = await res.json();
@@ -97,17 +109,44 @@ async function refreshSession(session: StaticSession): Promise<string> {
     });
     return data.access_token as string;
   } catch {
-    clearSession();
+    // 弱网 / 请求中断不是会话失效，保留会话让下次重试
     return "";
   }
 }
 
-/** 返回可用的 access token，过期前 60 秒自动刷新 */
-export async function accessToken(): Promise<string> {
+/**
+ * 单例刷新锁。
+ *
+ * 之前 session 层和每个 API 请求各自刷新：页面一打开，SessionProvider 与首屏几个
+ * 请求几乎同时发现 token 过期，一起拿同一个 refresh_token 去换，Supabase 轮换后
+ * 其余请求全部失败并触发 clearSession —— 表现就是「刷新一下/发个版，人就掉成
+ * 未登录的 User」。现在同一时刻只允许一个刷新在飞，其余复用同一个 Promise。
+ */
+let refreshInFlight: Promise<string> | null = null;
+
+/** 返回可用的 access token，过期前 60 秒自动刷新；并发调用共享同一次刷新 */
+export async function ensureFreshToken(): Promise<string> {
   const session = getSession();
   if (!session) return "";
   if (Date.now() < session.expires_at - 60_000) return session.access_token;
-  return refreshSession(session);
+  if (refreshInFlight) return refreshInFlight;
+
+  refreshInFlight = (async () => {
+    try {
+      // 等锁期间可能已经被别的调用刷新过，再确认一次
+      const latest = getSession();
+      if (latest && Date.now() < latest.expires_at - 60_000) return latest.access_token;
+      return await refreshSession(latest || session);
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+  return refreshInFlight;
+}
+
+/** 返回可用的 access token（保留旧签名） */
+export async function accessToken(): Promise<string> {
+  return ensureFreshToken();
 }
 
 /* -------------------------------- 通用工具 -------------------------------- */

@@ -1,6 +1,6 @@
 {
-  "version": "1.18.20",
-  "releasedAt": "2026-11-12T08:10:00+08:00",
-  "notes": "修复 iOS 从桌面图标打开仍显示地址栏与底部工具栏：补齐 apple-mobile-web-app-capable，并在设置页显示当前是否已全屏运行。",
+  "version": "1.18.21",
+  "releasedAt": "2026-11-12T08:30:00+08:00",
+  "notes": "修复刷新页面/发版后被登出显示为 User：并发刷新 refresh token 互相踢下线；弱网失败不再清会话，管理员角色自动校正。",
   "channel": "github-pages"
 }
