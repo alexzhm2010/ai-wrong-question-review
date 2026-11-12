@@ -55,6 +55,12 @@ export function BatchJobList({ jobs: external, onOpen, limit, className }: Props
     const b = t.batch;
     const router = useRouter();
     const [fetched, setFetched] = useState<BatchJobRow[] | null>(external ?? null);
+    const [now, setNow] = useState(() => Date.now());
+
+    useEffect(() => {
+        const timer = setInterval(() => setNow(Date.now()), 15_000);
+        return () => clearInterval(timer);
+    }, []);
 
     const load = useCallback(async () => {
         try {
@@ -141,7 +147,12 @@ export function BatchJobList({ jobs: external, onOpen, limit, className }: Props
                             <span className="tabular-nums">{g.items.length}</span>
                         </div>
                         {items.map((job) => {
-                            const meta = statusMeta(job.status, b);
+                            // 心跳停了就说明后台已经没人跑了，别继续显示「解析中」骗用户干等
+                            const stalled = job.status === "processing" && !!job.heartbeatAt
+                                && now - new Date(job.heartbeatAt).getTime() > 3 * 60_000;
+                            const meta = stalled
+                                ? { label: b.interrupted, cls: "bg-amber-500/10 text-amber-600 dark:text-amber-400" }
+                                : statusMeta(job.status, b);
                             const done = job.doneCount;
                             const pct = job.totalCount ? Math.round((done / job.totalCount) * 100) : 0;
                             const pos = queuePos.get(job.id);
@@ -173,6 +184,12 @@ export function BatchJobList({ jobs: external, onOpen, limit, className }: Props
                                             <span className="text-amber-600 dark:text-amber-400">
                                                 {b.queuePosition.replace("{n}", String(pos))}
                                             </span>
+                                        )}
+                                        {stalled && (
+                                            <span className="text-amber-600 dark:text-amber-400">{b.resumeHint}</span>
+                                        )}
+                                        {job.status === "confirming" && (
+                                            <span className="text-amber-600 dark:text-amber-400">{b.toSaveHint}</span>
                                         )}
                                     </div>
                                 </button>

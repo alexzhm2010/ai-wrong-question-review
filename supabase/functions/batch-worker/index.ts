@@ -236,6 +236,42 @@ async function recount(jobId: string) {
   return { total: items.length, done, failed, saved };
 }
 
+/**
+ * 回收「僵死条目」：worker 抢占某条后若被平台杀掉（单次调用超时），
+ * 该条会永远停在 processing，而 worker 只挑 pending，整批就永久卡死。
+ * 这里把超过 staleMs 未更新的条目拨回 pending；重试次数用尽的直接标 failed。
+ */
+async function reclaimStale(jobId: string, staleMs = 3 * 60_000): Promise<number> {
+  const cutoff = new Date(Date.now() - staleMs).toISOString();
+  const base = `/BatchItem?jobId=eq.${enc(jobId)}&status=eq.processing&updatedAt=lt.${enc(cutoff)}`;
+  const now = new Date().toISOString();
+  const back = await rest<any[]>(`${base}&attempts=lt.3`, {
+    method: "PATCH",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({ status: "pending", failureReason: null, updatedAt: now }),
+  }).catch(() => []);
+  await rest(`${base}&attempts=gte.3`, {
+    method: "PATCH",
+    headers: { Prefer: "return=minimal" },
+    body: JSON.stringify({ status: "failed", failureReason: "处理中断（多次超时），可单独重试", updatedAt: now }),
+  }).catch(() => {});
+  return (back || []).length;
+}
+
+/** 无 pending 却仍有剩余时：把卡住的条目直接判失败，避免整批永久停在「解析中」 */
+async function failStuck(jobId: string, staleMs = 90_000): Promise<number> {
+  const cutoff = new Date(Date.now() - staleMs).toISOString();
+  const rows = await rest<any[]>(
+    `/BatchItem?jobId=eq.${enc(jobId)}&status=eq.processing&updatedAt=lt.${enc(cutoff)}`,
+    {
+      method: "PATCH",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify({ status: "failed", failureReason: "处理中断，可点重试单独补跑", updatedAt: new Date().toISOString() }),
+    },
+  ).catch(() => []);
+  return (rows || []).length;
+}
+
 /** 当前批次跑完后，把同账号排队最久的一批拉起来 */
 async function startNextQueued(userId: string, currentJobId: string): Promise<void> {
   try {
@@ -270,6 +306,9 @@ async function runRound(jobId: string): Promise<{ processed: number; remaining: 
   const mode: "fast" | "deep" = job.reasoningMode === "deep" ? "deep" : "fast";
   const startedAt = Date.now();
   let processed = 0;
+
+  // 上一轮被平台杀掉时留下的 processing 条目，这里先拨回 pending，否则永远轮不到它
+  await reclaimStale(jobId).catch(() => 0);
 
   while (Date.now() - startedAt < ROUND_BUDGET_MS) {
     const pending = await rest<any[]>(
@@ -336,8 +375,28 @@ async function runRound(jobId: string): Promise<{ processed: number; remaining: 
     });
   }
 
-  const c = await recount(jobId);
-  const remaining = c.total - c.done - c.failed;
+  let c = await recount(jobId);
+  let remaining = Math.max(0, c.total - c.done - c.failed);
+
+  if (remaining > 0) {
+    // 还有剩余但没有待处理条目：剩下的都卡在 processing（多半是上一轮被杀留下的）。
+    const pendingLeft = await rest<any[]>(
+      `/BatchItem?select=id&jobId=eq.${enc(jobId)}&status=eq.pending&limit=1`,
+    ).catch(() => []);
+    if (!pendingLeft?.length) {
+      const reclaimed = await reclaimStale(jobId);
+      if (reclaimed > 0) {
+        selfInvoke(jobId);
+        return { processed, remaining, status: "processing" };
+      }
+      const dead = await failStuck(jobId);
+      if (dead > 0) {
+        c = await recount(jobId);
+        remaining = Math.max(0, c.total - c.done - c.failed);
+      }
+    }
+  }
+
   if (remaining <= 0) {
     await patchJob(jobId, {
       status: "confirming",

@@ -177,6 +177,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
         () => items.filter((i) => i.status === "done" && i.questionText),
         [items],
     );
+    const savedCount = useMemo(() => items.filter((i) => i.status === "saved").length, [items]);
     const stalled = !!job && job.status === "processing" && !!job.heartbeatAt
         && clock - new Date(job.heartbeatAt).getTime() > STALL_MS;
     const currentIdx = items.find((i) => i.status === "processing")?.idx;
@@ -203,13 +204,14 @@ function BatchDetail({ jobId }: { jobId: string }) {
         else setChecked(new Set(selectable.map((i) => i.id)));
     };
 
-    const saveSelected = async () => {
-        if (!checked.size || saving) return;
+    const saveSelected = async (ids?: string[]) => {
+        const target = ids && ids.length ? ids : [...checked];
+        if (!target.length || saving) return;
         setSaving(true);
         try {
             const res = await apiClient.post<{ saved: number; skipped: number }>("/api/batch/save", {
                 jobId,
-                itemIds: [...checked],
+                itemIds: target,
             }, { timeout: 180000 });
             toast.success(b.savedToast.replace("{count}", String(res.saved)));
             if (res.skipped) toast.info(b.skippedToast.replace("{count}", String(res.skipped)));
@@ -237,6 +239,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
 
     const editSave = async (data: ParsedQuestion & { subjectId?: string; gradeSemester?: string }) => {
         if (!editing) return;
+        const willSave = editing.status !== "saved";
         try {
             await apiClient.post("/api/batch/update", {
                 itemId: editing.id,
@@ -251,8 +254,19 @@ function BatchDetail({ jobId }: { jobId: string }) {
             });
             setEditing(null);
             setEditingImage(null);
+            // 校对完点保存 = 确认入库，不用再回到底部勾选一次
+            let savedNow = 0;
+            if (willSave) {
+                const res = await apiClient.post<{ saved: number; skipped: number }>("/api/batch/save", {
+                    jobId,
+                    itemIds: [editing.id],
+                }, { timeout: 120000 }).catch(() => null);
+                savedNow = res?.saved || 0;
+                if (res && !savedNow) toast.info(b.skippedToast.replace("{count}", "1"));
+            }
             await load();
-            toast.success(t.common.success);
+            refreshActiveBatch();
+            toast.success(savedNow ? b.savedOneToast : t.common.success);
         } catch (e: any) {
             toast.error(e?.message || t.common.error);
         }
@@ -329,7 +343,11 @@ function BatchDetail({ jobId }: { jobId: string }) {
                     </div>
                 )}
                 {job.status === "confirming" && (
-                    <p className="text-[11px] text-muted-foreground">{b.confirmSubtitle}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                        {selectable.length
+                            ? b.confirmSubtitle
+                            : b.confirmDone.replace("{saved}", String(savedCount))}
+                    </p>
                 )}
                 {job.status === "processing" && (
                     <p className="text-[11px] text-muted-foreground">{b.partialHint}</p>
@@ -360,7 +378,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
 
                             <button
                                 className="flex min-w-0 flex-1 gap-2.5 text-left sm:gap-3"
-                                onClick={() => item.status === "done" && openEditor(item)}
+                                onClick={() => (item.status === "done" || item.status === "saved") && openEditor(item)}
                             >
                                 <div className="h-14 w-14 shrink-0 overflow-hidden rounded-md border bg-muted sm:h-16 sm:w-16">
                                     {item.thumbBase64 ? (
@@ -447,25 +465,39 @@ function BatchDetail({ jobId }: { jobId: string }) {
             {/* 底部固定操作栏：已归档/已取消时不再需要提交动作 */}
             {job.status !== "done" && job.status !== "canceled" && (
             <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-background/95 backdrop-blur">
-                <div className="mx-auto flex w-full max-w-4xl items-center gap-2 p-3 sm:gap-3 sm:p-4">
-                    <Button variant="ghost" size="sm" onClick={toggleAll} disabled={!selectable.length} className="shrink-0">
-                        {b.selectAll}
-                    </Button>
-                    <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                        {b.selected.replace("{count}", String(checked.size))}
-                    </span>
-                    {job.status === "confirming" && (
-                        <Button
-                            variant="ghost" size="sm" className="shrink-0 text-muted-foreground"
-                            onClick={() => act("dismiss", { jobId }, b.dismissConfirm).then(() => router.push("/batch"))}
-                        >
-                            <Trash2 className="mr-1 h-4 w-4" />{b.dismiss}
+                <div className="mx-auto w-full max-w-4xl px-3 pb-3 pt-2 sm:px-4 sm:pb-4">
+                    <p className="mb-1.5 truncate text-[11px] text-muted-foreground">
+                        {checked.size
+                            ? b.selected.replace("{count}", String(checked.size))
+                            : b.saveProgress.replace("{saved}", String(savedCount)).replace("{left}", String(selectable.length))}
+                    </p>
+                    <div className="flex items-center gap-2">
+                        <Button variant="ghost" size="sm" onClick={toggleAll} disabled={!selectable.length} className="shrink-0 px-2">
+                            {b.selectAll}
                         </Button>
-                    )}
-                    <Button className="shrink-0" disabled={!checked.size || saving} onClick={saveSelected}>
-                        {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                        {b.saveSelected.replace("{count}", String(checked.size))}
-                    </Button>
+                        {job.status === "confirming" && (
+                            <Button
+                                variant="ghost" size="icon" title={b.dismiss}
+                                className="h-8 w-8 shrink-0 text-muted-foreground"
+                                onClick={() => act("dismiss", { jobId }, b.dismissConfirm).then(() => router.push("/batch"))}
+                            >
+                                <Trash2 className="h-4 w-4" />
+                            </Button>
+                        )}
+                        <div className="flex-1" />
+                        {!!selectable.length && (
+                            <Button
+                                variant="outline" size="sm" className="shrink-0" disabled={saving}
+                                onClick={() => saveSelected(selectable.map((i) => i.id))}
+                            >
+                                {b.saveAll.replace("{count}", String(selectable.length))}
+                            </Button>
+                        )}
+                        <Button size="sm" className="shrink-0" disabled={!checked.size || saving} onClick={() => saveSelected()}>
+                            {saving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
+                            {b.saveSelected.replace("{count}", String(checked.size))}
+                        </Button>
+                    </div>
                 </div>
             </div>
             )}
@@ -492,7 +524,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
                             imagePreview={editingImage}
                             onSave={editSave}
                             onCancel={() => { setEditing(null); setEditingImage(null); }}
-                            saveLabel={b.saveEdit}
+                            saveLabel={editing.status === "saved" ? b.saveEdit : b.saveAndImport}
                         />
                     )}
                 </DialogContent>

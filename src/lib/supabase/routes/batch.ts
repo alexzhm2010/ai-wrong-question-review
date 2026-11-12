@@ -333,6 +333,27 @@ export const BATCH_HANDLERS: RouteHandler[] = [
           headers: { Prefer: "return=minimal" },
           body: JSON.stringify({ status: "pending", failureReason: null, updatedAt: nowIso() }),
         });
+      } else {
+        // 整批继续：先回收「僵死条目」。
+        // worker 抢占某一条后若被平台杀掉（单次调用超时），该条会永远停在 processing，
+        // 而 worker 只挑 pending，于是整批看起来卡住不动。这里把超时未更新的拨回 pending。
+        const cutoff = new Date(Date.now() - 3 * 60_000).toISOString();
+        await restJson(
+          `/BatchItem?jobId=eq.${encodeURIComponent(jobId)}&status=eq.processing&updatedAt=lt.${encodeURIComponent(cutoff)}&attempts=lt.3`,
+          {
+            method: "PATCH",
+            headers: { Prefer: "return=minimal" },
+            body: JSON.stringify({ status: "pending", failureReason: null, updatedAt: nowIso() }),
+          },
+        ).catch(() => {});
+        await restJson(
+          `/BatchItem?jobId=eq.${encodeURIComponent(jobId)}&status=eq.processing&updatedAt=lt.${encodeURIComponent(cutoff)}&attempts=gte.3`,
+          {
+            method: "PATCH",
+            headers: { Prefer: "return=minimal" },
+            body: JSON.stringify({ status: "failed", failureReason: "处理中断（多次超时），可单独重试", updatedAt: nowIso() }),
+          },
+        ).catch(() => {});
       }
 
       // 继续 / 重试都等价于把状态拨回进行中，再触发 worker
