@@ -189,6 +189,51 @@ export async function restJson<T = any>(path: string, init: RequestInit = {}): P
   return data as T;
 }
 
+/**
+ * 分页查询：同时返回数据与满足条件的总条数。
+ *
+ * PostgREST 在 `Prefer: count=exact` 下会把总数放在响应头
+ * `Content-Range: 0-17/80`。列表页必须拿到这个总数才能分页，
+ * 但又不能像旧版那样把全表（含 7MB 原图）拉回浏览器再数。
+ * 若浏览器因 CORS 暴露头缺失读不到该头，回退一次轻量计数查询。
+ */
+export async function restJsonPage<T = any>(
+  path: string,
+  init: RequestInit = {},
+): Promise<{ data: T; total: number }> {
+  const headers = new Headers(init.headers);
+  headers.set("Prefer", "count=exact");
+  const res = await restRequest(path, { ...init, headers });
+  const text = await res.text();
+  let data: any = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = text;
+  }
+  if (!res.ok) {
+    const message = (data && (data.message || data.hint)) || `REST ${res.status}`;
+    throw new ApiBridgeError(res.status, message, data);
+  }
+  const range = res.headers.get("Content-Range") || "";
+  const matched = range.match(/\/(\d+)\s*$/);
+  if (matched) return { data: data as T, total: Number(matched[1]) };
+
+  // 回退：去掉分页/排序，只取 id，用返回行数兜底（最多几百行，体积可忽略）
+  const countPath = path
+    .replace(/([?&])select=[^&]*/, "$1select=id")
+    .replace(/([?&])limit=\d+&?/, "$1")
+    .replace(/([?&])offset=\d+&?/, "$1")
+    .replace(/([?&])order=[^&]*&?/, "$1")
+    .replace(/[?&]$/, "");
+  try {
+    const ids = await restJson<any[]>(countPath, { headers: { Prefer: "count=exact" } });
+    return { data: data as T, total: Array.isArray(ids) ? ids.length : 0 };
+  } catch {
+    return { data: data as T, total: Array.isArray(data) ? data.length : 0 };
+  }
+}
+
 /** 调用数据库函数（SECURITY DEFINER，用于注册/管理员操作） */
 export function rpc<T = any>(name: string, args: Record<string, unknown> = {}): Promise<T> {
   return restJson<T>(`/rpc/${name}`, { method: "POST", body: JSON.stringify(args) });

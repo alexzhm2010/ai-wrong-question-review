@@ -62,6 +62,17 @@ interface BatchItem {
 /** 心跳超过该值即判定「可能已中断」：深度单张 80s，必须留出函数 150s 上限的余量 */
 const STALL_MS = 200_000;
 
+/**
+ * 入库断点标记。
+ * 保存发生在浏览器里（静态站点没有常驻服务端），关页面就停。开始保存时把
+ * 「这次准备入库哪些条目」记在 localStorage，正常收尾后清掉；中途关掉页面或
+ * 刷新，下次打开批次详情就能看到「已入库 X/Y，还剩 N 条」并一键接着入库。
+ * 已入库的条目状态落在库里，续跑会自动跳过，不会重复入库。
+ */
+const SAVE_MARK_KEY = (jobId: string) => `aqr.batch.saving.${jobId}`;
+/** 每片提交条数：整片后端一次批量写入，比旧版 5 条一批少一半往返 */
+const SAVE_CHUNK = 10;
+
 function formatDuration(sec: number): string {
     // 先取整再拆分，否则 239.6s 会拆成「3m60s」
     const total = Math.max(0, Math.round(sec));
@@ -110,6 +121,10 @@ function BatchDetail({ jobId }: { jobId: string }) {
     const [loading, setLoading] = useState(true);
     const [checked, setChecked] = useState<Set<string>>(new Set());
     const [saving, setSaving] = useState(false);
+    /** 保存中的真实进度（每完成一片更新一次），null 表示不在保存 */
+    const [saveProgress, setSaveProgress] = useState<{ done: number; total: number } | null>(null);
+    /** 上次入库未完成，回来后待续跑的条目 */
+    const [resume, setResume] = useState<{ remaining: string[]; saved: number; total: number } | null>(null);
     const [editing, setEditing] = useState<BatchItem | null>(null);
     // 校对时展示的原图：先用 240px 缩略图占位，随后替换为按需拉取的清晰原图
     const [editingImage, setEditingImage] = useState<string | null>(null);
@@ -137,6 +152,28 @@ function BatchDetail({ jobId }: { jobId: string }) {
             const data = await apiClient.get<{ job: BatchJob; items: BatchItem[] }>("/api/batch/detail", { params: { id: jobId } });
             setJob(data.job);
             setItems(data.items);
+            // 检测上次入库是否中断：以库里真实状态为准，已 saved 的不算剩余
+            try {
+                const raw = localStorage.getItem(SAVE_MARK_KEY(jobId));
+                if (raw) {
+                    const mark = JSON.parse(raw) as { target?: string[] };
+                    const target = Array.isArray(mark.target) ? mark.target : [];
+                    const remaining = target.filter((id) => {
+                        const it = data.items.find((x) => x.id === id);
+                        return !!it && it.status !== "saved";
+                    });
+                    if (remaining.length) {
+                        setResume({ remaining, saved: target.length - remaining.length, total: target.length });
+                    } else {
+                        localStorage.removeItem(SAVE_MARK_KEY(jobId));
+                        setResume(null);
+                    }
+                } else {
+                    setResume(null);
+                }
+            } catch {
+                setResume(null);
+            }
             // 首次加载：已完成且非「批内重复」的默认勾选；之后新完成的自动补勾（用户手动取消过的不再动）
             setChecked((prev) => {
                 const next = new Set(prev);
@@ -206,29 +243,37 @@ function BatchDetail({ jobId }: { jobId: string }) {
     };
 
     const saveSelected = async (ids?: string[]) => {
-        // 有勾选就存勾选的，没勾选就是「全部入库」
+        // 有勾选就存勾选的，没勾选就是「全部入库」；续跑时直接传剩余条目
         const target = ids && ids.length ? ids : (checked.size ? [...checked] : selectable.map((i) => i.id));
         if (!target.length || saving) return;
         setSaving(true);
+        setResume(null);
+        // 先落断点标记：保存跑在浏览器里，关页面即停，回来可以接着入库
+        try {
+            localStorage.setItem(SAVE_MARK_KEY(jobId), JSON.stringify({ target, startedAt: Date.now() }));
+        } catch { /* 隐私模式下 localStorage 不可写，续跑提示会降级为不显示 */ }
         let saved = 0;
         let skipped = 0;
         let batchError = "";
         const fails: { idx: number; message: string }[] = [];
+        setSaveProgress({ done: 0, total: target.length });
         try {
-            // 分批提交：一次搬 23 张大图容易撞网关上限，5 条一批更稳。
-            // 每批独立 try/catch —— 某一批整体失败，后面的批次照常继续。
-            for (let i = 0; i < target.length; i += 5) {
-                const chunk = target.slice(i, i + 5);
+            // 每片 10 条，后端片内一次批量写入；每片独立 try/catch，
+            // 某一片整体失败，后面的片照常继续。只有最后一片做批次收尾统计。
+            for (let i = 0; i < target.length; i += SAVE_CHUNK) {
+                const chunk = target.slice(i, i + SAVE_CHUNK);
+                const isFinal = i + SAVE_CHUNK >= target.length;
                 try {
                     const res = await apiClient.post<{
                         saved: number; skipped: number; failed?: { idx: number; message: string }[];
-                    }>("/api/batch/save", { jobId, itemIds: chunk }, { timeout: 180000 });
+                    }>("/api/batch/save", { jobId, itemIds: chunk, final: isFinal }, { timeout: 120000 });
                     saved += res.saved || 0;
                     skipped += res.skipped || 0;
                     if (res.failed?.length) fails.push(...res.failed);
                 } catch (e: any) {
                     batchError = e?.message || t.common.error;
                 }
+                setSaveProgress({ done: Math.min(i + SAVE_CHUNK, target.length), total: target.length });
             }
             if (saved) toast.success(b.savedToast.replace("{count}", String(saved)));
             if (skipped) toast.info(b.skippedToast.replace("{count}", String(skipped)));
@@ -238,6 +283,10 @@ function BatchDetail({ jobId }: { jobId: string }) {
                     .replace("{reason}", fails[0].message || "-"));
             }
             if (batchError) toast.error(batchError);
+            // 全部成功才清断点；有失败或整体报错时保留，回来可续跑
+            if (!fails.length && !batchError) {
+                try { localStorage.removeItem(SAVE_MARK_KEY(jobId)); } catch { /* 忽略 */ }
+            }
             touched.current.clear();
             setChecked(new Set());
             await load();
@@ -250,6 +299,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
             refreshActiveBatch();
         } finally {
             setSaving(false);
+            setSaveProgress(null);
         }
     };
 
@@ -370,6 +420,29 @@ function BatchDetail({ jobId }: { jobId: string }) {
                         <span className="flex-1">{b.stalled}</span>
                         <Button size="sm" variant="outline" className="h-7" onClick={() => act("retry", { jobId })}>
                             {b.resume}
+                        </Button>
+                    </div>
+                )}
+                {resume && !saving && (
+                    <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-700 dark:text-amber-400">
+                        <AlertTriangle className="h-4 w-4 shrink-0" />
+                        <span className="min-w-0 flex-1">
+                            {b.resumeSave
+                                .replace("{saved}", String(resume.saved))
+                                .replace("{total}", String(resume.total))
+                                .replace("{left}", String(resume.remaining.length))}
+                        </span>
+                        <Button size="sm" variant="outline" className="h-7 shrink-0 px-2" onClick={() => saveSelected(resume.remaining)}>
+                            {b.resumeSaveButton}
+                        </Button>
+                        <Button
+                            size="sm" variant="ghost" className="h-7 shrink-0 px-2"
+                            onClick={() => {
+                                try { localStorage.removeItem(SAVE_MARK_KEY(jobId)); } catch { /* 忽略 */ }
+                                setResume(null);
+                            }}
+                        >
+                            {b.dismissResume}
                         </Button>
                     </div>
                 )}
@@ -516,10 +589,20 @@ function BatchDetail({ jobId }: { jobId: string }) {
             <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-background/95 backdrop-blur">
                 <div className="mx-auto w-full max-w-4xl px-3 pb-3 pt-2 sm:px-4 sm:pb-4">
                     <p className="mb-1.5 truncate text-[11px] text-muted-foreground">
-                        {checked.size
-                            ? b.selected.replace("{count}", String(checked.size))
-                            : b.saveProgress.replace("{saved}", String(savedCount)).replace("{left}", String(selectable.length))}
+                        {saveProgress
+                            ? b.savingProgress.replace("{done}", String(saveProgress.done)).replace("{total}", String(saveProgress.total))
+                            : checked.size
+                                ? b.selected.replace("{count}", String(checked.size))
+                                : b.saveProgress.replace("{saved}", String(savedCount)).replace("{left}", String(selectable.length))}
                     </p>
+                    {saveProgress && (
+                        <div className="mb-2 h-1 overflow-hidden rounded-full bg-muted">
+                            <div
+                                className="h-full rounded-full bg-primary transition-all"
+                                style={{ width: `${Math.round((saveProgress.done / Math.max(1, saveProgress.total)) * 100)}%` }}
+                            />
+                        </div>
+                    )}
                     <div className="flex items-center gap-2">
                         <Button variant="ghost" size="sm" onClick={toggleAll} disabled={!selectable.length} className="shrink-0 px-2">
                             {b.selectAll}

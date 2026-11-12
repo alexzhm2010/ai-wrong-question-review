@@ -41,7 +41,7 @@ type KnowledgeFilterChange = {
 
 export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
     const [items, setItems] = useState<ErrorItem[]>([]);
-    const [, setLoading] = useState(true);
+    const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
     const [masteryFilter, setMasteryFilter] = useState<"all" | "mastered" | "unmastered">("all");
     const [timeFilter, setTimeFilter] = useState<"all" | "week" | "month">("all");
@@ -242,6 +242,8 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
             // 主动取消的请求不当作错误
             if (seq !== requestSeqRef.current || controller.signal.aborted) return;
             console.error(error);
+            // 列表查询失败保留上一屏数据，不清成空态，并给出明确提示
+            toast.error(t.notebook?.loadFailed || "加载失败，请重试");
         } finally {
             if (seq === requestSeqRef.current) {
                 setLoading(false);
@@ -329,6 +331,12 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
                         {selectedTag}
                         <span className="ml-1 text-xs">×</span>
                     </Badge>
+                </div>
+            )}
+
+            {loading && items.length === 0 && (
+                <div className="py-16 text-center text-sm text-muted-foreground">
+                    {t.notebook?.loadingList || t.common?.loading || "加载中…"}
                 </div>
             )}
 

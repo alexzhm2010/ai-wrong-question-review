@@ -7,7 +7,7 @@
 import { accessToken, cuid, nowIso, requireUser, restJson } from "../core";
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from "../config";
 import { apiError, json, type RouteHandler } from "../http";
-import { buildItem, linkTags } from "./error-items";
+import { buildItem } from "./error-items";
 
 const WORKER_URL = `${SUPABASE_URL}/functions/v1/batch-worker`;
 /** 单批上限：与产品约定一致（约 3MB 图片，深度模式约 30 分钟跑完） */
@@ -230,116 +230,199 @@ export const BATCH_HANDLERS: RouteHandler[] = [
     if (action === "save" && ctx.method === "POST") {
       const jobId = String(ctx.body?.jobId || "");
       const itemIds: string[] = Array.isArray(ctx.body?.itemIds) ? ctx.body.itemIds : [];
+      /** 前端分片提交时，只有最后一片做批次统计与收尾，避免重复查询 */
+      const final = ctx.body?.final !== false;
       const job = await loadJob(jobId, user.id);
       if (!job) return apiError(404, "批次不存在");
       if (!itemIds.length) return apiError(400, "没有选中任何条目");
 
+      const quoted = itemIds.map((i) => `"${String(i).replace(/["\\]/g, "")}"`).join(",");
       const rows = await restJson<any[]>(
-        `/BatchItem?select=*&jobId=eq.${encodeURIComponent(jobId)}&id=in.(${itemIds.map((i) => `"${i}"`).join(",")})`,
+        `/BatchItem?select=*&jobId=eq.${encodeURIComponent(jobId)}&id=in.(${quoted})`,
       ).catch(() => []);
-      // 库内已有题干池，用于确认页「疑似重复」的最终拦截
+      // 题干池只取 questionText，不再把整行拉回来
       const existing = await restJson<any[]>(
-        `/ErrorItem?select=id,questionText&userId=eq.${encodeURIComponent(user.id)}&order=createdAt.desc&limit=2000`,
+        `/ErrorItem?select=questionText&userId=eq.${encodeURIComponent(user.id)}&order=createdAt.desc&limit=2000`,
       ).catch(() => []);
       const existingTexts = new Set(
         (existing || []).map((e) => String(e.questionText || "").replace(/\s+/g, "").slice(0, 80)),
       );
+      // 标签名 → id 映射整片只查一次（旧版每个知识点都重查一遍全表）
+      const allTags = await restJson<any[]>("/KnowledgeTag?select=id,name").catch(() => []);
 
       let saved = 0;
       let skipped = 0;
       const createdIds: string[] = [];
       const failed: { idx: number; message: string }[] = [];
 
+      type Candidate = {
+        item: Record<string, any>;
+        errorItemId: string;
+        row: Record<string, any>;
+        points: any[];
+      };
+      const candidates: Candidate[] = [];
       for (const item of rows || []) {
         if (item.status === "saved") { skipped++; continue; }
         if (!item.questionText) { skipped++; continue; }
         const key = String(item.questionText).replace(/\s+/g, "").slice(0, 80);
         if (existingTexts.has(key)) { skipped++; continue; }
-
+        existingTexts.add(key); // 同批内题干重复也只入一条
         const points = (() => {
           try { return JSON.parse(item.knowledgePoints || "[]"); } catch { return []; }
         })();
-        const fullImage = item.imageBase64 ? `data:image/jpeg;base64,${item.imageBase64}` : (item.thumbBase64 || "");
-        const makeRow = (image: string) =>
-          buildItem({
-            originalImageUrl: image,
-            questionText: item.questionText,
-            answerText: item.answerText,
-            analysis: item.analysis,
-            subjectId: item.subjectId || null,
-            knowledgePoints: points,
-            gradeSemester: item.gradeSemester || null,
-            source: "batch",
-          }, user.id);
-
-        // 逐条独立：某一条失败（体积/超时/网关 5xx）不能把整批 23 条一起拖垮
-        let errorItemId = "";
-        try {
-          const created = await restJson<any[]>("/ErrorItem", {
-            method: "POST",
-            headers: { Prefer: "return=representation" },
-            body: JSON.stringify(makeRow(fullImage)),
-          });
-          errorItemId = created?.[0]?.id || "";
-        } catch (first) {
-          // 带原图的写入偶发失败时，退一步只存缩略图，先保证题目进库
-          try {
-            const created = await restJson<any[]>("/ErrorItem", {
-              method: "POST",
-              headers: { Prefer: "return=representation" },
-              body: JSON.stringify(makeRow(item.thumbBase64 ? `data:image/jpeg;base64,${item.thumbBase64}` : "")),
-            });
-            errorItemId = created?.[0]?.id || "";
-          } catch {
-            const msg = first instanceof Error ? first.message : String(first);
-            failed.push({ idx: item.idx, message: msg.slice(0, 120) });
-            await restJson(`/BatchItem?id=eq.${encodeURIComponent(item.id)}`, {
-              method: "PATCH",
-              headers: { Prefer: "return=minimal" },
-              body: JSON.stringify({ failureReason: `入库失败：${msg.slice(0, 80)}`, updatedAt: nowIso() }),
-            }).catch(() => {});
-            continue;
-          }
-        }
-        if (!errorItemId) errorItemId = cuid();
-
-        if (points.length) await linkTags(errorItemId, points).catch(() => {});
-        existingTexts.add(key);
-        createdIds.push(errorItemId);
-        saved++;
-        await restJson(`/BatchItem?id=eq.${encodeURIComponent(item.id)}`, {
-          method: "PATCH",
-          headers: { Prefer: "return=minimal" },
-          body: JSON.stringify({ status: "saved", errorItemId, updatedAt: nowIso() }),
-        }).catch(() => {});
+        const fullImage = item.imageBase64
+          ? `data:image/jpeg;base64,${item.imageBase64}`
+          : (item.thumbBase64 ? `data:image/jpeg;base64,${item.thumbBase64}` : "");
+        const row = buildItem({
+          originalImageUrl: fullImage,
+          questionText: item.questionText,
+          answerText: item.answerText,
+          analysis: item.analysis,
+          subjectId: item.subjectId || null,
+          knowledgePoints: points,
+          gradeSemester: item.gradeSemester || null,
+          source: "batch",
+        }, user.id);
+        candidates.push({ item, errorItemId: row.id, row, points });
       }
 
-      const all = await restJson<any[]>(
-        `/BatchItem?select=status&jobId=eq.${encodeURIComponent(jobId)}`,
-      ).catch(() => []);
-      const counts = {
-        total: all.length,
-        done: all.filter((i) => i.status === "done").length,
-        saved: all.filter((i) => i.status === "saved").length,
-        failed: all.filter((i) => i.status === "failed").length,
-        pending: all.filter((i) => i.status === "pending" || i.status === "processing").length,
-      };
-      const finished = counts.pending === 0 && counts.done === 0;
-      await restJson(`/BatchJob?id=eq.${encodeURIComponent(jobId)}`, {
-        method: "PATCH",
-        headers: { Prefer: "return=minimal" },
-        body: JSON.stringify({
-          savedCount: counts.saved,
-          doneCount: counts.done + counts.saved,
-          failedCount: counts.failed,
-          totalCount: counts.total,
-          status: finished ? "done" : job.status,
-          updatedAt: nowIso(),
-        }),
-      });
+      const insertOne = (row: Record<string, any>) =>
+        restJson("/ErrorItem", {
+          method: "POST",
+          headers: { Prefer: "return=minimal" },
+          body: JSON.stringify(row),
+        });
 
-      // 本批收尾 → 拉起排队的下一批
-      if (finished) await startNextQueued(user.id, jobId);
+      // 一次批量插多行。只有批量失败（单行超长 / 网关 5xx）才回退逐条，
+      // 逐条仍保留「原图写不进 → 降级缩略图」这条 v1.18.26 的容错，
+      // 绝不让一条失败把整批一起拖垮。
+      const ok = new Set<string>();
+      if (candidates.length) {
+        try {
+          await restJson("/ErrorItem", {
+            method: "POST",
+            headers: { Prefer: "return=minimal" },
+            body: JSON.stringify(candidates.map((c) => c.row)),
+          });
+          for (const c of candidates) ok.add(c.errorItemId);
+        } catch {
+          for (const c of candidates) {
+            const thumbUrl = c.item.thumbBase64
+              ? `data:image/jpeg;base64,${c.item.thumbBase64}`
+              : "";
+            try {
+              await insertOne(c.row);
+              ok.add(c.errorItemId);
+            } catch (first) {
+              try {
+                await insertOne({ ...c.row, originalImageUrl: thumbUrl });
+                ok.add(c.errorItemId);
+              } catch {
+                const msg = first instanceof Error ? first.message : String(first);
+                failed.push({ idx: c.item.idx, message: msg.slice(0, 120) });
+              }
+            }
+          }
+        }
+      }
+
+      // 批量建标签关联：整片一次请求，去重避免撞 (A,B) 唯一约束
+      const tagByName = new Map<string, string>(
+        (allTags || []).map((t) => [String(t.name), String(t.id)]),
+      );
+      const links: { A: string; B: string }[] = [];
+      const linkSeen = new Set<string>();
+      for (const c of candidates) {
+        if (!ok.has(c.errorItemId)) continue;
+        for (const kp of c.points) {
+          const name = typeof kp === "string" ? kp : kp?.name;
+          const tagId = name ? tagByName.get(String(name)) : undefined;
+          if (!tagId) continue;
+          const dedupeKey = `${c.errorItemId}|${tagId}`;
+          if (linkSeen.has(dedupeKey)) continue;
+          linkSeen.add(dedupeKey);
+          links.push({ A: c.errorItemId, B: tagId });
+        }
+      }
+      if (links.length) {
+        // 必须带 on_conflict：该表的唯一约束是 (A,B) 复合唯一索引而非主键，
+        // 只给 resolution=ignore-duplicates 时 PostgREST 不会生成 ON CONFLICT，
+        // 重入库同一条会整个批量请求 409。实测带 on_conflict 后重复插入稳定 201。
+        const LINK_PATH = "/_ErrorItemToKnowledgeTag?on_conflict=A,B";
+        const linkInit = (body: unknown) => ({
+          method: "POST",
+          headers: { Prefer: "resolution=ignore-duplicates,return=minimal" },
+          body: JSON.stringify(body),
+        });
+        try {
+          await restJson(LINK_PATH, linkInit(links));
+        } catch {
+          // 关联失败不影响题目入库，逐条补一次即可
+          await Promise.allSettled(links.map((l) =>
+            restJson(LINK_PATH, linkInit(l)).catch(() => {}),
+          ));
+        }
+      }
+
+      // 回写条目状态用并发 PATCH，不用 upsert：BatchItem 有 imageBase64 /
+      // jobId / userId 等 NOT NULL 且无默认值的列，upsert 补全会把原图再传一遍。
+      // 并发 25 条约等于 1 个 RTT 组，比旧版 25 次串行 await 快一个数量级。
+      const succeeded = candidates.filter((c) => ok.has(c.errorItemId));
+      await Promise.allSettled(succeeded.map((c) =>
+        restJson(`/BatchItem?id=eq.${encodeURIComponent(c.item.id)}`, {
+          method: "PATCH",
+          headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({
+            status: "saved",
+            errorItemId: c.errorItemId,
+            failureReason: null,
+            updatedAt: nowIso(),
+          }),
+        }),
+      ));
+      for (const c of succeeded) { createdIds.push(c.errorItemId); saved++; }
+
+      await Promise.allSettled(
+        candidates.filter((c) => !ok.has(c.errorItemId)).map((c) =>
+          restJson(`/BatchItem?id=eq.${encodeURIComponent(c.item.id)}`, {
+            method: "PATCH",
+            headers: { Prefer: "return=minimal" },
+            body: JSON.stringify({
+              failureReason: `入库失败：${(failed.find((f) => f.idx === c.item.idx)?.message || "未知原因").slice(0, 80)}`,
+              updatedAt: nowIso(),
+            }),
+          }),
+        ),
+      );
+
+      let counts: Record<string, number> | null = null;
+      if (final) {
+        const all = await restJson<any[]>(
+          `/BatchItem?select=status&jobId=eq.${encodeURIComponent(jobId)}`,
+        ).catch(() => []);
+        counts = {
+          total: all.length,
+          done: all.filter((i) => i.status === "done").length,
+          saved: all.filter((i) => i.status === "saved").length,
+          failed: all.filter((i) => i.status === "failed").length,
+          pending: all.filter((i) => i.status === "pending" || i.status === "processing").length,
+        };
+        const finished = counts.pending === 0 && counts.done === 0;
+        await restJson(`/BatchJob?id=eq.${encodeURIComponent(jobId)}`, {
+          method: "PATCH",
+          headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({
+            savedCount: counts.saved,
+            doneCount: counts.done + counts.saved,
+            failedCount: counts.failed,
+            totalCount: counts.total,
+            status: finished ? "done" : job.status,
+            updatedAt: nowIso(),
+          }),
+        });
+        if (finished) await startNextQueued(user.id, jobId);
+      }
 
       return json({ success: true, saved, skipped, failed, createdIds, counts });
     }
