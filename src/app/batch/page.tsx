@@ -202,14 +202,30 @@ function BatchDetail({ jobId }: { jobId: string }) {
     useEffect(() => {
         if (!job) return;
         if (job.status !== "queued" && job.status !== "processing") return;
-        const timer = setInterval(() => { void load(); }, 4000);
-        return () => clearInterval(timer);
+        const timer = setInterval(() => {
+            // 页面切到后台时不发无谓请求，回到前台立即补一次
+            if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+            void load();
+        }, 4000);
+        const onVisible = () => {
+            if (document.visibilityState === "visible") void load();
+        };
+        document.addEventListener("visibilitychange", onVisible);
+        return () => {
+            clearInterval(timer);
+            document.removeEventListener("visibilitychange", onVisible);
+        };
     }, [job?.status, load]);
 
+    // 计时只用于「解析僵死」判断，非活跃批次不需要每 10 秒重渲染整页
     useEffect(() => {
-        const timer = setInterval(() => setClock(Date.now()), 10_000);
+        if (job?.status !== "queued" && job?.status !== "processing") return;
+        const timer = setInterval(() => {
+            if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+            setClock(Date.now());
+        }, 10_000);
         return () => clearInterval(timer);
-    }, []);
+    }, [job?.status]);
 
     const selectable = useMemo(
         () => items.filter((i) => i.status === "done" && i.questionText),

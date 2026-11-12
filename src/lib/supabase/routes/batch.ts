@@ -237,8 +237,15 @@ export const BATCH_HANDLERS: RouteHandler[] = [
       if (!itemIds.length) return apiError(400, "没有选中任何条目");
 
       const quoted = itemIds.map((i) => `"${String(i).replace(/["\\]/g, "")}"`).join(",");
+      /**
+       * 第一轮只取「判定用」字段：状态、题干、标签、答案等。
+       * 原图 base64 动辄数百 KB，10 条就 3MB；已入库 / 题干重复的条目
+       * 根本不需要再传一次图，所以先判定、后补图，能省掉全部被跳过条目的图片流量。
+       */
       const rows = await restJson<any[]>(
-        `/BatchItem?select=*&jobId=eq.${encodeURIComponent(jobId)}&id=in.(${quoted})`,
+        `/BatchItem?select=id,idx,status,questionText,answerText,analysis,subjectId,subjectName,`
+        + `gradeSemester,knowledgePoints,userGuidance,thumbBase64`
+        + `&jobId=eq.${encodeURIComponent(jobId)}&id=in.(${quoted})`,
       ).catch(() => []);
       // 题干池只取 questionText，不再把整行拉回来
       const existing = await restJson<any[]>(
@@ -271,9 +278,9 @@ export const BATCH_HANDLERS: RouteHandler[] = [
         const points = (() => {
           try { return JSON.parse(item.knowledgePoints || "[]"); } catch { return []; }
         })();
-        const fullImage = item.imageBase64
-          ? `data:image/jpeg;base64,${item.imageBase64}`
-          : (item.thumbBase64 ? `data:image/jpeg;base64,${item.thumbBase64}` : "");
+        const fullImage = item.thumbBase64
+          ? `data:image/jpeg;base64,${item.thumbBase64}`
+          : "";
         const row = buildItem({
           originalImageUrl: fullImage,
           questionText: item.questionText,
@@ -285,6 +292,30 @@ export const BATCH_HANDLERS: RouteHandler[] = [
           source: "batch",
         }, user.id);
         candidates.push({ item, errorItemId: row.id, row, points });
+      }
+
+      /**
+       * 第二轮只为真正要入库的条目补原图：被跳过（已 saved / 题干重复）的条目
+       * 一张图都不用传。续跑场景（上次存了一半）能省掉大半流量。
+       */
+      if (candidates.length) {
+        const candIds = candidates
+          .map((c) => `"${String(c.item.id).replace(/["\\]/g, "")}"`)
+          .join(",");
+        try {
+          const imgs = await restJson<any[]>(
+            `/BatchItem?select=id,imageBase64&id=in.(${candIds})`,
+          );
+          const imgById = new Map<string, string>(
+            (imgs || []).map((x) => [String(x.id), String(x.imageBase64 || "")]),
+          );
+          for (const c of candidates) {
+            const b64 = imgById.get(String(c.item.id));
+            if (b64) c.row.originalImageUrl = `data:image/jpeg;base64,${b64}`;
+          }
+        } catch {
+          /* 取原图失败保留缩略图，正文照常入库 */
+        }
       }
 
       const insertOne = (row: Record<string, any>) =>

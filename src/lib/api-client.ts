@@ -3,6 +3,24 @@ type RequestOptions = RequestInit & {
     timeout?: number; // 超时时间（毫秒），默认 60000
 };
 
+/**
+ * 站内切换的 stale-while-revalidate 缓存。
+ *
+ * 静态站点每次切页都要重新走一整轮 REST；对「配置/标签/用户」这类变化不频繁的
+ * GET，命中缓存时立即返回旧数据（<1ms 出内容），同时后台静默刷新缓存。
+ * 列表与批次状态接口不缓存，任何写操作成功后清空全部缓存，避免显示脏数据。
+ */
+const GET_CACHE_TTL = 15_000;
+const getCache = new Map<string, { at: number; data: unknown }>();
+const CACHE_SKIP_PREFIXES = [
+    "/api/error-items/list",
+    "/api/error-items/images",
+    "/api/batch/",
+    "/api/admin/",
+];
+const cacheable = (url: string) =>
+    !CACHE_SKIP_PREFIXES.some((p) => url.startsWith(p));
+
 export class ApiError extends Error {
     constructor(public status: number, public statusText: string, public data: unknown) {
         super(`API Error: ${status} ${statusText}`);
@@ -84,10 +102,36 @@ async function request<T>(url: string, options: RequestOptions = {}): Promise<T>
     }
 }
 
+/** 任何写操作成功后让 GET 缓存失效，避免列表/详情显示刚被改过的旧数据 */
+const invalidate = <T>(p: Promise<T>): Promise<T> =>
+    p.then((v) => { getCache.clear(); return v; });
+
+const get = <T>(url: string, options?: RequestOptions): Promise<T> => {
+    const useCache = cacheable(url) && !options?.params;
+    if (useCache) {
+        const hit = getCache.get(url);
+        if (hit && Date.now() - hit.at < GET_CACHE_TTL) {
+            // 立即出旧数据；后台静默刷新，供下一次访问使用
+            void request<T>(url, { method: 'GET' })
+                .then((fresh) => getCache.set(url, { at: Date.now(), data: fresh }))
+                .catch(() => {});
+            return Promise.resolve(hit.data as T);
+        }
+    }
+    return request<T>(url, { ...options, method: 'GET' }).then((data) => {
+        if (useCache) getCache.set(url, { at: Date.now(), data });
+        return data;
+    });
+};
+
 export const apiClient = {
-    get: <T>(url: string, options?: RequestOptions) => request<T>(url, { ...options, method: 'GET' }),
-    post: <TResponse, TBody = any>(url: string, body: TBody, options?: RequestOptions) => request<TResponse>(url, { ...options, method: 'POST', body: JSON.stringify(body) }),
-    put: <TResponse, TBody = any>(url: string, body: TBody, options?: RequestOptions) => request<TResponse>(url, { ...options, method: 'PUT', body: JSON.stringify(body) }),
-    patch: <TResponse, TBody = any>(url: string, body: TBody, options?: RequestOptions) => request<TResponse>(url, { ...options, method: 'PATCH', body: JSON.stringify(body) }),
-    delete: <T>(url: string, options?: RequestOptions) => request<T>(url, { ...options, method: 'DELETE' }),
+    get,
+    post: <TResponse, TBody = any>(url: string, body: TBody, options?: RequestOptions) =>
+        invalidate(request<TResponse>(url, { ...options, method: 'POST', body: JSON.stringify(body) })),
+    put: <TResponse, TBody = any>(url: string, body: TBody, options?: RequestOptions) =>
+        invalidate(request<TResponse>(url, { ...options, method: 'PUT', body: JSON.stringify(body) })),
+    patch: <TResponse, TBody = any>(url: string, body: TBody, options?: RequestOptions) =>
+        invalidate(request<TResponse>(url, { ...options, method: 'PATCH', body: JSON.stringify(body) })),
+    delete: <T>(url: string, options?: RequestOptions) =>
+        invalidate(request<T>(url, { ...options, method: 'DELETE' })),
 };

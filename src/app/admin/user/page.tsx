@@ -26,7 +26,23 @@ export default function AdminUserDetailPage() {
         setLoading(true)
         try {
             const result = await apiClient.get<AdminUserDetail>(`/api/admin/users/${userId}/detail`)
-            setData(result)
+            // 同上：结构异常时降级为空数据而不是让页面抛 TypeError
+            const arr = <T,>(v: T[] | undefined): T[] => (Array.isArray(v) ? v : [])
+            setData({
+                ...(result || ({} as AdminUserDetail)),
+                user: result?.user ?? {
+                    id: userId, name: null, email: "", username: null, role: "user",
+                    isActive: true, createdAt: "", educationStage: null, enrollmentYear: null,
+                },
+                notebooks: arr(result?.notebooks),
+                subjectDistribution: arr(result?.subjectDistribution),
+                recentErrorItems: arr(result?.recentErrorItems),
+                masteryDistribution: result?.masteryDistribution ?? { new: 0, reviewing: 0, mastered: 0 },
+                errorCount: result?.errorCount ?? 0,
+                practiceCount: result?.practiceCount ?? 0,
+                notebookCount: result?.notebookCount ?? 0,
+                recent7DaysCount: result?.recent7DaysCount ?? 0,
+            })
         } catch (error) {
             console.error("Failed to fetch user detail", error)
         } finally {
@@ -40,8 +56,15 @@ export default function AdminUserDetailPage() {
             router.push("/")
             return
         }
+        // 直接访问 /admin/user/（没带 id）时不再发一个必然查不到的空请求，
+        // 否则页面会渲染出 N/A + 全 0 的假数据，看起来像用户不存在。
+        if (!userId) {
+            setData(null)
+            setLoading(false)
+            return
+        }
         fetchData()
-    }, [session, status, router, fetchData])
+    }, [session, status, router, fetchData, userId])
 
     if (status === "loading" || loading) {
         return (
@@ -52,10 +75,16 @@ export default function AdminUserDetailPage() {
     }
 
     if (!data) {
+        // 两种情况区分开：没带用户 id（从收藏夹/直接访问进来）与接口失败
+        const missingId = !userId
         return (
             <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
-                <p className="text-muted-foreground">{t.common?.error || "加载失败"}</p>
-                <Button onClick={fetchData}>重试</Button>
+                <p className="text-muted-foreground">
+                    {missingId ? "未指定用户，请从管理后台的用户列表进入" : (t.common?.error || "加载失败")}
+                </p>
+                <Button onClick={() => (missingId ? router.push("/admin") : fetchData())}>
+                    {missingId ? "返回管理后台" : "重试"}
+                </Button>
             </div>
         )
     }

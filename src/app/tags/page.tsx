@@ -64,6 +64,8 @@ export default function TagsPage() {
     const [newTagSubject, setNewTagSubject] = useState<SubjectKey>("math");
     const [newTagGrade, setNewTagGrade] = useState<string>(""); // 年级ID
     const [gradeOptions, setGradeOptions] = useState<Array<{ id: string; name: string }>>([]);
+    // 所有学科的年级（顶级系统节点）随 bootstrap 一次取回，切换学科不再单独请求
+    const [gradesBySubject, setGradesBySubject] = useState<Record<string, Array<{ id: string; name: string }>>>({});
     const [newTagName, setNewTagName] = useState("");
     const [submitting, setSubmitting] = useState(false);
 
@@ -105,46 +107,51 @@ export default function TagsPage() {
         }
     }, []);
 
-    // 获取统计（后端若返回异常结构，绝不能把 state 写成 undefined）
-    const fetchStats = async () => {
+    /**
+     * 一次性初始化：数学标签树 / 全学科年级下拉 / 自定义标签 / 使用统计。
+     * 旧版首屏发 3 个请求，后端内部又把 1809 行全表分页拉了 4 次（850KB）；
+     * 现在前端只有 1 个请求，后端 5 个精简查询并行发起。
+     */
+    const loadBootstrap = useCallback(async () => {
         try {
-            const data = await apiClient.get<TagStatsResponse>("/api/tags/stats");
+            const data = await apiClient.get<{
+                subject: string;
+                grades: Record<string, Array<{ id: string; name: string }>>;
+                customTags: Array<{ id: string; name: string; subject: string; parentName?: string | null }>;
+                stats: TagStats[];
+            }>("/api/tags/bootstrap?subject=math");
+            // 学科树按需加载：9 个学科卡片默认折叠，点开时 fetchTags(key) 再取，
+            // 首屏不为单科 100KB+ 的树数据买单。
+            setCustomTags(
+                (Array.isArray(data?.customTags) ? data.customTags : []).map(tag => ({
+                    id: tag.id,
+                    name: tag.name,
+                    subject: tag.subject || "math",
+                    parentName: tag.parentName || undefined,
+                })),
+            );
             setStats(Array.isArray(data?.stats) ? data.stats : []);
+            setGradesBySubject(data?.grades && typeof data.grades === "object" ? data.grades : {});
         } catch (error) {
-            console.error("Failed to fetch tag stats:", error);
+            console.error("Failed to load tags:", error);
+            // 结构异常/失败时全部兜底成数组，绝不让 state 变成 undefined 导致整页崩溃
+            setTagsBySubject(prev => ({ ...prev, math: Array.isArray(prev.math) ? prev.math : [] }));
             setStats(prev => (Array.isArray(prev) ? prev : []));
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
 
     useEffect(() => {
-        // 初始加载
-        fetchStats();
-        fetchCustomTags();
-        // 默认加载数学标签
-        fetchTags('math');
-    }, [fetchTags, fetchCustomTags]);
+        loadBootstrap();
+    }, [loadBootstrap]);
 
-    // 当学科变化时，获取对应的年级列表
+    // 年级下拉直接复用 bootstrap 已取回的数据，切换学科零请求
     useEffect(() => {
-        const fetchGrades = async () => {
-            try {
-                const data = await apiClient.get<{ tags: TagTreeNode[] }>(`/api/tags?subject=${newTagSubject}`);
-                // 顶级节点就是年级，只取系统标签
-                const list = Array.isArray(data?.tags) ? data.tags : [];
-                const grades = list
-                    .filter(t => t.isSystem)
-                    .map(t => ({ id: t.id, name: t.name }));
-                setGradeOptions(grades);
-                setNewTagGrade(""); // 重置选择
-            } catch (error) {
-                console.error("Failed to fetch grades:", error);
-                setGradeOptions([]);
-            }
-        };
-        fetchGrades();
-    }, [newTagSubject]);
+        const list = gradesBySubject[newTagSubject];
+        setGradeOptions(Array.isArray(list) ? list : []);
+        setNewTagGrade("");
+    }, [newTagSubject, gradesBySubject]);
 
     // 添加自定义标签
     const handleAddCustomTag = async () => {

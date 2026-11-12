@@ -9,6 +9,7 @@ import Link from "next/link";
 import { NotebookCard } from "@/components/notebook-card";
 import { CreateNotebookDialog } from "@/components/create-notebook-dialog";
 import { RenameNotebookDialog } from "@/components/rename-notebook-dialog";
+import { NotebookPageSkeleton } from "@/components/page-skeleton";
 
 import { Notebook } from "@/types/api";
 import { apiClient } from "@/lib/api-client";
@@ -93,11 +94,8 @@ export default function NotebooksPage() {
     };
 
     if (loading) {
-        return (
-            <div className="min-h-screen flex items-center justify-center">
-                <p className="text-muted-foreground">{t.common.loading}</p>
-            </div>
-        );
+        // 骨架屏会被写进静态预渲染 HTML，hydration 前就有可见内容
+        return <NotebookPageSkeleton />;
     }
 
     return (

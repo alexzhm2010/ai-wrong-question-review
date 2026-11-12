@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useState, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { BackButton } from "@/components/ui/back-button";
@@ -28,6 +28,9 @@ function PrintPreviewContent() {
     const [imageScale, setImageScale] = useState(70);
     const [showQuestionText, setShowQuestionText] = useState(false);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+    // 原图按需分批加载，不阻塞首屏
+    const [imageProgress, setImageProgress] = useState({ loaded: 0, total: 0 });
+    const imageLoadStarted = useRef(false);
 
     useEffect(() => {
         fetchItems();
@@ -35,9 +38,10 @@ function PrintPreviewContent() {
     const fetchItems = async () => {
         try {
             const params = new URLSearchParams(searchParams.toString());
-            // 打印预览需要所有符合条件的数据，设置较大的 pageSize
+            // 打印预览需要所有符合条件的数据，设置较大的 pageSize。
+            // 不再 includeImage=true：旧版一次拉回全库 7.65MB base64 原图，
+            // 首屏要等 3.4 秒才出内容。现在先只取文本，页面立即可用。
             params.set("pageSize", String(PRINT_PREVIEW_PAGE_SIZE));
-            params.set("includeImage", "true");
             const response = await apiClient.get<PaginatedResponse<ErrorItem>>(`/api/error-items/list?${params.toString()}`);
             setItems(response.items);
             setSelectedIds(new Set(response.items.map((item) => item.id)));
@@ -47,6 +51,56 @@ function PrintPreviewContent() {
             setLoading(false);
         }
     };
+
+    /**
+     * 文本就绪后再按片补图：每片 8 张，后台渐进加载。
+     * 用户先看到题目文字/占位骨架，图片陆续出现；总量不变但不再阻塞首屏，
+     * 且只看文字（showQuestionText）时图片请求仍可在后台并行完成，打印不缺图。
+     */
+    useEffect(() => {
+        if (loading || imageLoadStarted.current || items.length === 0) return;
+        imageLoadStarted.current = true;
+        let cancelled = false;
+        const ids = items.map((item) => item.id);
+        const BATCH = 8;
+        const CONCURRENCY = 4; // 4 片并发，串行 10 片会把总耗时拖到 9 秒以上
+        const chunks: string[][] = [];
+        for (let i = 0; i < ids.length; i += BATCH) chunks.push(ids.slice(i, i + BATCH));
+        let cursor = 0;
+        let loaded = 0;
+        setImageProgress({ loaded: 0, total: ids.length });
+        (async () => {
+            const worker = async () => {
+                while (!cancelled) {
+                    const idx = cursor++;
+                    if (idx >= chunks.length) return;
+                    const chunk = chunks[idx];
+                    try {
+                        const res = await apiClient.get<{ images: Array<{ id: string; originalImageUrl: string }> }>(
+                            `/api/error-items/images?ids=${chunk.join(",")}`,
+                        );
+                        const byId = new Map((res.images || []).map((x) => [x.id, x.originalImageUrl]));
+                        if (!cancelled && byId.size) {
+                            setItems(prev => prev.map(it => (
+                                byId.has(it.id) ? { ...it, originalImageUrl: byId.get(it.id) } : it
+                            )));
+                        }
+                    } catch {
+                        /* 单片失败不影响其余图片与文字内容 */
+                    }
+                    if (!cancelled) {
+                        loaded += chunk.length;
+                        setImageProgress({ loaded: Math.min(loaded, ids.length), total: ids.length });
+                    }
+                }
+            };
+            await Promise.all(
+                Array.from({ length: Math.min(CONCURRENCY, chunks.length) }, () => worker()),
+            );
+        })();
+        return () => { cancelled = true; };
+        // 只在首屏数据到达时启动一次；后续 setItems 不改长度，不会重跑
+    }, [loading, items.length]);
 
     const handlePrint = () => {
         window.print();
@@ -96,6 +150,11 @@ function PrintPreviewContent() {
                         <h1 className="text-lg sm:text-xl font-bold flex-1">
                             {t.printPreview?.title || 'Print Preview'} ({countLabel} {t.notebooks?.items || 'items'})
                         </h1>
+                        {imageProgress.total > 0 && imageProgress.loaded < imageProgress.total && (
+                            <span className="whitespace-nowrap text-xs text-muted-foreground print:hidden">
+                                {t.printPreview?.imagesLoading || '图片'} {imageProgress.loaded}/{imageProgress.total}
+                            </span>
+                        )}
                         <Button onClick={handlePrint} size="sm" className="whitespace-nowrap" disabled={selectedItems.length === 0}>
                             {t.printPreview?.printButton || 'Print / Save PDF'}
                         </Button>
@@ -254,17 +313,19 @@ function PrintPreviewContent() {
                                 <div className="mb-4">
                                     <MarkdownRenderer content={item.questionText} />
                                 </div>
+                            ) : item.originalImageUrl ? (
+                                <div className="mb-4">
+                                    <img
+                                        src={item.originalImageUrl}
+                                        alt={t.detail?.originalProblem || 'Question Image'}
+                                        className="h-auto border rounded"
+                                        style={{ maxWidth: `${imageScale}%` }}
+                                    />
+                                </div>
                             ) : (
-                                item.originalImageUrl && (
-                                    <div className="mb-4">
-                                        <img
-                                            src={item.originalImageUrl}
-                                            alt={t.detail?.originalProblem || 'Question Image'}
-                                            className="h-auto border rounded"
-                                            style={{ maxWidth: `${imageScale}%` }}
-                                        />
-                                    </div>
-                                )
+                                <div className="mb-4 flex h-20 items-center justify-center rounded border bg-muted/30 text-xs text-muted-foreground print:hidden">
+                                    {t.printPreview?.imageLoading || '题目图片加载中…'}
+                                </div>
                             )}
 
 

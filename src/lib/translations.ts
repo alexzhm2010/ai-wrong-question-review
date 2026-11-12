@@ -670,6 +670,8 @@ export const translations = {
             analysis: "Analysis",
             noItems: "No matching error items",
             noSelection: "No items selected",
+            imagesLoading: "Images",
+            imageLoading: "Loading question image…",
         },
         modelSelector: {
             modelName: "Model Name",
@@ -1455,6 +1457,8 @@ export const translations = {
             analysis: "解析",
             noItems: "没有符合条件的错题",
             noSelection: "当前未选择任何题目",
+            imagesLoading: "图片",
+            imageLoading: "题目图片加载中…",
         },
         modelSelector: {
             modelName: "模型名称",

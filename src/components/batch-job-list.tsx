@@ -57,10 +57,19 @@ export function BatchJobList({ jobs: external, onOpen, limit, className }: Props
     const [fetched, setFetched] = useState<BatchJobRow[] | null>(external ?? null);
     const [now, setNow] = useState(() => Date.now());
 
+    // 只有存在解析中/排队批次才需要周期性刷新；全已结束时零轮询、零重渲染
+    const hasActive = (fetched || []).some(
+        (j) => j.status === "queued" || j.status === "processing",
+    );
+
     useEffect(() => {
-        const timer = setInterval(() => setNow(Date.now()), 15_000);
+        if (!hasActive) return;
+        const timer = setInterval(() => {
+            if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+            setNow(Date.now());
+        }, 15_000);
         return () => clearInterval(timer);
-    }, []);
+    }, [hasActive]);
 
     const load = useCallback(async () => {
         try {
@@ -74,16 +83,27 @@ export function BatchJobList({ jobs: external, onOpen, limit, className }: Props
         if (external !== undefined) setFetched(external);
     }, [external]);
 
-    // 没有外部数据时自己轮询：只有解析中/排队才需要高频刷新
+    // 初次加载始终执行一次；之后仅在有活跃任务时轮询，页面不可见时暂停
     useEffect(() => {
         if (external !== undefined) return;
         void load();
+    }, [external, load]);
+
+    useEffect(() => {
+        if (external !== undefined || !hasActive) return;
         const timer = setInterval(() => {
             if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
             void load();
         }, 6000);
-        return () => clearInterval(timer);
-    }, [external, load]);
+        const onVisible = () => {
+            if (document.visibilityState === "visible") void load();
+        };
+        document.addEventListener("visibilitychange", onVisible);
+        return () => {
+            clearInterval(timer);
+            document.removeEventListener("visibilitychange", onVisible);
+        };
+    }, [external, hasActive, load]);
 
     const jobs = fetched;
 

@@ -1,11 +1,10 @@
 "use client";
 
 import { useState, Suspense, useEffect, useRef } from "react";
+import dynamic from "next/dynamic";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { UploadZone } from "@/components/upload-zone";
-import { CorrectionEditor } from "@/components/correction-editor";
-import { ImageCropper } from "@/components/image-cropper";
 import { ParsedQuestion } from "@/lib/ai";
 import { UserWelcome } from "@/components/user-welcome";
 import { apiClient } from "@/lib/api-client";
@@ -14,14 +13,12 @@ import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { processImageFile } from "@/lib/image-utils";
 import { Upload, BookOpen, Tags, LogOut, BarChart3, Images, ChevronRight } from "lucide-react";
-import { SettingsDialog } from "@/components/settings-dialog";
 import { BroadcastNotification } from "@/components/broadcast-notification";
 import { VersionBadge } from "@/components/version-badge";
 import { signOut } from "@/lib/supabase/session";
 
 import type { ProgressStatus } from "@/components/ui/progress-feedback";
 import { TopProgressBar } from "@/components/top-progress-bar";
-import { StreamingReview } from "@/components/streaming-review";
 import { parsePartialXml, type PartialParsed } from "@/lib/partial-parse";
 import { frontendLogger } from "@/lib/frontend-logger";
 import { toast } from "@/lib/toast";
@@ -32,6 +29,33 @@ import { BatchQuickConfirm } from "@/components/batch-quick-confirm";
 import { BatchJobList } from "@/components/batch-job-list";
 import { streamAnalyze } from "@/lib/stream-analyze";
 import { inferSubjectFromName } from "@/lib/knowledge-tags";
+
+/**
+ * 首屏只需要「上传 + 导航」。这几个组件合计 150KB+ 源码（设置对话框 104KB、
+ * 校对编辑器 42KB 且带 KaTeX），却都在解析完成/点击之后才用得到。
+ * 改成动态 import 后不进首屏 chunk，静态导出冷启动要下载执行的 JS 明显变少。
+ * loading 占位保证预渲染 HTML 里位置已占好，不会出现布局跳动。
+ */
+const Ghost = ({ className = "h-9 w-9 rounded-full" }: { className?: string }) => (
+    <div className={`animate-pulse bg-muted ${className}`} aria-hidden="true" />
+);
+
+const SettingsDialog = dynamic(
+    () => import("@/components/settings-dialog").then(m => m.SettingsDialog),
+    { ssr: false, loading: () => <Ghost /> },
+);
+const CorrectionEditor = dynamic(
+    () => import("@/components/correction-editor").then(m => m.CorrectionEditor),
+    { ssr: false, loading: () => <Ghost className="h-64 w-full rounded-xl" /> },
+);
+const ImageCropper = dynamic(
+    () => import("@/components/image-cropper").then(m => m.ImageCropper),
+    { ssr: false, loading: () => <Ghost className="h-64 w-full rounded-xl" /> },
+);
+const StreamingReview = dynamic(
+    () => import("@/components/streaming-review").then(m => m.StreamingReview),
+    { ssr: false, loading: () => <Ghost className="h-64 w-full rounded-xl" /> },
+);
 
 function HomeContent() {
     const [step, setStep] = useState<"upload" | "review">("upload");
@@ -56,8 +80,6 @@ function HomeContent() {
     const [thinkingMode, setThinkingMode] = useThinkingMode();
 
     // Cancellation + elapsed time for AI analysis
-    const [elapsedMs, setElapsedMs] = useState(0);
-    const analysisStartedAtRef = useRef<number | null>(null);
     const phaseStartedAtRef = useRef<number | null>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
     const abortTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -137,21 +159,8 @@ function HomeContent() {
 
     const isAnalysisActive = analysisStep !== 'idle';
 
-    // 每 100ms 更新已等待时长（整个 AI 流程累计，不随阶段重置）
-    useEffect(() => {
-        if (!isAnalysisActive) {
-            analysisStartedAtRef.current = null;
-            setElapsedMs(0);
-            return;
-        }
-        if (analysisStartedAtRef.current === null) {
-            analysisStartedAtRef.current = Date.now();
-        }
-        const interval = setInterval(() => {
-            setElapsedMs(Date.now() - (analysisStartedAtRef.current ?? Date.now()));
-        }, 100);
-        return () => clearInterval(interval);
-    }, [isAnalysisActive]);
+    // 已等待时长的计时已下沉到 TopProgressBar 内部（ref 直接更新 DOM）。
+    // 旧实现每 100ms setState 一次会让整个首页组件树每秒重渲染 10 次。
 
     // 组件卸载时终止进行中的请求
     useEffect(() => {
@@ -533,8 +542,8 @@ function HomeContent() {
             default:
                 return "";
         }
-        const seconds = (elapsedMs / 1000).toFixed(1);
-        return `${stage} · ${isZh ? `已等待 ${seconds} 秒` : `${seconds}s elapsed`}`;
+        // 耗时由 TopProgressBar 自己显示（ref 更新，不触发首页重渲染）
+        return stage;
     };
 
     return (

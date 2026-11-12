@@ -1,6 +1,86 @@
 /** 各业务路由共用的数据装配逻辑（对应旧版 Prisma 的 include / _count） */
 import { appUser, cuid, nowIso, restJson } from "../core";
 
+/* --------------------------- 全模块共用标签索引 --------------------------- */
+
+export interface TagLite {
+  id: string;
+  name: string;
+  parentId: string | null;
+  subject?: string | null;
+  isSystem?: boolean;
+}
+
+const TAG_INDEX_TTL = 300_000;
+let tagIndexCache: { at: number; rows: TagLite[] } | null = null;
+let tagIndexInFlight: Promise<TagLite[]> | null = null;
+/** 按 id 精确查过的小批标签，避免详情页为了几个标签名拉全表 1809 行 */
+const tagById = new Map<string, TagLite>();
+
+/**
+ * 标签精简索引。字段只取渲染/树/筛选真正需要的 5 列，绝不 `select=*`。
+ * PostgREST 服务端 max_rows=1000，必须稳定分页取全；模块级单例 + 5 分钟缓存，
+ * 让列表页、标签页、筛选组件、详情装配共用同一份，不再各自全表拉一遍。
+ */
+export async function getTagIndex(force = false): Promise<TagLite[]> {
+  if (!force && tagIndexCache && Date.now() - tagIndexCache.at < TAG_INDEX_TTL) {
+    return tagIndexCache.rows;
+  }
+  if (tagIndexInFlight) return tagIndexInFlight;
+  tagIndexInFlight = (async () => {
+    const rows: TagLite[] = [];
+    const size = 1000;
+    for (let offset = 0; offset < 20000; offset += size) {
+      const page = await restJson<TagLite[]>(
+        `/KnowledgeTag?select=id,name,parentId,subject,isSystem&order=id.asc&limit=${size}&offset=${offset}`,
+      ).catch(() => []);
+      if (!Array.isArray(page) || page.length === 0) break;
+      for (const t of page) {
+        rows.push(t);
+        tagById.set(t.id, t);
+      }
+      if (page.length < size) break;
+    }
+    tagIndexCache = { at: Date.now(), rows };
+    return rows;
+  })().finally(() => {
+    tagIndexInFlight = null;
+  });
+  return tagIndexInFlight;
+}
+
+/** 只按需要的 id 取标签：优先命中缓存，缺失的用一次 in.(...) 批量补齐 */
+export async function getTagsByIds(ids: string[]): Promise<TagLite[]> {
+  const wanted = [...new Set(ids.filter(Boolean))];
+  if (!wanted.length) return [];
+  const missing = wanted.filter((id) => !tagById.has(id));
+  if (missing.length) {
+    const chunks: string[][] = [];
+    for (let i = 0; i < missing.length; i += 200) chunks.push(missing.slice(i, i + 200));
+    await Promise.all(
+      chunks.map((chunk) =>
+        restJson<TagLite[]>(
+          `/KnowledgeTag?select=id,name,parentId,subject,isSystem&id=in.(${chunk
+            .map((id) => `"${id.replace(/"/g, "")}"`)
+            .join(",")})`,
+        )
+          .then((rows) => {
+            for (const t of rows || []) tagById.set(t.id, t);
+          })
+          .catch(() => {}),
+      ),
+    );
+  }
+  return wanted.map((id) => tagById.get(id)).filter(Boolean) as TagLite[];
+}
+
+/** 标签写操作后清掉索引，避免新建/删除后仍显示旧数据 */
+export function invalidateTagIndex(): void {
+  tagIndexCache = null;
+  tagIndexInFlight = null;
+  tagById.clear();
+}
+
 /** 读取公开配置并脱敏（AI 密钥只保存在 Edge Function 侧） */
 export async function loadPublicConfig(): Promise<Record<string, any>> {
   const rows = await restJson<any[]>(
@@ -51,16 +131,17 @@ export async function savePublicConfig(next: Record<string, any>): Promise<void>
 /** 错题列表：附带标签与学科（对应 Prisma include: { tags, subject }） */
 export async function attachRelations(
   item: Record<string, any>,
-  allTags?: any[],
+  _allTags?: any[],
   allSubjects?: { id: string; name: string }[],
 ): Promise<Record<string, any>> {
-  const tags = allTags || (await restJson<any[]>("/KnowledgeTag?select=*").catch(() => []));
   let linked: any[] = [];
   try {
     const links = await restJson<any[]>(
-      `/_ErrorItemToKnowledgeTag?select=*&A=eq.${encodeURIComponent(item.id)}`,
+      `/_ErrorItemToKnowledgeTag?select=B&A=eq.${encodeURIComponent(item.id)}`,
     ).catch(() => []);
-    linked = links.map((l) => tags.find((t) => t.id === l.B)).filter(Boolean);
+    // 旧实现为了查几个标签名就 `/KnowledgeTag?select=*` 拉全表 242KB；
+    // 现在按关联表里这几个 id 精确取，命中缓存时甚至 0 个请求。
+    linked = await getTagsByIds((links || []).map((l) => String(l.B)));
   } catch {
     /* 关联表不可读时降级为空标签 */
   }
@@ -96,9 +177,12 @@ export async function listNotebooks(): Promise<any[]> {
   if (!user?.id) return [];
 
   const scope = `userId=eq.${encodeURIComponent(user.id)}`;
-  // 查询失败直接冒泡（由上层返回错误），绝不降级成空数组
-  let subjects = await restJson<any[]>(`/Subject?select=*&${scope}&order=createdAt.desc`);
-  const items = await restJson<any[]>("/ErrorItem?select=id,subjectId");
+  // 两个查询之间无依赖，并行发起；任一失败都直接冒泡（由上层返回错误），
+  // 绝不降级成空数组后凭空补建默认本。
+  const [subjects, items] = await Promise.all([
+    restJson<any[]>(`/Subject?select=*&${scope}&order=createdAt.desc`),
+    restJson<any[]>("/ErrorItem?select=id,subjectId"),
+  ]);
 
   // 只有「查询成功且确实 0 条」才补默认本；插入失败（并发撞唯一约束）就跳过，
   // 不把没写进库的行显示出来。

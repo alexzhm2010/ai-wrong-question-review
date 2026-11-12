@@ -334,7 +334,18 @@ export default function AdminPage() {
         setLoading(true)
         try {
             const result = await apiClient.get<AdminDashboardData>("/api/admin/dashboard")
-            setData(result)
+            // 接口契约归一化：后端结构异常/字段缺失时一律降级成空数组与 0，
+            // 绝不让渲染层读 undefined.length / undefined.totalUsers 整页崩溃。
+            const arr = <T,>(v: T[] | undefined): T[] => (Array.isArray(v) ? v : [])
+            setData({
+                overview: result?.overview ?? {
+                    totalUsers: 0, totalErrorItems: 0, totalPracticeRecords: 0, totalSubjects: 0,
+                },
+                userStats: arr(result?.userStats),
+                subjectDistribution: arr(result?.subjectDistribution),
+                dailyTrend: arr(result?.dailyTrend),
+                masteryDistribution: result?.masteryDistribution ?? { new: 0, reviewing: 0, mastered: 0 },
+            })
         } catch (error) {
             console.error("Failed to fetch dashboard data", error)
         } finally {

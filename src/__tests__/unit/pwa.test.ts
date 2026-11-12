@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import manifest from '@/app/manifest';
+import { BASE_PATH } from '@/lib/supabase/config';
 import { awaitInstallChoice, getInstallSteps, getOccludedBottom } from '@/lib/pwa-install';
 
 const projectRoot = process.cwd();
@@ -13,9 +14,11 @@ describe('PWA 可安装配置', () => {
         const m = manifest();
         expect(m.display).toBe('standalone');
         expect(m.display_override).toContain('standalone');
-        expect(m.id).toBe('/');
-        expect(m.scope).toBe('/');
-        expect(m.start_url).toBe('/');
+        // 部署在 GitHub Pages 子路径下，id / scope / start_url 必须带 basePath，
+        // 否则从桌面图标启动会跳到根路径 404。
+        expect(m.id).toBe(`${BASE_PATH}/`);
+        expect(m.scope).toBe(`${BASE_PATH}/`);
+        expect(m.start_url).toBe(`${BASE_PATH}/`);
     });
 
     it('提供 192 与 512 两档图标且文件真实存在', () => {
@@ -23,7 +26,9 @@ describe('PWA 可安装配置', () => {
         expect(icons.map(i => i.sizes)).toContain('192x192');
         expect(icons.map(i => i.sizes)).toContain('512x512');
         for (const icon of icons) {
-            expect(fs.existsSync(path.join(projectRoot, 'public', icon.src.replace(/^\//, '')))).toBe(true);
+            // icon.src 带 basePath，校验磁盘路径时先剥掉
+            const relative = icon.src!.replace(BASE_PATH, '').replace(/^\/+/, '');
+            expect(fs.existsSync(path.join(projectRoot, 'public', relative))).toBe(true);
         }
     });
 
@@ -34,11 +39,12 @@ describe('PWA 可安装配置', () => {
         expect(sw).toContain('caches.keys()');
     });
 
-    it('middleware 公开放行 manifest、图标与 sw.js', () => {
-        const mw = readSource('src/middleware.ts');
-        expect(mw).toContain('/manifest.webmanifest');
-        expect(mw).toContain('/sw.js');
-        expect(mw).toContain("path.startsWith('/icons/')");
+    it('静态站点无 middleware 拦截：manifest 与 sw.js 作为普通静态文件直出', () => {
+        // 静态导出后不再有 src/middleware.ts，PWA 资源由 GitHub Pages 直接返回。
+        // 锁住真正的要求：sw.js 在 public 下、manifest 由 app/manifest.ts 静态生成。
+        expect(fs.existsSync(path.join(projectRoot, 'public/sw.js'))).toBe(true);
+        expect(fs.existsSync(path.join(projectRoot, 'src/app/manifest.ts'))).toBe(true);
+        expect(manifest().start_url).toBe(`${BASE_PATH}/`);
     });
 });
 
@@ -47,7 +53,7 @@ describe('所属卷等级已从界面移除', () => {
         'src/components/correction-editor.tsx',
         'src/components/direct-text-editor.tsx',
         'src/components/error-list.tsx',
-        'src/app/error-items/[id]/page.tsx',
+        'src/app/item/page.tsx',
         'src/app/print-preview/page.tsx',
         'src/app/page.tsx',
         'src/lib/translations.ts',
@@ -60,8 +66,9 @@ describe('所属卷等级已从界面移除', () => {
     });
 
     it('后端字段与 API 参数保留以兼容存量数据和导入导出', () => {
-        expect(readSource('src/app/api/error-items/route.ts')).toMatch(/paperLevel/);
-        expect(readSource('src/app/api/import/route.ts')).toMatch(/paperLevel/);
+        // 静态迁移后接口实现在桥接层路由里，不再是 src/app/api/**/route.ts
+        expect(readSource('src/lib/supabase/routes/error-items.ts')).toMatch(/paperLevel/);
+        expect(readSource('src/lib/supabase/routes/practice.ts')).toMatch(/paperLevel/);
         expect(readSource('prisma/schema.prisma')).toMatch(/paperLevel/);
     });
 });

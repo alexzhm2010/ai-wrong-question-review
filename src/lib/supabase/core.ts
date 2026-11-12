@@ -162,14 +162,43 @@ export function cuid(): string {
 
 /* ------------------------------ PostgREST -------------------------------- */
 
+/** layout.tsx 里的 inline script 会在 JS 分片下载之前就发出关键 GET，结果存这里 */
+type Prefetched = { status: number; body: string } | null;
+declare global {
+  interface Window {
+    __aqrPrefetch?: { entries: Record<string, Promise<Prefetched>> };
+  }
+}
+
 async function restRequest(path: string, init: RequestInit = {}): Promise<Response> {
+  const full = `${SUPABASE_URL}/rest/v1/${path.replace(/^\//, "")}`;
+  const method = (init.method || "GET").toUpperCase();
+
+  // 命中预取：静态导出站点 hydration 要等几十个 JS 分片，提前取数可以把这段
+  // 空窗期用来跑网络请求。只复用 GET、且只复用状态为 2xx 的结果；401/过期
+  // 一律忽略，交给下面正常的 ensureFreshToken 刷新流程，绝不把错误当数据。
+  if (method === "GET" && !init.body && typeof window !== "undefined") {
+    const hit = window.__aqrPrefetch?.entries?.[full];
+    if (hit) {
+      const prefetched = await hit.catch(() => null);
+      if (prefetched && prefetched.status >= 200 && prefetched.status < 300) {
+        // 只消费一次，避免后续带不同 header 的同一路径拿到脏数据
+        delete window.__aqrPrefetch!.entries[full];
+        return new Response(prefetched.body, {
+          status: prefetched.status,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+  }
+
   const token = await accessToken();
   const headers = new Headers(init.headers);
   headers.set("apikey", SUPABASE_ANON_KEY);
   headers.set("Authorization", `Bearer ${token || SUPABASE_ANON_KEY}`);
   if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (!headers.has("Prefer")) headers.set("Prefer", "return=representation");
-  return fetch(`${SUPABASE_URL}/rest/v1/${path.replace(/^\//, "")}`, { ...init, headers });
+  return fetch(full, { ...init, headers });
 }
 
 /** 调用 PostgREST，返回解析后的 JSON；非 2xx 抛 ApiBridgeError */
@@ -299,6 +328,8 @@ export async function uploadEdge(payload: unknown): Promise<Response> {
 /* -------------------------------- 当前用户 ------------------------------- */
 
 let cachedUser: Record<string, any> | null = null;
+/** 并发调用共享同一次查询：首屏多个组件同时 await appUser() 时只发一个 REST */
+let appUserInFlight: Promise<Record<string, any> | null> | null = null;
 
 /**
  * 当前登录用户在 User 表里的记录。RLS 会自动按 auth.uid() 过滤，
@@ -306,27 +337,35 @@ let cachedUser: Record<string, any> | null = null;
  */
 export async function appUser(force = false): Promise<Record<string, any> | null> {
   if (cachedUser && !force) return cachedUser;
-  const session = getSession();
-  if (!session) return null;
-  // 管理员的 RLS 允许读到所有 User 行，单靠 limit=1 可能拿到别人的记录，
-  // 进而把别人的错题本当成自己的。用 auth uid 精确定位；老数据缺
-  // auth_user_id 时回退原逻辑，保证兼容。
-  const uid = session.user?.id;
-  let rows: any[] = [];
-  if (uid) {
-    rows = await restJson<any[]>(
-      `/User?select=*&auth_user_id=eq.${encodeURIComponent(uid)}&limit=1`,
-    ).catch(() => []);
-  }
-  if (!rows?.length) {
-    rows = await restJson<any[]>("/User?select=*&limit=1");
-  }
-  cachedUser = rows?.[0] || null;
-  return cachedUser;
+  if (appUserInFlight) return appUserInFlight;
+
+  appUserInFlight = (async () => {
+    const session = getSession();
+    if (!session) return null;
+    // 管理员的 RLS 允许读到所有 User 行，单靠 limit=1 可能拿到别人的记录，
+    // 进而把别人的错题本当成自己的。用 auth uid 精确定位；老数据缺
+    // auth_user_id 时回退原逻辑，保证兼容。
+    const uid = session.user?.id;
+    let rows: any[] = [];
+    if (uid) {
+      rows = await restJson<any[]>(
+        `/User?select=*&auth_user_id=eq.${encodeURIComponent(uid)}&limit=1`,
+      ).catch(() => []);
+    }
+    if (!rows?.length) {
+      rows = await restJson<any[]>("/User?select=*&limit=1").catch(() => []);
+    }
+    cachedUser = rows?.[0] || null;
+    return cachedUser;
+  })().finally(() => {
+    appUserInFlight = null;
+  });
+  return appUserInFlight;
 }
 
 export function invalidateAppUser(): void {
   cachedUser = null;
+  appUserInFlight = null;
 }
 
 /** 要求已登录，否则 401 */

@@ -12,6 +12,7 @@ import { format } from "date-fns";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { toast } from "@/lib/toast";
 import { useRouter } from "next/navigation";
+import { ErrorListSkeleton } from "@/components/page-skeleton";
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -43,6 +44,8 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
     const [items, setItems] = useState<ErrorItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
+    // 输入即时反馈：按键当帧就给视觉状态，不必等 250ms 防抖 + 服务端请求
+    const [searching, setSearching] = useState(false);
     const [masteryFilter, setMasteryFilter] = useState<"all" | "mastered" | "unmastered">("all");
     const [timeFilter, setTimeFilter] = useState<"all" | "week" | "month">("all");
     const [gradeFilter, setGradeFilter] = useState("");
@@ -247,6 +250,7 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
         } finally {
             if (seq === requestSeqRef.current) {
                 setLoading(false);
+                setSearching(false);
             }
         }
     };
@@ -258,10 +262,16 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
                     <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                     <Input
                         placeholder={t.notebook.search}
-                        className="pl-9"
+                        className="pl-9 pr-9"
                         value={search}
-                        onChange={(e) => setSearch(e.target.value)}
+                        onChange={(e) => {
+                            setSearch(e.target.value);
+                            setSearching(!!e.target.value);
+                        }}
                     />
+                    {(searching || (loading && items.length > 0)) && (
+                        <span className="absolute right-3 top-3 h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+                    )}
                 </div>
                 <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -334,9 +344,12 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
                 </div>
             )}
 
-            {loading && items.length === 0 && (
-                <div className="py-16 text-center text-sm text-muted-foreground">
-                    {t.notebook?.loadingList || t.common?.loading || "加载中…"}
+            {loading && items.length === 0 && <ErrorListSkeleton rows={4} />}
+            {/* 刷新/筛选时保留上一屏数据，只显示一条轻量提示，不再闪空白 */}
+            {loading && items.length > 0 && (
+                <div className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
+                    <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+                    {t.common?.loading || "加载中…"}
                 </div>
             )}
 

@@ -1,7 +1,7 @@
 /** 错题 CRUD、筛选分页、批量删除、掌握状态、笔记、GeoGebra */
 import { aiEdge, byId, cuid, nowIso, requireUser, restJson, restJsonPage } from "../core";
 import { apiError, json, type RouteContext, type RouteHandler } from "../http";
-import { attachRelations } from "./shared";
+import { attachRelations, getTagIndex, getTagsByIds } from "./shared";
 
 /**
  * 列表页字段：刻意不含 originalImageUrl。
@@ -32,28 +32,20 @@ function qget(q: URLSearchParams, ...names: string[]): string {
   return "";
 }
 
-/** 标签索引缓存：1809 条标签树，避免每次列表请求都全表拉一次 */
-let tagIndexCache: { at: number; rows: { id: string; name: string; parentId: string | null }[] } | null = null;
-async function tagIndex() {
-  if (tagIndexCache && Date.now() - tagIndexCache.at < 300_000) return tagIndexCache.rows;
-  const rows = await restJson<any[]>("/KnowledgeTag?select=id,name,parentId").catch(() => []);
-  tagIndexCache = { at: Date.now(), rows: rows || [] };
-  return tagIndexCache.rows;
-}
-
 /**
  * 批量装配列表的 tags / subject。
  * 旧实现每条错题单独查一次关联表（每页 18 次串行往返），这里改成
- * 「一次 in.(...) 批量查关联 + 内存映射」，无论一页多少条都只有固定 2~3 次请求。
+ * 「一次 in.(...) 批量查关联 + 按标签 id 精确取 + 内存映射」，
+ * 无论一页多少条都只有固定 2~3 次请求，且不再为几个标签名拉 1809 行索引。
  */
 async function attachMany(items: Record<string, any>[]): Promise<Record<string, any>[]> {
   if (!items.length) return [];
   const ids = items.map((i) => `"${String(i.id).replace(/"/g, "")}"`).join(",");
-  const [tags, links, subjects] = await Promise.all([
-    tagIndex(),
+  const [links, subjects] = await Promise.all([
     restJson<any[]>(`/_ErrorItemToKnowledgeTag?select=A,B&A=in.(${ids})`).catch(() => []),
     restJson<any[]>("/Subject?select=id,name").catch(() => []),
   ]);
+  const tags = await getTagsByIds((links || []).map((l) => String(l.B)));
   const tagById = new Map<string, any>(tags.map((t) => [t.id, t]));
   const linksByItem = new Map<string, any[]>();
   for (const l of links || []) {
@@ -154,7 +146,7 @@ async function handleFixed(ctx: RouteContext, sub: string): Promise<Response | n
     if (chapter) {
       // 章节 → 该节点下所有叶子知识点名；knowledgePoints 是存标签名的 JSON 文本，
       // 用它做 ilike 比关联表更全（库里 80 道题都有 knowledgePoints，但只有 39 条关联记录）。
-      const rows = await tagIndex();
+      const rows = await getTagIndex();
       const children = new Map<string, any[]>();
       for (const r of rows) {
         const k = r.parentId || "";
@@ -197,19 +189,55 @@ async function handleFixed(ctx: RouteContext, sub: string): Promise<Response | n
     });
   }
   if (sub === "batch-delete" && ctx.method === "POST") {
-    const ids: string[] = ctx.body?.ids || [];
-    for (const id of ids) await restJson(byId("ErrorItem", id), { method: "DELETE" }).catch(() => {});
+    const ids: string[] = (ctx.body?.ids || []).filter(Boolean);
+    await deleteMany(ids);
     return json({ success: true, deleted: ids.length });
   }
   if (sub === "clear" && ctx.method === "DELETE") {
     await requireUser();
     const rows = await restJson<any[]>("/ErrorItem?select=id").catch(() => []);
-    for (const row of rows) {
-      await restJson(byId("ErrorItem", row.id), { method: "DELETE" }).catch(() => {});
-    }
+    await deleteMany((rows || []).map((r) => String(r.id)));
     return json({ message: "Error data cleared successfully", count: rows.length });
   }
+  /**
+   * 打印预览/详情页按需取原图。原图是 base64，全库 7MB+，绝不能混在列表里。
+   * 前端按片传 ids，每片一次查询，页面先出文字骨架，图片渐进补齐。
+   */
+  if (sub === "images" && ctx.method === "GET") {
+    const ids = (ctx.query.get("ids") || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 60);
+    if (!ids.length) return json({ images: [] });
+    const inList = ids.map((id) => `"${id.replace(/"/g, "")}"`).join(",");
+    const rows = await restJson<any[]>(
+      `/ErrorItem?select=id,originalImageUrl&id=in.(${inList})`,
+    ).catch(() => []);
+    return json({ images: Array.isArray(rows) ? rows : [] });
+  }
   return null;
+}
+
+/** 批量删除：一次 DELETE ... id=in.(...) 取代 N 次串行往返；失败再逐条兜底 */
+async function deleteMany(ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += 100) chunks.push(ids.slice(i, i + 100));
+  for (const chunk of chunks) {
+    const inList = chunk.map((id) => `"${String(id).replace(/"/g, "")}"`).join(",");
+    const ok = await restJson(`/ErrorItem?id=in.(${inList})`, { method: "DELETE" })
+      .then(() => true)
+      .catch(() => false);
+    if (!ok) {
+      // 某些 RLS/权限配置下批量 DELETE 可能被拒，退回逐条以保证功能可用
+      await Promise.all(
+        chunk.map((id) =>
+          restJson(byId("ErrorItem", id), { method: "DELETE" }).catch(() => {}),
+        ),
+      );
+    }
+  }
 }
 
 export async function handleErrorItems(ctx: RouteContext): Promise<Response | null> {
@@ -222,20 +250,27 @@ export async function handleErrorItems(ctx: RouteContext): Promise<Response | nu
   // 集合
   if (!second) {
     if (ctx.method === "GET") {
-      return json(await restJson<any[]>("/ErrorItem?select=*&order=createdAt.desc").catch(() => []));
+      // 旧实现 select=* 把整库 7.6MB 原图拉回；列表路径一律走 list，这里只保留兼容
+      return json(
+        await restJson<any[]>(
+          `/ErrorItem?select=${LIST_FIELDS.join(",")}&order=createdAt.desc`,
+        ).catch(() => []),
+      );
     }
     if (ctx.method === "POST") {
       const user = await requireUser();
-      // 两秒内同题干的重复提交直接复用，避免 AI 流式重复写入
-      const preview = String(ctx.body?.questionText || "").slice(0, 100);
+      // 查重下推数据库：旧版每次保存前都把全库 7.6MB 原图拉回浏览器，
+      // 再在 JS 里找 2 秒内同题干，这是「上传/保存慢」最隐蔽的主因。
+      // 现在只查 id，条件全部交给 PostgREST，往返只有几百字节。
+      const preview = likeTerm(String(ctx.body?.questionText || "").slice(0, 100));
       if (preview) {
-        const recent = await restJson<any[]>("/ErrorItem?select=*&order=createdAt.desc").catch(() => []);
-        const duplicate = recent.find(
-          (item) =>
-            String(item.questionText || "").startsWith(preview) &&
-            Date.now() - new Date(item.createdAt).getTime() < 2000,
-        );
-        if (duplicate) return json({ ...duplicate, duplicate: true });
+        const since = new Date(Date.now() - 5000).toISOString();
+        const recent = await restJson<any[]>(
+          `/ErrorItem?select=id&userId=eq.${encodeURIComponent(user.id)}` +
+            `&createdAt=gte.${encodeURIComponent(since)}` +
+            `&questionText=like.${encodeURIComponent(preview)}*&limit=1`,
+        ).catch(() => []);
+        if (recent?.[0]?.id) return json({ id: recent[0].id, duplicate: true });
       }
       const row = buildItem(ctx.body || {}, user.id);
       const created = await restJson<any[]>("/ErrorItem", {
