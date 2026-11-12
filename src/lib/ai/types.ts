@@ -15,6 +15,10 @@ export interface ReanswerQuestionResult {
     wrongAnswerText: string;
     mistakeAnalysis: string;
     mistakeStatus: MistakeStatus;
+    /** 服务端实际使用的思考模式（deep 超时会降级为 fast） */
+    usedMode?: 'deep' | 'fast';
+    /** true = 深度思考超过预算，已自动改用快速模式重解 */
+    degraded?: boolean;
 }
 
 export interface GeogebraAnalysisResult {

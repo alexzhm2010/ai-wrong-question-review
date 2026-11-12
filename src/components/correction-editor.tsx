@@ -51,6 +51,7 @@ type ReanswerErrorMessages = {
     authError?: string;
     connectionFailed?: string;
     responseError?: string;
+    timeout?: string;
 };
 
 export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, initialSubjectId, aiTimeout, saveLabel }: CorrectionEditorProps) {
@@ -77,6 +78,8 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
     });
     const { t, language } = useLanguage();
     const [isReanswering, setIsReanswering] = useState(false);
+    // 本次重新解题是否因深度思考超时降级成了快速模式（结果需人工核对）
+    const [reanswerDegraded, setReanswerDegraded] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [isAnalyzingGeogebra, setIsAnalyzingGeogebra] = useState(false);
     const [geogebraError, setGeogebraError] = useState<string | null>(null);
@@ -120,6 +123,7 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
         }
 
         setIsReanswering(true);
+        setReanswerDegraded(false);
         try {
             const requestBody = buildReanswerRequestBody({
                 questionText: data.questionText,
@@ -158,16 +162,30 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                 };
             });
 
-            toast.success(t.editor.reanswerSuccess || '✅ Answer and analysis updated!');
+            if (result.degraded) {
+                setReanswerDegraded(true);
+                toast.warning(t.editor.reanswerDegraded || '深度思考超过 95 秒，已自动改用快速模式重新解题（解析会略简）');
+            } else {
+                toast.success(t.editor.reanswerSuccess || '✅ Answer and analysis updated!');
+            }
         } catch (error: unknown) {
             console.error("Reanswer failed:", error);
-            const apiError = error as { data?: { message?: string } };
+            const apiError = error as { status?: number; data?: { message?: string; code?: string } };
             const msg = apiError.data?.message || '';
+            const code = apiError.data?.code || '';
 
             const reanswerErrors: ReanswerErrorMessages = t.errors?.reanswer || {};
             let errorText = reanswerErrors.default || 'Reanswer failed';
 
-            if (msg.includes('AI_AUTH_ERROR')) {
+            if (
+                apiError.status === 546 ||
+                apiError.status === 504 ||
+                code === 'WORKER_RESOURCE_LIMIT' ||
+                msg.includes('WORKER_RESOURCE_LIMIT') ||
+                msg.includes('AI_TIMEOUT_ERROR')
+            ) {
+                errorText = reanswerErrors.timeout || t.errors?.AI_TIMEOUT_ERROR || errorText;
+            } else if (msg.includes('AI_AUTH_ERROR')) {
                 errorText = reanswerErrors.authError || t.errors?.AI_AUTH_ERROR || errorText;
             } else if (msg.includes('AI_QUOTA_BLOCKED')) {
                 errorText = t.errors?.AI_QUOTA_BLOCKED || errorText;
@@ -373,6 +391,16 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                             </>
                         )}
                     </Button>
+                    {thinkingMode === 'deep' && !reanswerDegraded && (
+                        <p className="text-xs text-muted-foreground">
+                            {t.editor.deepBudgetHint || '⏳ 深度思考最长约 95 秒，超时会自动改用快速模式'}
+                        </p>
+                    )}
+                    {reanswerDegraded && (
+                        <p className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
+                            {t.editor.reanswerDegradedNote || '⚠️ 本次结果由快速模式生成，建议核对关键结论后再入库'}
+                        </p>
+                    )}
                     <p className="text-xs text-muted-foreground">
                         {t.editor.reanswerHint || '💡 If the question was misrecognized, correct it and click to regenerate answer'}
                     </p>
