@@ -31,6 +31,16 @@ const FLUSH_DELAY_MS = 1000;
 /** 缓冲区最大条目数，超过自动刷新 */
 const MAX_BUFFER_SIZE = 20;
 
+/**
+ * 是否把日志上报到后端。
+ *
+ * frontend_logs 表对 anon/authenticated 没有 INSERT 授权（PostgREST 返回
+ * 401 permission denied），而控制台里这条失败请求看起来像功能报错，实际只是
+ * 无人消费的日志上报。默认关闭：本地 console 仍然完整输出，定位问题够用；
+ * 真要采集时把这里打开，并先给该表补 RLS 插入策略。
+ */
+const REMOTE_LOGGING_ENABLED = false;
+
 class FrontendLogger {
   private buffer: LogEntry[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -52,6 +62,12 @@ class FrontendLogger {
     };
 
     this.buffer.push(entry);
+
+    // 后端采集关闭时只保留 console 输出，不产生任何网络请求
+    if (!REMOTE_LOGGING_ENABLED) {
+      this.buffer = [];
+      return;
+    }
 
     // 如果缓冲区已满，立即刷新
     if (this.buffer.length >= MAX_BUFFER_SIZE) {

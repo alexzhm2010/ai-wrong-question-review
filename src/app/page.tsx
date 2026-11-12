@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, Suspense, useEffect, useRef } from "react";
-import dynamic from "next/dynamic";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { UploadZone } from "@/components/upload-zone";
@@ -29,34 +28,21 @@ import { BatchQuickConfirm } from "@/components/batch-quick-confirm";
 import { BatchJobList } from "@/components/batch-job-list";
 import { streamAnalyze } from "@/lib/stream-analyze";
 import { inferSubjectFromName } from "@/lib/knowledge-tags";
+import { SettingsDialog } from "@/components/settings-dialog";
+import { CorrectionEditor } from "@/components/correction-editor";
+import { ImageCropper } from "@/components/image-cropper";
+import { StreamingReview } from "@/components/streaming-review";
 
 /**
- * 首屏只需要「上传 + 导航」。这几个组件合计 150KB+ 源码（设置对话框 104KB、
- * 校对编辑器 42KB 且带 KaTeX），却都在解析完成/点击之后才用得到。
- * 改成动态 import 后不进首屏 chunk，静态导出冷启动要下载执行的 JS 明显变少。
- * loading 占位保证预渲染 HTML 里位置已占好，不会出现布局跳动。
+ * 这几个组件一律静态导入。
+ *
+ * 曾经用 next/dynamic 拆包（设置对话框 104KB、校对编辑器 42KB 带 KaTeX），
+ * 本地测确实减小了首屏 chunk。但线上实测暴露了反效果：ssr:false 的 dynamic
+ * 组件在 hydration 后会立刻插入 preload 请求，等于把「一个大请求」拆成
+ * 「一个主包 + 4 个额外请求」。跨境访问 GitHub Pages 时单个 RTT 可能长达
+ * 十几秒（实测 26KB 的文件下载耗时 16s），请求数比字节数更致命。
+ * 合并回主 chunk 后首屏 JS 请求数减少 4 个，整体反而更快。
  */
-const Ghost = ({ className = "h-9 w-9 rounded-full" }: { className?: string }) => (
-    <div className={`animate-pulse bg-muted ${className}`} aria-hidden="true" />
-);
-
-const SettingsDialog = dynamic(
-    () => import("@/components/settings-dialog").then(m => m.SettingsDialog),
-    { ssr: false, loading: () => <Ghost /> },
-);
-const CorrectionEditor = dynamic(
-    () => import("@/components/correction-editor").then(m => m.CorrectionEditor),
-    { ssr: false, loading: () => <Ghost className="h-64 w-full rounded-xl" /> },
-);
-const ImageCropper = dynamic(
-    () => import("@/components/image-cropper").then(m => m.ImageCropper),
-    { ssr: false, loading: () => <Ghost className="h-64 w-full rounded-xl" /> },
-);
-const StreamingReview = dynamic(
-    () => import("@/components/streaming-review").then(m => m.StreamingReview),
-    { ssr: false, loading: () => <Ghost className="h-64 w-full rounded-xl" /> },
-);
-
 function HomeContent() {
     const [step, setStep] = useState<"upload" | "review">("upload");
     const [analysisStep, setAnalysisStep] = useState<ProgressStatus>('idle');
