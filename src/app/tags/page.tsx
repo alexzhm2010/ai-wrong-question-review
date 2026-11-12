@@ -74,37 +74,45 @@ export default function TagsPage() {
     const fetchTags = useCallback(async (subject: SubjectKey) => {
         try {
             const data = await apiClient.get<{ tags: TagTreeNode[] }>(`/api/tags?subject=${subject}`);
-            setTagsBySubject(prev => ({ ...prev, [subject]: data.tags }));
+            setTagsBySubject(prev => ({ ...prev, [subject]: Array.isArray(data?.tags) ? data.tags : [] }));
         } catch (error) {
             console.error(`Failed to fetch ${subject} tags:`, error);
+            // 失败也要结束 loading，否则卡片一直转圈
+            setTagsBySubject(prev => ({ ...prev, [subject]: [] }));
         }
     }, []);
 
-    // 获取自定义标签
+    // 获取自定义标签：一次取回全部学科，避免旧版循环 9 次、每次都拉全表
     const fetchCustomTags = useCallback(async () => {
         try {
-            // 获取所有学科的扁平标签，过滤非系统标签
-            const allCustom: Array<{ id: string; name: string; subject: string; parentName?: string }> = [];
-            for (const { key } of SUBJECTS) {
-                const data = await apiClient.get<{ tags: Array<{ id: string; name: string; isSystem: boolean; parentName?: string }> }>(
-                    `/api/tags?subject=${key}&flat=true`
-                );
-                const custom = data.tags.filter(t => !t.isSystem).map(t => ({ ...t, subject: key }));
-                allCustom.push(...custom);
-            }
-            setCustomTags(allCustom);
+            const data = await apiClient.get<{
+                tags: Array<{ id: string; name: string; subject: string; isSystem: boolean; parentName?: string | null }>;
+            }>("/api/tags?flat=true&all=true");
+            const list = Array.isArray(data?.tags) ? data.tags : [];
+            setCustomTags(
+                list
+                    .filter(t => !t.isSystem)
+                    .map(t => ({
+                        id: t.id,
+                        name: t.name,
+                        subject: t.subject || "math",
+                        parentName: t.parentName || undefined,
+                    })),
+            );
         } catch (error) {
             console.error("Failed to fetch custom tags:", error);
+            setCustomTags(prev => (Array.isArray(prev) ? prev : []));
         }
     }, []);
 
-    // 获取统计
+    // 获取统计（后端若返回异常结构，绝不能把 state 写成 undefined）
     const fetchStats = async () => {
         try {
             const data = await apiClient.get<TagStatsResponse>("/api/tags/stats");
-            setStats(data.stats);
+            setStats(Array.isArray(data?.stats) ? data.stats : []);
         } catch (error) {
             console.error("Failed to fetch tag stats:", error);
+            setStats(prev => (Array.isArray(prev) ? prev : []));
         } finally {
             setLoading(false);
         }
@@ -124,7 +132,8 @@ export default function TagsPage() {
             try {
                 const data = await apiClient.get<{ tags: TagTreeNode[] }>(`/api/tags?subject=${newTagSubject}`);
                 // 顶级节点就是年级，只取系统标签
-                const grades = data.tags
+                const list = Array.isArray(data?.tags) ? data.tags : [];
+                const grades = list
                     .filter(t => t.isSystem)
                     .map(t => ({ id: t.id, name: t.name }));
                 setGradeOptions(grades);
@@ -190,7 +199,9 @@ export default function TagsPage() {
 
     // 渲染标签树节点
     const renderTreeNode = (node: TagTreeNode, depth: number = 0, isLeafContext: boolean = false): React.ReactNode => {
-        const hasChildren = node.children.length > 0;
+        // 后端结构异常时不要让整页因 undefined.length 崩溃
+        const children = Array.isArray(node?.children) ? node.children : [];
+        const hasChildren = children.length > 0;
         const isExpanded = expandedNodes[node.id];
         const paddingLeft = depth * 16;
 
@@ -210,7 +221,7 @@ export default function TagsPage() {
 
 
         // 过滤出系统标签子节点
-        const visibleChildren = node.children.filter(child => child.isSystem);
+        const visibleChildren = children.filter(child => child.isSystem);
 
         if (visibleChildren.length === 0) {
             // 如果没有可见子节点，且当前节点非叶子（但所有子节点都被过滤了），也显示为 Badge？
@@ -232,7 +243,9 @@ export default function TagsPage() {
         }
 
         // 判断可见子节点是否都是叶子节点
-        const allChildrenAreLeaves = visibleChildren.every(child => child.children.filter(c => c.isSystem).length === 0);
+        const allChildrenAreLeaves = visibleChildren.every(
+            child => (Array.isArray(child.children) ? child.children : []).filter(c => c.isSystem).length === 0,
+        );
 
         // 有子节点 - 可展开
         return (
@@ -269,7 +282,8 @@ export default function TagsPage() {
                 {SUBJECTS.map(({ key, name }) => {
                     const subjectName = (t.tags?.subjects as any)?.[key] || name;
                     const isExpanded = expandedNodes[`subject-${key}`];
-                    const tags = tagsBySubject[key];
+                    const rawTags = tagsBySubject[key];
+                    const tags = Array.isArray(rawTags) ? rawTags : (rawTags === null ? null : []);
 
                     return (
                         <Card key={key} className="mb-4">
@@ -313,11 +327,12 @@ export default function TagsPage() {
 
     // 渲染自定义标签
     const renderCustomTags = () => {
-        const groupedBySubject = customTags.reduce((acc, tag) => {
+        const list = Array.isArray(customTags) ? customTags : [];
+        const groupedBySubject = list.reduce((acc, tag) => {
             if (!acc[tag.subject]) acc[tag.subject] = [];
             acc[tag.subject].push(tag);
             return acc;
-        }, {} as Record<string, typeof customTags>);
+        }, {} as Record<string, typeof list>);
 
         return (
             <div className="space-y-6">
@@ -364,7 +379,7 @@ export default function TagsPage() {
                     </CardContent>
                 </Card>
 
-                {customTags.length === 0 ? (
+                {list.length === 0 ? (
                     <Card><CardContent className="py-12 text-center text-muted-foreground">
                         {t.tags?.custom?.empty || "No custom tags yet, click above to add!"}
                     </CardContent></Card>
@@ -427,14 +442,15 @@ export default function TagsPage() {
 
     // 渲染统计
     const renderStats = () => {
+        const list = Array.isArray(stats) ? stats : [];
         if (loading) return <div className="text-center py-8">{t.tags?.stats?.loading || "Loading..."}</div>;
-        if (stats.length === 0) return <div className="text-center py-8 text-muted-foreground">{t.tags?.stats?.empty || "No tag usage records yet"}</div>;
-        const maxCount = stats[0]?.count || 1;
+        if (list.length === 0) return <div className="text-center py-8 text-muted-foreground">{t.tags?.stats?.empty || "No tag usage records yet"}</div>;
+        const maxCount = list[0]?.count || 1;
         return (
             <Card>
                 <CardHeader><CardTitle className="flex items-center gap-2"><TrendingUp className="h-5 w-5" />{t.tags?.stats?.frequency || "Tag Usage Frequency (Top 20)"}</CardTitle></CardHeader>
                 <CardContent className="space-y-3">
-                    {stats.slice(0, 20).map((stat) => {
+                    {list.slice(0, 20).map((stat) => {
                         const percentage = (stat.count / maxCount) * 100;
                         return (
                             <div key={stat.tag} className="space-y-1">
