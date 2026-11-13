@@ -24,6 +24,16 @@ interface ThumbRow {
 }
 
 const memFallback = new Map<string, ThumbRow>();
+
+/**
+ * 一级缓存：本会话算出来的缩略图直接驻内存，不再走 IndexedDB。
+ *
+ * 为什么需要：整页翻到截图态时 18 张卡会同时要图，
+ * 如果每张都开事务读 IndexedDB，事务会排队，单张能拖到 2～3 秒
+ * （实测第二、第三张卡光「排队 + 读」就 2.3s，而真正缩图只要 3ms）。
+ * IndexedDB 只负责**跨会话**保留，显示路径尽量不碰它。
+ */
+const memThumbs = new Map<string, { url: string; sig: number }>();
 let dbPromise: Promise<IDBDatabase | null> | null = null;
 
 function openDb(): Promise<IDBDatabase | null> {
@@ -72,20 +82,9 @@ export async function readThumb(id: string, sig?: number): Promise<string | null
     });
 }
 
-export async function writeThumb(id: string, url: string, sig: number): Promise<void> {
-    const row: ThumbRow = { id, url, sig, at: Date.now() };
-    memFallback.set(id, row);
-    const db = await openDb();
-    if (!db) return;
-    try {
-        tx(db, "readwrite").put(row);
-    } catch {
-        /* 写失败不影响本次显示 */
-    }
-}
-
 export async function dropThumb(id: string): Promise<void> {
     memFallback.delete(id);
+    memThumbs.delete(id);
     const db = await openDb();
     if (!db) return;
     try {
@@ -127,8 +126,12 @@ export async function makeThumb(src: string, width = THUMB_WIDTH): Promise<strin
     }
 }
 
-/** 缩略图未命中时最多并发拉 3 张，避免连翻 20 张卡把网络打满 */
-const MAX_FETCH = 3;
+/**
+ * 缩略图未命中时最多并发做 5 张。
+ * 整页翻到截图态时视口内通常有 6～9 张，并发太低会让后半屏一直转圈；
+ * 太高又会把 4G 打满、界面卡顿，5 是实测比较稳的值。
+ */
+const MAX_FETCH = 5;
 let fetching = 0;
 const queue: Array<() => void> = [];
 
@@ -146,6 +149,80 @@ function release(): void {
     if (next) next();
 }
 
+/** 同一个 id 的重复请求合并成一个 Promise，避免连点/重渲染时反复解码 */
+const inflight = new Map<string, Promise<string | null>>();
+
+/**
+ * 一次性把库里已有的缩略图全读进内存。
+ *
+ * 逐张 get 会在同一个 store 上排 18 个读事务，实测首批要 400ms；
+ * 一次 getAll 只要几十毫秒，之后翻卡、翻回、换页全是内存命中。
+ */
+let warmPromise: Promise<void> | null = null;
+function warm(): Promise<void> {
+    if (warmPromise) return warmPromise;
+    warmPromise = (async () => {
+        const db = await openDb();
+        if (!db) return;
+        await new Promise<void>((resolve) => {
+            try {
+                const req = tx(db, "readonly").getAll();
+                req.onsuccess = () => {
+                    for (const row of (req.result || []) as ThumbRow[]) {
+                        memThumbs.set(row.id, { url: row.url, sig: row.sig });
+                        memFallback.set(row.id, row);
+                    }
+                    resolve();
+                };
+                req.onerror = () => resolve();
+            } catch {
+                resolve();
+            }
+        });
+    })();
+    return warmPromise;
+}
+
+/**
+ * 写入合并：400ms 内的多张缩略图攒成一条事务写下去。
+ * 逐张 put 会产生 18 个读写事务互相排队，合并后只有 1 个。
+ */
+let writeQueue: ThumbRow[] = [];
+let writeTimer: ReturnType<typeof setTimeout> | null = null;
+
+function flushWrites(): void {
+    writeTimer = null;
+    const batch = writeQueue;
+    writeQueue = [];
+    if (batch.length === 0) return;
+    void (async () => {
+        const db = await openDb();
+        if (!db) return;
+        try {
+            const store = tx(db, "readwrite");
+            for (const row of batch) store.put(row);
+        } catch {
+            /* 写失败不影响本次显示 */
+        }
+    })();
+}
+
+function scheduleWrite(row: ThumbRow): void {
+    writeQueue.push(row);
+    if (writeTimer) return;
+    writeTimer = setTimeout(flushWrites, 400);
+}
+
+/**
+ * 同步窥一眼内存里的缩略图。
+ *
+ * 用途：从详情页返回列表时，本会话已经算过的图不该再等一次网络，
+ * 卡片拿到就立刻渲染，翻页、翻回都感觉是瞬时的。
+ */
+export function peekThumb(id: string): string | null {
+    return memThumbs.get(id)?.url ?? null;
+}
+
 /**
  * 取一张卡的展示图：先查本地缓存，未命中才调用 fetcher 拉原图并缩图。
  * fetcher 由调用方注入（避免这里依赖 apiClient，方便单测）。
@@ -155,22 +232,41 @@ export async function ensureThumb(
     fetcher: () => Promise<{ originalImageUrl?: string } | null>,
     sig = 0,
 ): Promise<string | null> {
-    const cached = await readThumb(id, sig || undefined);
-    if (cached) return cached;
+    const memHit = memThumbs.get(id);
+    if (memHit && (sig === 0 || memHit.sig === sig)) return memHit.url;
 
-    await acquire();
+    const running = inflight.get(id);
+    if (running) return running;
+
+    const task = (async (): Promise<string | null> => {
+        await warm();
+        const memNow = memThumbs.get(id);
+        if (memNow && (sig === 0 || memNow.sig === sig)) return memNow.url;
+        const cached = await readThumb(id, sig || undefined);
+        if (cached) {
+            memThumbs.set(id, { url: cached, sig });
+            return cached;
+        }
+        await acquire();
+        try {
+            const detail = await fetcher();
+            const raw = detail?.originalImageUrl;
+            if (!raw) return null;
+            const thumb = await makeThumb(raw);
+            memThumbs.set(id, { url: thumb, sig });
+            scheduleWrite({ id, url: thumb, sig, at: Date.now() });
+            return thumb;
+        } catch {
+            return null;
+        } finally {
+            release();
+        }
+    })();
+
+    inflight.set(id, task);
     try {
-        const again = await readThumb(id, sig || undefined);
-        if (again) return again; // 排队期间别人已经拉回来了
-        const detail = await fetcher();
-        const raw = detail?.originalImageUrl;
-        if (!raw) return null;
-        const thumb = await makeThumb(raw);
-        await writeThumb(id, thumb, sig);
-        return thumb;
-    } catch {
-        return null;
+        return await task;
     } finally {
-        release();
+        inflight.delete(id);
     }
 }

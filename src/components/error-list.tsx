@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Filter, ChevronDown, Printer, ListChecks, Trash2, X } from "lucide-react";
+import { Search, Filter, ChevronDown, Printer, ListChecks, Trash2, X, ImageIcon, Type } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { toast } from "@/lib/toast";
 import { useRouter } from "next/navigation";
@@ -23,6 +23,7 @@ import { apiClient } from "@/lib/api-client";
 import { Pagination } from "@/components/ui/pagination";
 import { DEFAULT_PAGE_SIZE } from "@/lib/constants/pagination";
 import { QuestionCard } from "@/components/question-card";
+import { peekThumb } from "@/lib/image-cache";
 import {
     consumeReturnFocus,
     invalidateListSnapshots,
@@ -40,6 +41,9 @@ import {
 
 /** SSR 阶段没有 layoutEffect，退回 useEffect（静态导出预渲染不会报 warning） */
 const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
+
+/** 整页视图（文字 / 截图）在会话内记住，返回列表时不至于悄悄退回文字态 */
+const VIEW_MODE_KEY = "wq:list-view-mode";
 
 interface ErrorListProps {
     subjectId?: string;
@@ -76,6 +80,19 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
     const [isDeleting, setIsDeleting] = useState(false);
     // 从详情页返回时，刚点开的那道题要高亮一下，否则用户还得自己再找
     const [focusId, setFocusId] = useState<string | null>(null);
+    /**
+     * 整页视图：文字 / 截图。
+     * 单张卡片自己也能翻，但一页十几张逐张点太累，顶部给一个总开关。
+     */
+    const [viewMode, setViewMode] = useState<"text" | "image">("text");
+    /** 每次点总开关加 1，卡片据此清掉各自翻过的状态，重新统一 */
+    const [flipEpoch, setFlipEpoch] = useState(0);
+    /**
+     * 整页截图态的图片正在批量取。
+     * 这期间卡片不要各自去拉图，否则一页 18 次请求白跑一遍。
+     */
+    const [photosPending, setPhotosPending] = useState(false);
+    const photosLoadedRef = useRef(false);
     const { t } = useLanguage();
     const router = useRouter();
     // 请求并发控制：筛选条件快速变化时只保留最后一次结果
@@ -121,6 +138,20 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
      */
     const restoredRef = useRef(false);
     const stateAppliedRef = useRef(false);
+
+    // 先还原整页视图模式，再渲染列表，避免「闪一下文字态再翻成截图」
+    useIsoLayoutEffect(() => {
+        try {
+            if (sessionStorage.getItem(VIEW_MODE_KEY) === "image") {
+                setViewMode("image");
+                // 先挡住单卡各自拉图，等这一页的图一次性回来
+                setPhotosPending(true);
+            }
+        } catch {
+            /* 无痕模式禁用 storage 时按文字态 */
+        }
+    }, []);
+
     useIsoLayoutEffect(() => {
         if (restoredRef.current) return;
 
@@ -251,6 +282,33 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
         setSelectedTag(selectedTag === tag ? null : tag);
     };
 
+    /**
+     * 把这一页的原图一次性取回来（includeImage）。
+     * 必须在**点击的同一个事件里**先把 photosPending 置 true：
+     * 否则卡片会抢在前面各自发一次详情请求，18 次往返白跑。
+     */
+    const startPagePhotos = () => {
+        photosLoadedRef.current = true;
+        // 这一页的图全都在本地内存里（刚看过又退回来）：不用再请求一次
+        if (items.length > 0 && items.every((it) => peekThumb(it.id))) return;
+        setPhotosPending(true);
+        void fetchItems({ background: true, withPhotos: true }).finally(() => setPhotosPending(false));
+    };
+
+    /** 整页翻转：所有卡片一起切到截图态 / 文字态 */
+    const toggleViewMode = () => {
+        const next: "text" | "image" = viewMode === "text" ? "image" : "text";
+        if (next === "image" && !photosLoadedRef.current) startPagePhotos();
+        setViewMode(next);
+        // 让每张卡丢掉自己的临时翻面状态，整页严格对齐
+        setFlipEpoch((e) => e + 1);
+        try {
+            sessionStorage.setItem(VIEW_MODE_KEY, next);
+        } catch {
+            /* 忽略 */
+        }
+    };
+
     const handleFilterChange = ({ gradeSemester, chapter, tag }: KnowledgeFilterChange) => {
         if (gradeSemester !== undefined) setGradeFilter(gradeSemester);
         if (chapter !== undefined) setChapterFilter(chapter);
@@ -364,7 +422,7 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [page, search, masteryFilter, timeFilter, selectedTag, subjectId, gradeFilter, chapterFilter]);
 
-    const fetchItems = async (opts: { background?: boolean } = {}) => {
+    const fetchItems = async (opts: { background?: boolean; withPhotos?: boolean } = {}) => {
         const seq = ++requestSeqRef.current;
         // 取消上一次仍在进行的请求
         abortRef.current?.abort();
@@ -395,6 +453,8 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
             // 分页参数
             params.append("page", page.toString());
             params.append("pageSize", pageSize.toString());
+            // 整页截图态要这一页的原图：一次列表请求全带回来，比逐张拉详情快得多
+            if (opts.withPhotos) params.append("includeImage", "true");
 
             const response = await apiClient.get<PaginatedResponse<ErrorItem>>(
                 `/api/error-items/list?${params.toString()}`,
@@ -405,8 +465,12 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
             setItems(response.items);
             setTotal(response.total);
             setTotalPages(response.totalPages);
+            // 图片不进快照：sessionStorage 只有 5MB，十几张 base64 就把它撑爆了
+            const snapshotItems = opts.withPhotos
+                ? response.items.map((it) => ({ ...it, originalImageUrl: undefined }))
+                : response.items;
             writeListSnapshot<ErrorItem>(cacheKeyRef.current, {
-                items: response.items,
+                items: snapshotItems,
                 total: response.total,
                 totalPages: response.totalPages,
                 page,
@@ -425,6 +489,23 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
             }
         }
     };
+
+    /**
+     * 切到截图态：把这一页的原图一次性带回来（includeImage），
+     * 卡片拿到 originalImageUrl 后只做本地缩放，省掉 18 次详情往返。
+     */
+    useEffect(() => {
+        if (viewMode !== "image") return;
+        if (photosLoadedRef.current) return;
+        if (items.length === 0) return;
+        startPagePhotos();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [viewMode, items.length]);
+
+    // 换页 / 换筛选后，这一页的图也得重新取
+    useEffect(() => {
+        photosLoadedRef.current = false;
+    }, [cacheKey]);
 
     // 页码/筛选一变就记下来，供下次挂载还原
     useEffect(() => {
@@ -508,14 +589,35 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
                         </DropdownMenuItem>
                     </DropdownMenuContent>
                 </DropdownMenu>
-                <Button variant="outline" onClick={handleExportPrint}>
-                    <Printer className="mr-2 h-4 w-4" />
-                    {t.notebook?.exportPrint || "导出打印"}
-                </Button>
-                <Button variant={isSelectMode ? "secondary" : "outline"} onClick={toggleSelectMode}>
-                    <ListChecks className="mr-2 h-4 w-4" />
-                    {isSelectMode ? (t.notebook?.cancelSelect || "取消") : (t.notebook?.selectMode || "多选")}
-                </Button>
+                {/* 这三个是「对当前这一页动手」的操作，手机上也排在同一行，别各占一行 */}
+                <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" onClick={handleExportPrint}>
+                        <Printer className="mr-2 h-4 w-4" />
+                        {t.notebook?.exportPrint || "导出打印"}
+                    </Button>
+                    <Button variant={isSelectMode ? "secondary" : "outline"} onClick={toggleSelectMode}>
+                        <ListChecks className="mr-2 h-4 w-4" />
+                        {isSelectMode ? (t.notebook?.cancelSelect || "取消") : (t.notebook?.selectMode || "多选")}
+                    </Button>
+                    <Button
+                        variant={viewMode === "image" ? "secondary" : "outline"}
+                        onClick={toggleViewMode}
+                        title={
+                            viewMode === "image"
+                                ? "把这一页的题目都翻回文字"
+                                : "把这一页的题目都翻成截图"
+                        }
+                    >
+                        {viewMode === "image" ? (
+                            <Type className="mr-2 h-4 w-4" />
+                        ) : (
+                            <ImageIcon className="mr-2 h-4 w-4" />
+                        )}
+                        {viewMode === "image"
+                            ? t.notebook?.flipToText || "看文字"
+                            : t.notebook?.flipToImage || "看截图"}
+                    </Button>
+                </div>
             </div>
 
             {/* Advanced Filters Row */}
@@ -554,6 +656,9 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
                             selected={selectedIds.has(item.id)}
                             highlighted={focusId === item.id}
                             selectedTag={selectedTag}
+                            globalFlipped={viewMode === "image"}
+                            flipEpoch={flipEpoch}
+                            photosPending={photosPending}
                             onToggleSelect={(e) => toggleSelectItem(item.id, e)}
                             onOpen={() => openItem(item.id)}
                             onTagClick={handleTagClick}

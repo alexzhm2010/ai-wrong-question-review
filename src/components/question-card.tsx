@@ -12,7 +12,7 @@
  * 第二次翻同一张卡是本地秒开。
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -32,7 +32,7 @@ import { ErrorItem } from "@/types/api";
 import { apiClient } from "@/lib/api-client";
 import { cleanMarkdown } from "@/lib/markdown-utils";
 import { bandOf, BAND_META, isArchived } from "@/lib/mastery";
-import { ensureThumb } from "@/lib/image-cache";
+import { ensureThumb, peekThumb } from "@/lib/image-cache";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { cn } from "@/lib/utils";
 
@@ -43,6 +43,12 @@ interface QuestionCardProps {
     selected: boolean;
     highlighted: boolean;
     selectedTag: string | null;
+    /** 列表顶部的统一视图：true = 全部卡片显示截图 */
+    globalFlipped?: boolean;
+    /** 点一次顶部「翻转」按钮加 1，用来清掉单独翻过的卡片，让整页重新统一 */
+    flipEpoch?: number;
+    /** 整页模式的图片正在批量下发：这期间先别各自请求，等列表把图带回来 */
+    photosPending?: boolean;
     onToggleSelect: (e: React.MouseEvent) => void;
     onOpen: () => void;
     onTagClick: (tag: string) => void;
@@ -106,29 +112,94 @@ export function QuestionCard({
     selected,
     highlighted,
     selectedTag,
+    globalFlipped = false,
+    flipEpoch = 0,
+    photosPending = false,
     onToggleSelect,
     onOpen,
     onTagClick,
 }: QuestionCardProps) {
     const { t } = useLanguage();
-    const [flipped, setFlipped] = useState(false);
+    /**
+     * 翻面状态分两层：
+     *   override —— 用户单独翻这一张的结果（null 表示「跟随列表统一视图」）；
+     *   globalFlipped —— 顶部「看截图 / 看文字」按钮决定的整页模式。
+     * 点全局按钮时 flipEpoch 变化，把 override 清空，整页重新对齐。
+     */
+    const [override, setOverride] = useState<boolean | null>(null);
+    const flipped = override ?? globalFlipped;
     const [thumb, setThumb] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
     const [failed, setFailed] = useState(false);
     const [zoomed, setZoomed] = useState(false);
     const [tagsOpen, setTagsOpen] = useState(false);
 
+    useEffect(() => {
+        setOverride(null);
+    }, [flipEpoch]);
+
+    /**
+     * 整页翻到截图态时，18 张卡同时要图 = 18 次详情请求，
+     * 每张还要解码一张 2000px 的原图，屏幕外的等了也是白等。
+     * 这里只让快要进入视口（提前 500px）的卡片去拉图。
+     */
+    const rootRef = useRef<HTMLDivElement>(null);
+    const [nearView, setNearView] = useState(false);
+    useEffect(() => {
+        const el = rootRef.current;
+        if (!el) return;
+        if (typeof IntersectionObserver === "undefined") {
+            setNearView(true);
+            return;
+        }
+        const io = new IntersectionObserver(
+            (entries) => {
+                if (entries.some((e) => e.isIntersecting)) {
+                    setNearView(true);
+                    io.disconnect();
+                }
+            },
+            { rootMargin: "500px 0px" },
+        );
+        io.observe(el);
+        return () => io.disconnect();
+    }, []);
+
     const tags = itemTags(item);
     const mastery = masteryView(item);
 
-    // 翻到背面才去拉截图。原图换了（长度变了）会重新拉。
+    // 翻到背面才去拿截图。列表若已把原图带回来（整页截图态），就只做本地缩放。
     const sig = 0;
+    const listPhoto = item.originalImageUrl || null;
     useEffect(() => {
-        if (!flipped || thumb || loading) return;
+        if (!flipped || !nearView || thumb) return;
+        /**
+         * 这里刻意**不看 loading**。
+         * loading 是 state，依赖变化导致 effect 重跑时它往往还是 true，
+         * 一旦据此提前 return，旧任务的结果又已被 cleanup 标成作废，
+         * 卡片就会永久停在「正在加载截图」。
+         * 重复调用是安全的：ensureThumb 内部有 inflight 去重 + 内存缓存。
+         */
+        // 本会话算过的图直接拿来用：返回列表、来回翻转不该再等网络
+        const local = peekThumb(item.id);
+        if (local) {
+            setThumb(local);
+            setLoading(false);
+            return;
+        }
+        // 整页模式正在批量取图：等它，别让每张卡自己去拉一次详情
+        if (photosPending && !listPhoto) return;
         let alive = true;
         setLoading(true);
         setFailed(false);
-        ensureThumb(item.id, () => apiClient.get<ErrorItem>(`/api/error-items/${item.id}`), sig)
+        ensureThumb(
+            item.id,
+            () =>
+                listPhoto
+                    ? Promise.resolve({ originalImageUrl: listPhoto })
+                    : apiClient.get<ErrorItem>(`/api/error-items/${item.id}`),
+            sig,
+        )
             .then((url) => {
                 if (!alive) return;
                 if (url) setThumb(url);
@@ -140,7 +211,7 @@ export function QuestionCard({
             alive = false;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [flipped, item.id, sig]);
+    }, [flipped, item.id, sig, nearView, photosPending, listPhoto]);
 
     // 放大层打开时锁滚动，避免背景跟着滑
     useEffect(() => {
@@ -159,7 +230,7 @@ export function QuestionCard({
 
     const flip = (e: React.MouseEvent) => {
         stop(e);
-        setFlipped((v) => !v);
+        setOverride(!flipped);
     };
 
     const openZoom = (e: React.MouseEvent) => {
@@ -170,7 +241,12 @@ export function QuestionCard({
     const shownTags = tagsOpen ? tags : tags.slice(0, 3);
 
     return (
-        <div className="relative" style={{ height: "19.5rem" }}>
+        <div
+            ref={rootRef}
+            className="relative"
+            style={{ height: "19.5rem" }}
+            data-flipped={flipped ? "1" : "0"}
+        >
             {highlighted && (
                 <span className="pointer-events-none absolute -top-2 right-3 z-20 rounded-full bg-primary px-2 py-0.5 text-[10px] font-medium text-primary-foreground shadow-sm">
                     刚看过
@@ -232,12 +308,13 @@ export function QuestionCard({
                                         </span>
                                         <Button
                                             variant="ghost"
-                                            size="icon"
-                                            className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                                            size="sm"
+                                            className="h-7 gap-1 px-2 text-[11px] font-normal text-muted-foreground hover:text-foreground"
                                             title={t.notebook?.showImage || "看题目截图"}
                                             onClick={flip}
                                         >
-                                            <ImageIcon className="h-4 w-4" />
+                                            <ImageIcon className="h-3.5 w-3.5" />
+                                            {t.notebook?.showImage || "看截图"}
                                         </Button>
                                     </div>
                                 </div>
@@ -312,7 +389,7 @@ export function QuestionCard({
                                         />
                                     ) : (
                                         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-muted/40 text-muted-foreground">
-                                            {loading ? (
+                                            {loading || !nearView || (photosPending && !thumb) ? (
                                                 <>
                                                     <Loader2 className="h-5 w-5 animate-spin" />
                                                     <span className="text-xs">
@@ -340,6 +417,22 @@ export function QuestionCard({
                                             {t.notebook?.magnify || "放大"}
                                         </span>
                                     )}
+
+                                    {/*
+                                     * 翻回文字：必须是**看得见的按钮**。
+                                     * 之前只放了个 Type 小图标在底部日期旁边，手机上像排版符号，
+                                     * 用户根本找不到，翻过去就回不来了。
+                                     */}
+                                    <Button
+                                        variant="secondary"
+                                        size="sm"
+                                        className="absolute top-2 right-2 h-7 gap-1 px-2 text-[11px] shadow-sm ring-1 ring-black/5"
+                                        title={t.notebook?.showText || "看文字"}
+                                        onClick={flip}
+                                    >
+                                        <Type className="h-3.5 w-3.5" />
+                                        {t.notebook?.showText || "看文字"}
+                                    </Button>
                                 </div>
 
                                 <div className="flex h-1/3 flex-col justify-between overflow-hidden px-3 py-2">
@@ -347,20 +440,9 @@ export function QuestionCard({
                                         <Badge variant="outline" className={cn("text-xs font-medium", mastery.ring)}>
                                             {mastery.label}
                                         </Badge>
-                                        <div className="flex items-center gap-1">
-                                            <span className="text-[11px] text-muted-foreground">
-                                                {format(new Date(item.createdAt), "MM/dd")}
-                                            </span>
-                                            <Button
-                                                variant="ghost"
-                                                size="icon"
-                                                className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                                                title={t.notebook?.showText || "看文字"}
-                                                onClick={flip}
-                                            >
-                                                <Type className="h-4 w-4" />
-                                            </Button>
-                                        </div>
+                                        <span className="text-[11px] text-muted-foreground">
+                                            {format(new Date(item.createdAt), "MM/dd")}
+                                        </span>
                                     </div>
                                     <div className="flex flex-wrap gap-1.5 overflow-hidden">
                                         {tags.slice(0, 4).map((tag) => (
