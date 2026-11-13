@@ -1,4 +1,4 @@
 1:"$Sreact.fragment"
 2:I[39756,["/ai-wrong-question-review/_next/static/chunks/ff1a16fafef87110.js","/ai-wrong-question-review/_next/static/chunks/894700145f5af490.js"],"default"]
 3:I[37457,["/ai-wrong-question-review/_next/static/chunks/ff1a16fafef87110.js","/ai-wrong-question-review/_next/static/chunks/894700145f5af490.js"],"default"]
-0:{"buildId":"WZP9O6QOV6SJ4G_FnDzG-","rsc":["$","$1","c",{"children":[null,["$","$L2",null,{"parallelRouterKey":"children","template":["$","$L3",null,{}]}]]}],"loading":null,"isPartial":false}
+0:{"buildId":"gIo-rHh6h259ht3uE0bi8","rsc":["$","$1","c",{"children":[null,["$","$L2",null,{"parallelRouterKey":"children","template":["$","$L3",null,{}]}]]}],"loading":null,"isPartial":false}
