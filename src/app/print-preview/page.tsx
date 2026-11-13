@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { ArrowUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { BackButton } from "@/components/ui/back-button";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
@@ -46,6 +47,83 @@ function PrintPreviewContent() {
     const [printCrops, setPrintCrops] = useState<Record<string, string>>({});
     const [preparing, setPreparing] = useState(false);
     const imageLoadStarted = useRef(false);
+
+    /**
+     * 三段接力滚动。
+     *
+     * 手机上一屏 700px 装不下「选题 + 设置 + 预览」三块，之前的做法是把整坨
+     * 控制区 sticky 在顶部（实测 614px，占视口 88%），再给选题墙加
+     * overscroll-contain —— 结果是选题墙滚到底就卡死，预览区永远只在底下
+     * 86px 的缝里露头。现在拆成三段：
+     *   1. 顶栏 sticky top:0，只放标题和操作；
+     *   2. 选题墙自己滚，滚到底的余量顺着滚动链交给页面；
+     *   3. 设置区 sticky 在顶栏下方，预览区在它下面继续滚。
+     * 反向滚回时顺序天然反过来，不需要额外代码。
+     */
+    const topbarRef = useRef<HTMLDivElement>(null);
+    const wallRef = useRef<HTMLDivElement>(null);
+    /** 顶栏真实高度：设置区要吸在它下面，写死数字在标题换行时会错位 */
+    const [topH, setTopH] = useState(104);
+    const [wallProg, setWallProg] = useState({ top: 0, h: 100 });
+    const [backToTop, setBackToTop] = useState(false);
+
+    useEffect(() => {
+        // 加载态会提前 return，顶栏那时还没挂上，得等它渲染出来再量
+        if (loading) return;
+        const el = topbarRef.current;
+        if (!el) return;
+        const sync = () => setTopH(el.offsetHeight);
+        sync();
+        const ro = new ResizeObserver(sync);
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [loading]);
+
+    const onWallScroll = useCallback(() => {
+        const el = wallRef.current;
+        if (!el) return;
+        const max = el.scrollHeight - el.clientHeight;
+        if (max <= 4) {
+            setWallProg({ top: 0, h: 100 });
+            return;
+        }
+        const h = Math.max(14, (el.clientHeight / el.scrollHeight) * 100);
+        setWallProg({ top: (el.scrollTop / max) * (100 - h), h });
+    }, []);
+
+    useEffect(() => {
+        onWallScroll();
+        const onScroll = () => setBackToTop(window.scrollY > 240);
+        window.addEventListener("scroll", onScroll, { passive: true });
+        onScroll();
+        return () => window.removeEventListener("scroll", onScroll);
+    }, [onWallScroll]);
+
+    /** 换筛选或补进新题后内容高度会变，进度条要跟着重算 */
+    useEffect(() => {
+        const id = requestAnimationFrame(onWallScroll);
+        return () => cancelAnimationFrame(id);
+    }, [onWallScroll, filter, items.length]);
+
+    /**
+     * 反向的最后一棒。
+     *
+     * 正向（墙滚到底 → 页面）浏览器原生就会接力；反向不会——页面滚到顶之后，
+     * 滚轮事件落在设置条或预览区上，浏览器不知道该转给上面的选题墙，桌面端
+     * 会觉得「滚不动了」。这里把页面已经在顶部时的上滚余量手动转过去。
+     * 鼠标停在墙内时不介入，否则会和墙自己的滚动打架。
+     */
+    useEffect(() => {
+        const onWheel = (e: WheelEvent) => {
+            if (e.deltaY >= 0 || window.scrollY > 0) return;
+            const el = wallRef.current;
+            if (!el || el.contains(e.target as Node) || el.scrollTop <= 0) return;
+            el.scrollTop += e.deltaY;
+            e.preventDefault();
+        };
+        window.addEventListener("wheel", onWheel, { passive: false });
+        return () => window.removeEventListener("wheel", onWheel);
+    }, []);
 
     useEffect(() => {
         try {
@@ -287,39 +365,34 @@ function PrintPreviewContent() {
 
     return (
         <>
-            {/* 控制区：打印时整体隐藏 */}
-            <div className="print:hidden sticky top-0 z-20 bg-background/95 backdrop-blur border-b">
-                <div className="max-w-6xl mx-auto px-3 sm:px-4 pt-3 pb-2 space-y-2">
-                    <div className="flex items-center gap-3">
+            {/* 顶栏：常驻吸附，只留标题与操作，保证「打印 / PDF」随时能点 */}
+            <div
+                ref={topbarRef}
+                className="print:hidden sticky top-0 z-20 border-b bg-background/95 backdrop-blur"
+            >
+                <div className="max-w-6xl mx-auto px-3 sm:px-4 pt-2 pb-1.5 space-y-1.5">
+                    <div className="flex items-center gap-2.5">
                         <BackButton fallbackUrl="/notebooks" />
                         <div className="flex-1 min-w-0">
-                            <div className="text-base sm:text-lg font-bold leading-tight">选择要打印的错题</div>
-                            <div className="text-[11px] text-muted-foreground">
-                                共 {visibleItems.length} 道 · 已选 {selectedItems.length} 道
+                            {/*
+                             * 窄屏下这里原本是三行（标题换行 + 统计换三行），顶栏被撑到 163px，
+                             * 吸附后吃掉四分之一屏。改成各自单行、超出省略：信息还在，高度砍半。
+                             */}
+                            <div className="truncate text-[15px] font-bold leading-tight sm:text-lg">选择要打印的错题</div>
+                            <div className="truncate text-[11px] leading-tight text-muted-foreground">
+                                {filter === "all"
+                                    ? `共 ${items.length}`
+                                    : `筛选 ${visibleItems.length}/${items.length}`}
+                                {" · 已选 "}
+                                {selectedItems.length}
                                 {imageProgress.total > 0 && imageProgress.loaded < imageProgress.total
-                                    ? ` · 图片 ${imageProgress.loaded}/${imageProgress.total}`
+                                    ? ` · 图 ${imageProgress.loaded}/${imageProgress.total}`
                                     : ""}
                                 {cropSum.count > 0
-                                    ? ` · 已裁边 ${cropSum.count} 张，省 ${Math.round((cropSum.saved / cropSum.count) * 100)}% 空白`
+                                    ? ` · 已裁 ${cropSum.count}，省 ${Math.round((cropSum.saved / cropSum.count) * 100)}%`
                                     : ""}
                             </div>
                         </div>
-                        <Link
-                            href="/review"
-                            className="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-600 whitespace-nowrap"
-                        >
-                            今日卷
-                        </Link>
-                        <Link
-                            href={
-                                selectedItems.length
-                                    ? `/grade?ids=${selectedItems.map((i) => i.id).join(",")}`
-                                    : "/grade"
-                            }
-                            className="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-600 whitespace-nowrap"
-                        >
-                            批改
-                        </Link>
                         <Button onClick={handlePrint} size="sm" className="whitespace-nowrap" disabled={selectedItems.length === 0 || preparing}>
                             {preparing ? "准备图片…" : "打印 / PDF"}
                         </Button>
@@ -358,135 +431,182 @@ function PrintPreviewContent() {
                             清空
                         </button>
                     </div>
+                </div>
+            </div>
 
-                    {/* 缩略图墙：限高滚动，否则 80 道题会把整页撑开、打印预览被挤没 */}
-                    <div className="max-h-[52vh] overflow-y-auto overscroll-contain rounded-md border bg-white p-1.5">
-                        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4 lg:grid-cols-6">
-                            {visibleItems.map((item, index) => {
-                                const on = selectedIds.has(item.id);
-                                const wc = item.wrongCount || 0;
-                                const cc = item.correctCount || 0;
-                                const practiced = wc + cc > 0;
-                                const tone = wc >= 3 ? "bg-red-100 text-red-700" : wc === 2 ? "bg-orange-100 text-orange-700" : "bg-white/90 text-slate-500";
-                                const brief = (item.questionText || "")
-                                    .replace(/\$[^$]*\$/g, " ")
-                                    .replace(/\\[a-zA-Z]+/g, " ")
-                                    .replace(/[{}$\\^_]/g, " ")
-                                    .replace(/\s+/g, " ")
-                                    .trim();
-                                return (
-                                    <div
-                                        key={item.id}
-                                        className={`relative h-28 sm:h-32 rounded-md overflow-hidden bg-slate-100 cursor-pointer transition ${
-                                            on ? "ring-2 ring-blue-600 ring-offset-1" : "ring-1 ring-slate-200"
-                                        }`}
-                                        onClick={() => setPreviewAt(index)}
-                                    >
-                                        {item.originalImageUrl ? (
-                                            <AutoCropImage
-                                                src={item.originalImageUrl}
-                                                maxWidth={420}
-                                                enabled={autoCropOn}
-                                                onCrop={onCropDone}
-                                                alt=""
-                                                loading="lazy"
-                                                className={`w-full h-full object-contain bg-white transition-opacity ${on ? "opacity-80" : ""}`}
-                                            />
-                                        ) : (
-                                            <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-400 p-1 text-center line-clamp-4">
-                                                {brief.slice(0, 40) || "无图"}
-                                            </div>
-                                        )}
+            {/* 选题区：自己滚。去掉 overscroll-contain 之后，滚到底的余量会顺着滚动链交给页面 */}
+            <div className="print:hidden max-w-6xl mx-auto px-3 sm:px-4 pt-2">
+                <div className="relative">
+                    <div
+                        ref={wallRef}
+                        onScroll={onWallScroll}
+                        className="print-scroll min-h-[168px] max-h-[36vh] overflow-y-auto overscroll-y-auto rounded-md border bg-white p-1.5 sm:max-h-[46vh]"
+                    >
 
-                                        {/* 题干摘要：整页截图缩略后认不出题，靠这行兜住 */}
-                                        {brief && (
-                                            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 via-black/40 to-transparent px-1.5 pt-4 pb-1">
-                                                <p className="text-[10px] leading-tight text-white line-clamp-1">{brief}</p>
-                                            </div>
-                                        )}
-
-                                        <button
-                                            aria-label={on ? "取消选择" : "选择"}
-                                            onClick={(e) => { e.stopPropagation(); toggle(item.id); }}
-                                            className={`absolute right-1 top-1 w-6 h-6 rounded-full flex items-center justify-center shadow-sm transition ${
-                                                on ? "bg-blue-600 border-blue-600" : "bg-white/90 border border-slate-400"
-                                            }`}
-                                        >
-                                            <svg viewBox="0 0 24 24" className={`w-3.5 h-3.5 ${on ? "opacity-100" : "opacity-0"}`}
-                                                fill="none" stroke="#fff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
-                                                <polyline points="20 6 9 17 4 12" />
-                                            </svg>
-                                        </button>
-
-                                        {practiced && (
-                                            <span className={`absolute left-1 top-1 rounded px-1 py-0.5 text-[10px] font-bold leading-none shadow-sm ${tone}`}>
-                                                错{wc}·对{cc}
-                                            </span>
-                                        )}
-                                        {!practiced && (
-                                            <span className="absolute left-1 top-1 rounded bg-white/85 px-1 py-0.5 text-[10px] leading-none text-slate-500 shadow-sm">
-                                                未练
-                                            </span>
-                                        )}
-                                    </div>
-                                );
-                            })}
-                            {visibleItems.length === 0 && (
-                                <div className="col-span-full py-8 text-center text-sm text-muted-foreground">
-                                    这个条件下没有题目
-                                </div>
-                            )}
-                        </div>
-                    </div>
-
-                    {/* 排版选项 */}
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-0.5 text-xs">
-                        <label className="flex items-center gap-1.5 cursor-pointer">
-                            <input type="checkbox" checked={showQuestionText} onChange={(e) => setShowQuestionText(e.target.checked)}
-                                className="rounded border-gray-300 accent-blue-600" />
-                            用文字（默认用原图）
-                        </label>
-                        <label className="flex items-center gap-1.5 cursor-pointer" title="去掉手机状态栏与四周白边，题会印得更大更清楚">
-                            <input type="checkbox" checked={autoCropOn} onChange={(e) => toggleAutoCrop(e.target.checked)}
-                                className="rounded border-gray-300 accent-blue-600" />
-                            自动裁边
-                        </label>
-                        <label className="flex items-center gap-1.5 cursor-pointer">
-                            <input type="checkbox" checked={showAnswers} onChange={(e) => setShowAnswers(e.target.checked)}
-                                className="rounded border-gray-300 accent-blue-600" />
-                            附答案（放卷末）
-                        </label>
-                        <label className="flex items-center gap-1.5 cursor-pointer">
-                            <input type="checkbox" checked={showAnalysis} onChange={(e) => setShowAnalysis(e.target.checked)}
-                                className="rounded border-gray-300 accent-blue-600" />
-                            附解析
-                        </label>
-                        <label className="flex items-center gap-1.5 cursor-pointer">
-                            <input type="checkbox" checked={showTags} onChange={(e) => setShowTags(e.target.checked)}
-                                className="rounded border-gray-300 accent-blue-600" />
-                            知识点
-                        </label>
-                        <span className="flex items-center gap-1.5">
-                            作答区
-                            <select
-                                value={space}
-                                onChange={(e) => setSpace(e.target.value as SpaceKey)}
-                                className="rounded border border-slate-200 bg-white px-1.5 py-0.5"
+                <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4 lg:grid-cols-6">
+                    {visibleItems.map((item, index) => {
+                        const on = selectedIds.has(item.id);
+                        const wc = item.wrongCount || 0;
+                        const cc = item.correctCount || 0;
+                        const practiced = wc + cc > 0;
+                        const tone = wc >= 3 ? "bg-red-100 text-red-700" : wc === 2 ? "bg-orange-100 text-orange-700" : "bg-white/90 text-slate-500";
+                        const brief = (item.questionText || "")
+                            .replace(/\$[^$]*\$/g, " ")
+                            .replace(/\\[a-zA-Z]+/g, " ")
+                            .replace(/[{}$\\^_]/g, " ")
+                            .replace(/\s+/g, " ")
+                            .trim();
+                        return (
+                            <div
+                                key={item.id}
+                                className={`relative h-28 sm:h-32 rounded-md overflow-hidden bg-slate-100 cursor-pointer transition ${
+                                    on ? "ring-2 ring-blue-600 ring-offset-1" : "ring-1 ring-slate-200"
+                                }`}
+                                onClick={() => setPreviewAt(index)}
                             >
-                                <option value="none">不留</option>
-                                <option value="sm">小 4cm</option>
-                                <option value="md">中 6cm</option>
-                                <option value="lg">大 9cm</option>
-                            </select>
-                        </span>
-                        <span className="flex items-center gap-1.5">
-                            图宽
-                            <input type="range" min={30} max={100} value={imageScale}
-                                onChange={(e) => setImageScale(Number(e.target.value))}
-                                className="w-16 accent-blue-600" />
-                            {imageScale}%
-                        </span>
+                                {item.originalImageUrl ? (
+                                    <AutoCropImage
+                                        src={item.originalImageUrl}
+                                        maxWidth={420}
+                                        enabled={autoCropOn}
+                                        onCrop={onCropDone}
+                                        alt=""
+                                        loading="lazy"
+                                        className={`w-full h-full object-contain bg-white transition-opacity ${on ? "opacity-80" : ""}`}
+                                    />
+                                ) : (
+                                    <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-400 p-1 text-center line-clamp-4">
+                                        {brief.slice(0, 40) || "无图"}
+                                    </div>
+                                )}
+
+                                {/* 题干摘要：整页截图缩略后认不出题，靠这行兜住 */}
+                                {brief && (
+                                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 via-black/40 to-transparent px-1.5 pt-4 pb-1">
+                                        <p className="text-[10px] leading-tight text-white line-clamp-1">{brief}</p>
+                                    </div>
+                                )}
+
+                                <button
+                                    aria-label={on ? "取消选择" : "选择"}
+                                    onClick={(e) => { e.stopPropagation(); toggle(item.id); }}
+                                    className={`absolute right-1 top-1 w-6 h-6 rounded-full flex items-center justify-center shadow-sm transition ${
+                                        on ? "bg-blue-600 border-blue-600" : "bg-white/90 border border-slate-400"
+                                    }`}
+                                >
+                                    <svg viewBox="0 0 24 24" className={`w-3.5 h-3.5 ${on ? "opacity-100" : "opacity-0"}`}
+                                        fill="none" stroke="#fff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+                                        <polyline points="20 6 9 17 4 12" />
+                                    </svg>
+                                </button>
+
+                                {practiced && (
+                                    <span className={`absolute left-1 top-1 rounded px-1 py-0.5 text-[10px] font-bold leading-none shadow-sm ${tone}`}>
+                                        错{wc}·对{cc}
+                                    </span>
+                                )}
+                                {!practiced && (
+                                    <span className="absolute left-1 top-1 rounded bg-white/85 px-1 py-0.5 text-[10px] leading-none text-slate-500 shadow-sm">
+                                        未练
+                                    </span>
+                                )}
+                            </div>
+                        );
+                    })}
+                    {visibleItems.length === 0 && (
+                        <div className="col-span-full py-8 text-center text-xs text-muted-foreground">
+                            这个条件下没有题目
+                            <div className="mt-1 text-[11px] text-slate-400">
+                                筛选只影响这里，下方预览仍是已选的 {selectedItems.length} 道
+                            </div>
+                        </div>
+                    )}
+                </div>
+
                     </div>
+                    {/* 手机上没有常驻滚动条，用右侧细进度条告诉用户「还能往下滚」 */}
+                    {wallProg.h < 99 && (
+                        <div className="pointer-events-none absolute top-1.5 bottom-1.5 right-0.5 w-1 rounded-full bg-slate-200/70 sm:hidden">
+                            <div
+                                className="w-full rounded-full bg-slate-400/80"
+                                style={{ height: `${wallProg.h}%`, marginTop: `${wallProg.top}%` }}
+                            />
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* 设置区：滚到顶就吸在顶栏下方，预览区在它下面继续滚 */}
+            <div
+                className="print:hidden sticky z-10 mt-2 border-y bg-background/95 backdrop-blur"
+                style={{ top: topH }}
+            >
+                <div className="max-w-6xl mx-auto px-3 sm:px-4 py-1.5">
+                {/* 排版选项 */}
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-0.5 text-xs">
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                        <input type="checkbox" checked={showQuestionText} onChange={(e) => setShowQuestionText(e.target.checked)}
+                            className="rounded border-gray-300 accent-blue-600" />
+                        用文字（默认用原图）
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer" title="去掉手机状态栏与四周白边，题会印得更大更清楚">
+                        <input type="checkbox" checked={autoCropOn} onChange={(e) => toggleAutoCrop(e.target.checked)}
+                            className="rounded border-gray-300 accent-blue-600" />
+                        自动裁边
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                        <input type="checkbox" checked={showAnswers} onChange={(e) => setShowAnswers(e.target.checked)}
+                            className="rounded border-gray-300 accent-blue-600" />
+                        附答案（放卷末）
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                        <input type="checkbox" checked={showAnalysis} onChange={(e) => setShowAnalysis(e.target.checked)}
+                            className="rounded border-gray-300 accent-blue-600" />
+                        附解析
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                        <input type="checkbox" checked={showTags} onChange={(e) => setShowTags(e.target.checked)}
+                            className="rounded border-gray-300 accent-blue-600" />
+                        知识点
+                    </label>
+                    <span className="flex items-center gap-1.5">
+                        作答区
+                        <select
+                            value={space}
+                            onChange={(e) => setSpace(e.target.value as SpaceKey)}
+                            className="rounded border border-slate-200 bg-white px-1.5 py-0.5"
+                        >
+                            <option value="none">不留</option>
+                            <option value="sm">小 4cm</option>
+                            <option value="md">中 6cm</option>
+                            <option value="lg">大 9cm</option>
+                        </select>
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                        图宽
+                        <input type="range" min={30} max={100} value={imageScale}
+                            onChange={(e) => setImageScale(Number(e.target.value))}
+                            className="w-16 accent-blue-600" />
+                        {imageScale}%
+                    </span>
+
+                    {/* 从顶栏挪下来：窄屏顶栏一行塞不下五个元素，标题只能被截断 */}
+                    <span className="ml-auto flex items-center gap-3 text-slate-500">
+                        <Link href="/review" className="underline-offset-2 active:underline">
+                            今日卷
+                        </Link>
+                        <Link
+                            href={
+                                selectedItems.length
+                                    ? `/grade?ids=${selectedItems.map((i) => i.id).join(",")}`
+                                    : "/grade"
+                            }
+                            className="underline-offset-2 active:underline"
+                        >
+                            批改
+                        </Link>
+                    </span>
+                </div>
                 </div>
             </div>
 
@@ -575,6 +695,24 @@ function PrintPreviewContent() {
                     </div>
                 )}
             </div>
+
+            {/*
+             * 26 道题打印出来两万多像素，滚到下面看排版之后想改选项得往上拖半天，
+             * 这里给一个回顶部的入口；只在离开顶部后出现。
+             */}
+            {backToTop && (
+                <button
+                    type="button"
+                    onClick={() => {
+                        window.scrollTo({ top: 0, behavior: "smooth" });
+                        wallRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+                    }}
+                    className="print:hidden fixed right-4 bottom-5 z-30 flex items-center gap-1.5 rounded-full bg-slate-900/85 px-3 py-2 text-[11px] text-white shadow-lg backdrop-blur transition active:scale-95"
+                >
+                    <ArrowUp className="h-3.5 w-3.5" />
+                    回到选题
+                </button>
+            )}
 
             {/* 大图：点缩略图进来，可左右翻、可直接选中 */}
             {previewItem && (

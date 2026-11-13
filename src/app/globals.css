@@ -167,6 +167,29 @@
   }
 }
 
+/* 打印预览的选题墙：默认滚动条太细且手机上根本不画，用户看不出「还能往下滚」 */
+.print-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(100 116 139 / 0.75) rgb(226 232 240 / 0.5);
+  -webkit-overflow-scrolling: touch;
+}
+
+.print-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.print-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgb(100 116 139 / 0.7);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.print-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 /* react-image-crop: 放大拖拽手柄，提升手机端裁剪时的可操作性 */
 .ReactCrop__drag-handle {
   width: 20px;

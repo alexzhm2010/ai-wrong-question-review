@@ -294,7 +294,7 @@ export function PwaInstaller() {
         <div
             role="dialog"
             aria-label={title}
-            className="fixed inset-x-3 z-[90] mx-auto max-w-md rounded-xl border bg-background p-4 text-foreground shadow-lg sm:inset-x-auto sm:right-6 sm:w-[380px]"
+            className="fixed inset-x-3 z-[90] mx-auto max-w-md rounded-xl border bg-background p-4 text-foreground shadow-lg print:hidden sm:inset-x-auto sm:right-6 sm:w-[380px]"
             style={{ bottom: `calc(env(safe-area-inset-bottom, 0px) + ${bottomOffset}px)` }}
         >
             <div className="flex items-start gap-3">
