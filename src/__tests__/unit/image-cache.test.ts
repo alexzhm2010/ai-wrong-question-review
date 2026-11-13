@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { ensureThumb, dropThumb } from "@/lib/image-cache";
+import { ensureThumb, dropThumb, ensureFullImage, peekFullImage } from "@/lib/image-cache";
 
 /**
  * 这组测试盯的是「整页翻到截图态」时最要命的两个点：
@@ -83,5 +83,79 @@ describe("缩略图缓存", () => {
         });
 
         await expect(ensureThumb("unit-err-id", fetcher)).resolves.toBeNull();
+    });
+});
+
+/**
+ * 放大层要的是原图。
+ *
+ * 卡片缩略图只有 480px，铺满手机（DPR 3 ≈ 1000+ 物理像素）必糊，
+ * 这组测试保证：放大走的是原图、并发只请求一次、内存只留最近 4 张。
+ */
+describe("高清原图", () => {
+    beforeEach(() => {
+        vi.stubGlobal("Image", FakeImage as unknown as typeof Image);
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    it("返回的是原图，而不是缩略图", async () => {
+        const raw = "data:image/jpeg;base64,FULL-RES";
+        const fetcher = vi.fn(async () => ({ originalImageUrl: raw }));
+
+        await expect(ensureFullImage("full-hd-id", fetcher)).resolves.toBe(raw);
+        expect(peekFullImage("full-hd-id")).toBe(raw);
+    });
+
+    it("并发放大同一道题只请求一次详情", async () => {
+        const fetcher = vi.fn(async () => ({ originalImageUrl: "data:image/jpeg;base64,ONE" }));
+
+        const [a, b] = await Promise.all([
+            ensureFullImage("full-same-id", fetcher),
+            ensureFullImage("full-same-id", fetcher),
+        ]);
+
+        expect(fetcher).toHaveBeenCalledTimes(1);
+        expect(a).toBe(b);
+    });
+
+    it("第二次放大走内存，不再请求", async () => {
+        const fetcher = vi.fn(async () => ({ originalImageUrl: "data:image/jpeg;base64,MEM" }));
+
+        await ensureFullImage("full-mem-id", fetcher);
+        await ensureFullImage("full-mem-id", fetcher);
+
+        expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
+    it("内存只保留最近 4 张，最早的一张被淘汰", async () => {
+        const fetcher = (n: number) => vi.fn(async () => ({ originalImageUrl: `data:image/jpeg;base64,L${n}` }));
+
+        for (let i = 0; i < 5; i++) {
+            await ensureFullImage(`full-lru-${i}`, fetcher(i));
+        }
+
+        expect(peekFullImage("full-lru-0")).toBeNull();
+        expect(peekFullImage("full-lru-4")).toBe("data:image/jpeg;base64,L4");
+    });
+
+    it("没有原图时返回 null，下次仍可重试", async () => {
+        const fetcher = vi.fn(async () => ({ originalImageUrl: "" }));
+
+        expect(await ensureFullImage("full-none-id", fetcher)).toBeNull();
+        expect(await ensureFullImage("full-none-id", fetcher)).toBeNull();
+        expect(fetcher).toHaveBeenCalledTimes(2);
+        expect(peekFullImage("full-none-id")).toBeNull();
+    });
+
+    it("dropThumb 同时清掉高清缓存（换图后不能再看旧图）", async () => {
+        const raw = "data:image/jpeg;base64,OLD";
+        await ensureFullImage("full-drop-id", async () => ({ originalImageUrl: raw }));
+        expect(peekFullImage("full-drop-id")).toBe(raw);
+
+        await dropThumb("full-drop-id");
+        expect(peekFullImage("full-drop-id")).toBeNull();
     });
 });

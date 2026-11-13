@@ -85,6 +85,7 @@ export async function readThumb(id: string, sig?: number): Promise<string | null
 export async function dropThumb(id: string): Promise<void> {
     memFallback.delete(id);
     memThumbs.delete(id);
+    fullMem.delete(id);
     const db = await openDb();
     if (!db) return;
     try {
@@ -268,5 +269,71 @@ export async function ensureThumb(
         return await task;
     } finally {
         inflight.delete(id);
+    }
+}
+
+/**
+ * 高清原图（放大查看用）。
+ *
+ * 卡片里的缩略图只有 480px 宽，铺满手机屏幕时要铺到 1000+ 物理像素，
+ * 放大后必然发虚 —— 用户看到的"放大不清晰"就是这么来的。
+ * 放大层必须换回原始图片（拍照压到 1920px、质量 0.88，够清楚）。
+ *
+ * 原图是 base64 大字符串（几百 KB），不可能全库驻内存，
+ * 这里只保留最近放大的 4 张（LRU），且**不写 IndexedDB**：
+ * 缓存是为了少走一次网络，不是为了跨会话持久化。
+ */
+const FULL_MEM_MAX = 4;
+const fullMem = new Map<string, string>();
+const fullInflight = new Map<string, Promise<string | null>>();
+
+/** 同步窥一眼内存里已取过的高清图（放大层先渲染，避免二次请求闪白） */
+export function peekFullImage(id: string): string | null {
+    const hit = fullMem.get(id);
+    if (!hit) return null;
+    // 重新插到队尾，保持"最近用过"的顺序
+    fullMem.delete(id);
+    fullMem.set(id, hit);
+    return hit;
+}
+
+function rememberFull(id: string, url: string): void {
+    fullMem.delete(id);
+    fullMem.set(id, url);
+    while (fullMem.size > FULL_MEM_MAX) {
+        const oldest = fullMem.keys().next().value;
+        if (oldest === undefined) break;
+        fullMem.delete(oldest);
+    }
+}
+
+/** 取一张卡的高清原图；没有原图返回 null。并发调用会合并成一次请求。 */
+export async function ensureFullImage(
+    id: string,
+    fetcher: () => Promise<{ originalImageUrl?: string } | null>,
+): Promise<string | null> {
+    const hit = peekFullImage(id);
+    if (hit) return hit;
+
+    const running = fullInflight.get(id);
+    if (running) return running;
+
+    const task = (async (): Promise<string | null> => {
+        try {
+            const detail = await fetcher();
+            const raw = detail?.originalImageUrl || "";
+            if (!raw) return null;
+            rememberFull(id, raw);
+            return raw;
+        } catch {
+            return null;
+        }
+    })();
+
+    fullInflight.set(id, task);
+    try {
+        return await task;
+    } finally {
+        fullInflight.delete(id);
     }
 }

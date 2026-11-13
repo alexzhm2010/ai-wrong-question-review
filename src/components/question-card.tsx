@@ -27,12 +27,15 @@ import {
     Maximize2,
     AlertTriangle,
     Type,
+    X,
+    ZoomIn,
+    ZoomOut,
 } from "lucide-react";
 import { ErrorItem } from "@/types/api";
 import { apiClient } from "@/lib/api-client";
 import { cleanMarkdown } from "@/lib/markdown-utils";
 import { bandOf, BAND_META, isArchived } from "@/lib/mastery";
-import { ensureThumb, peekThumb } from "@/lib/image-cache";
+import { ensureThumb, ensureFullImage, peekFullImage, peekThumb } from "@/lib/image-cache";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { cn } from "@/lib/utils";
 
@@ -132,6 +135,13 @@ export function QuestionCard({
     const [loading, setLoading] = useState(false);
     const [failed, setFailed] = useState(false);
     const [zoomed, setZoomed] = useState(false);
+    /** 放大层要的是原图：卡片缩略图只有 480px，铺到手机全宽会糊 */
+    const [fullSrc, setFullSrc] = useState<string | null>(null);
+    const [fullLoaded, setFullLoaded] = useState(false);
+    /** 放大层两档：适应屏幕（按 80vw） / 细节（3 倍宽，可滑动） */
+    const [detail, setDetail] = useState(false);
+    /** 原图真实像素宽：细节档最多放大到 1:1，再拉大只会更糊 */
+    const [naturalW, setNaturalW] = useState(0);
     const [tagsOpen, setTagsOpen] = useState(false);
 
     useEffect(() => {
@@ -213,6 +223,41 @@ export function QuestionCard({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [flipped, item.id, sig, nearView, photosPending, listPhoto]);
 
+    /**
+     * 放大时才去拿原图。
+     *
+     * 之前放大层直接复用卡片缩略图（480px），在 DPR 3 的手机上等于把
+     * 一张 480px 的图铺到 ~1000px 的宽度，字边全是毛刺 —— 这就是"放大后不清晰"。
+     * 现在：先用缩略图顶上（秒出、不闪白），原图到了再淡入替换。
+     */
+    useEffect(() => {
+        if (!zoomed) {
+            setFullLoaded(false);
+            return;
+        }
+        const cached = peekFullImage(item.id);
+        if (cached) {
+            setFullSrc(cached);
+            return;
+        }
+        // 整页截图态下列表已把原图带回来，不必再请求详情
+        if (listPhoto) {
+            setFullSrc(listPhoto);
+            return;
+        }
+        let alive = true;
+        ensureFullImage(item.id, () => apiClient.get<ErrorItem>(`/api/error-items/${item.id}`))
+            .then((url) => {
+                if (alive && url) setFullSrc(url);
+            })
+            .catch(() => {
+                /* 拿不到就继续用缩略图，不打断查看 */
+            });
+        return () => {
+            alive = false;
+        };
+    }, [zoomed, item.id, listPhoto]);
+
     // 放大层打开时锁滚动，避免背景跟着滑
     useEffect(() => {
         if (!zoomed) return;
@@ -221,6 +266,19 @@ export function QuestionCard({
         return () => {
             document.body.style.overflow = prev;
         };
+    }, [zoomed]);
+
+    // 放大层支持 Esc 关闭（桌面端习惯）
+    useEffect(() => {
+        if (!zoomed) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === "Escape") {
+                setZoomed(false);
+                setDetail(false);
+            }
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
     }, [zoomed]);
 
     const stop = (e: React.MouseEvent) => {
@@ -233,9 +291,17 @@ export function QuestionCard({
         setOverride(!flipped);
     };
 
+    const closeZoom = () => {
+        setZoomed(false);
+        setDetail(false);
+    };
+
     const openZoom = (e: React.MouseEvent) => {
         stop(e);
-        if (thumb) setZoomed(true);
+        if (!thumb) return;
+        // 已经取过高清图：直接显示，不再闪一下模糊底图
+        if (fullSrc) setFullLoaded(true);
+        setZoomed(true);
     };
 
     const shownTags = tagsOpen ? tags : tags.slice(0, 3);
@@ -464,19 +530,102 @@ export function QuestionCard({
                 </div>
             </Link>
 
-            {/* 放大看原图：卡片里的截图只有 480px，细节还得靠这层 */}
+            {/*
+             * 放大看原图。
+             *
+             * 这里踩过两个坑，都是实测出来的：
+             *   1. 之前直接放大卡片里的缩略图（480px），铺到手机屏上等于 1.5 倍拉伸，
+             *      字边全是毛刺 —— 所谓"放大后不清晰"其实是源图不够，所以这里必须用原图；
+             *   2. 这个库的 15 张题图里 14 张是宽高比 3～9 的**长条**（一道题一行），
+             *      固定按屏宽 80% 显示只有 40～90px 高，字只有 6px，照样看不清。
+             *      所以给两档：适应屏幕（80vw，看整题轮廓）/ 细节（3 倍宽，可拖动），
+             *      点底部按钮切换，默认按用户要求停在 80vw。
+             */}
             {zoomed && thumb && (
                 <div
-                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-3"
+                    className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/95"
                     onClick={(e) => {
                         stop(e);
-                        setZoomed(false);
+                        closeZoom();
                     }}
                 >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={thumb} alt="题目截图" className="max-h-full max-w-full object-contain" />
-                    <span className="absolute top-4 right-4 rounded-full bg-white/15 px-3 py-1 text-xs text-white">
-                        点击任意处关闭
+                    <div
+                        className={cn(
+                            "flex max-h-[76vh] w-[92vw] overflow-auto overscroll-contain rounded-lg",
+                            detail ? "items-start justify-start" : "items-center justify-center",
+                        )}
+                        onClick={stop}
+                    >
+                        <div className="relative w-max shrink-0">
+                            {/* 缩略图垫底：原图还没解码完时先顶上，不白屏 */}
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                                src={thumb}
+                                alt=""
+                                aria-hidden
+                                style={detail && naturalW ? { width: `min(300vw, ${naturalW}px)` } : undefined}
+                                className={cn(
+                                    "rounded-lg object-contain transition-opacity duration-200",
+                                    detail ? (naturalW ? "max-w-none" : "w-[300vw] max-w-none") : "w-[80vw]",
+                                    fullLoaded ? "opacity-0" : "opacity-100 blur-[2px]",
+                                )}
+                            />
+                            {fullSrc && (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                    src={fullSrc}
+                                    alt={t.notebook?.showImage || "题目截图"}
+                                    onLoad={(e) => {
+                                        const el = e.currentTarget;
+                                        if (el.naturalWidth) setNaturalW(el.naturalWidth);
+                                        setFullLoaded(true);
+                                    }}
+                                    className={cn(
+                                        "absolute inset-0 h-full w-full rounded-lg object-contain transition-opacity duration-200",
+                                        fullLoaded ? "opacity-100" : "opacity-0",
+                                    )}
+                                />
+                            )}
+                        </div>
+                    </div>
+
+                    <button
+                        type="button"
+                        className="absolute right-3 bottom-16 flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 text-[12px] text-white backdrop-blur transition-colors hover:bg-white/25"
+                        onClick={(e) => {
+                            stop(e);
+                            setDetail((v) => !v);
+                        }}
+                    >
+                        {detail ? <ZoomOut className="h-3.5 w-3.5" /> : <ZoomIn className="h-3.5 w-3.5" />}
+                        {detail
+                            ? t.notebook?.fitScreen || "适应屏幕"
+                            : t.notebook?.zoomDetail || "放大细节"}
+                    </button>
+
+                    <button
+                        type="button"
+                        aria-label="关闭"
+                        className="absolute top-3 right-3 flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-white backdrop-blur transition-colors hover:bg-white/25"
+                        onClick={(e) => {
+                            stop(e);
+                            closeZoom();
+                        }}
+                    >
+                        <X className="h-5 w-5" />
+                    </button>
+
+                    <span className="pointer-events-none absolute bottom-5 flex items-center gap-1.5 text-[11px] text-white/60">
+                        {!fullLoaded ? (
+                            <>
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                                {t.notebook?.loadingFull || "正在载入高清图…"}
+                            </>
+                        ) : detail ? (
+                            t.notebook?.dragToView || "左右拖动查看，点「适应屏幕」还原"
+                        ) : (
+                            t.notebook?.tapToClose || "点击空白处关闭"
+                        )}
                     </span>
                 </div>
             )}
