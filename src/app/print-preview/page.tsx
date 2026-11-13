@@ -311,7 +311,11 @@ function PrintPreviewContent() {
                             今日卷
                         </Link>
                         <Link
-                            href="/grade"
+                            href={
+                                selectedItems.length
+                                    ? `/grade?ids=${selectedItems.map((i) => i.id).join(",")}`
+                                    : "/grade"
+                            }
                             className="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-600 whitespace-nowrap"
                         >
                             批改

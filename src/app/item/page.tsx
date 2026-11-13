@@ -6,7 +6,7 @@ import { useQueryId } from "@/lib/use-query-id";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, CheckCircle, XCircle, RefreshCw, Trash2, Edit, Save, X, Eye, EyeOff, ImageIcon } from "lucide-react";
+import { ArrowLeft, CheckCircle, XCircle, RefreshCw, Trash2, Edit, Save, X, Eye, EyeOff, ImageIcon, ImagePlus } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import Link from "next/link";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -25,6 +25,7 @@ import { GeogebraDemo } from "@/components/geogebra-demo";
 import { GeogebraEntry } from "@/components/geogebra-entry";
 import { shouldShowGeogebra } from "@/lib/geogebra-subject";
 import { toast } from "@/lib/toast";
+import { ImageReplaceDialog } from "@/components/image-replace-dialog";
 
 interface KnowledgeTag {
     id: string;
@@ -64,6 +65,7 @@ export default function ErrorDetailPage() {
     const [isEditingNotes, setIsEditingNotes] = useState(false);
     const [notesInput, setNotesInput] = useState("");
     const [isImageViewerOpen, setIsImageViewerOpen] = useState(false);
+    const [replacingImage, setReplacingImage] = useState(false);
     const [isEditingTags, setIsEditingTags] = useState(false);
     const [tagsInput, setTagsInput] = useState<string[]>([]);
     const [isEditingMetadata, setIsEditingMetadata] = useState(false);
@@ -282,6 +284,15 @@ export default function ErrorDetailPage() {
     const [wrongAnswerInput, setWrongAnswerInput] = useState("");
     const [mistakeAnalysisInput, setMistakeAnalysisInput] = useState("");
     const [mistakeStatusInput, setMistakeStatusInput] = useState("unknown");
+
+    /** 换原图：只写 originalImageUrl，题干/答案/解析一律不动 */
+    const saveOriginalImage = async (dataUrl: string) => {
+        if (!item) return;
+        await apiClient.put(`/api/error-items/${item.id}`, { originalImageUrl: dataUrl });
+        setItem({ ...item, originalImageUrl: dataUrl });
+        setShowQuestionImage(true);
+        toast.success("原图已替换");
+    };
 
     // --- Question Handlers ---
     const startEditingQuestion = () => {
@@ -558,14 +569,28 @@ export default function ErrorDetailPage() {
                             )}
                         </div>
 
-                        {item.originalImageUrl && (
-                            <div className="pt-3">
-                                <Button variant="outline" size="sm" onClick={() => setShowQuestionImage(!showQuestionImage)} className="flex items-center gap-2">
-                                    {showQuestionImage ? <><EyeOff className="h-4 w-4" />隐藏原题图片</> : <><ImageIcon className="h-4 w-4" />查看原题图片</>}
+                        <div className="pt-3 border-t space-y-2">
+                            <div className="flex justify-between items-center">
+                                <h4 className="text-sm font-semibold">题目原图</h4>
+                                <Button variant="ghost" size="sm" onClick={() => setReplacingImage(true)}>
+                                    <ImagePlus className="h-4 w-4 mr-1" />
+                                    {item.originalImageUrl ? "更换图片" : "上传图片"}
                                 </Button>
-                                {showQuestionImage && <div className="mt-4"><img src={item.originalImageUrl} alt={t.detail.originalProblem || "Original Problem"} className="w-full rounded-lg border cursor-pointer hover:opacity-90 transition-opacity" onClick={() => setIsImageViewerOpen(true)} /><p className="text-xs text-muted-foreground mt-1 text-center">{t.detail?.clickToEnlarge || "Click to enlarge"}</p></div>}
                             </div>
-                        )}
+                            {item.originalImageUrl ? (
+                                <>
+                                    <Button variant="outline" size="sm" onClick={() => setShowQuestionImage(!showQuestionImage)} className="flex items-center gap-2">
+                                        {showQuestionImage ? <><EyeOff className="h-4 w-4" />隐藏原题图片</> : <><ImageIcon className="h-4 w-4" />查看原题图片</>}
+                                    </Button>
+                                    {showQuestionImage && <div className="mt-4"><img src={item.originalImageUrl} alt={t.detail.originalProblem || "Original Problem"} className="w-full rounded-lg border cursor-pointer hover:opacity-90 transition-opacity" onClick={() => setIsImageViewerOpen(true)} /><p className="text-xs text-muted-foreground mt-1 text-center">{t.detail?.clickToEnlarge || "Click to enlarge"}</p></div>}
+                                    <p className="text-[11px] text-muted-foreground">
+                                        拍模糊了可以直接重拍替换，题干和解析不受影响
+                                    </p>
+                                </>
+                            ) : (
+                                <p className="text-xs text-muted-foreground italic">这道题还没有原图，可以上传一张</p>
+                            )}
+                        </div>
                     </CardContent>
                 </Card>
 
@@ -656,6 +681,14 @@ export default function ErrorDetailPage() {
                     </div>
                 )
             }
+
+            <ImageReplaceDialog
+                open={replacingImage}
+                current={item?.originalImageUrl}
+                title="更换题目原图"
+                onClose={() => setReplacingImage(false)}
+                onSave={saveOriginalImage}
+            />
         </main >
     );
 }

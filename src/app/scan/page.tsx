@@ -1,13 +1,16 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { BackButton } from "@/components/ui/back-button";
 import { apiClient } from "@/lib/api-client";
 import { compressImage } from "@/lib/image-utils";
+import { splitForScan } from "@/lib/scan-split";
 import { AttemptResult, ErrorItem } from "@/types/api";
 
 const SCAN_KEY = "wq:scan-results";
+/** 同时发几段。段数固定不超过 4，所以基本是一轮发完，墙钟≈最慢那一段 */
+const CONCURRENCY = 4;
 
 type ScanRow = {
     code: string;
@@ -18,6 +21,18 @@ type ScanRow = {
 };
 
 type Row = ScanRow & { id: string; label: string; localChecked?: boolean };
+
+type ScanPhoto = { id: string; dataUrl: string };
+
+type Strip = {
+    key: string;
+    pageId: string;
+    index: number;
+    dataUrl: string;
+    state: "wait" | "run" | "ok" | "err";
+    ms?: number;
+    found?: number;
+};
 
 const VERDICT_LABEL: Record<AttemptResult, string> = { correct: "对", wrong: "错", skip: "没做" };
 
@@ -34,19 +49,41 @@ function localChoiceVerdict(student: string, standard: string): AttemptResult | 
     return [...std].sort().join("") === [...stu].sort().join("") ? "correct" : "wrong";
 }
 
+/** 同一编号可能出现在两段的重叠区，也可能因为重拍出现两次：留置信度高的那条 */
+function mergeRows(prev: Row[], incoming: Row[]): Row[] {
+    const byCode = new Map<string, Row>();
+    for (const r of [...prev, ...incoming]) {
+        const old = byCode.get(r.code);
+        if (!old || r.confidence > old.confidence) byCode.set(r.code, r);
+    }
+    return [...byCode.values()];
+}
+
 function ScanContent() {
     const searchParams = useSearchParams();
     const router = useRouter();
     const fileRef = useRef<HTMLInputElement>(null);
+    const camRef = useRef<HTMLInputElement>(null);
+
     const [items, setItems] = useState<ErrorItem[]>([]);
-    const [image, setImage] = useState("");
-    const [busy, setBusy] = useState(false);
-    const [status, setStatus] = useState("");
+    const [pages, setPages] = useState<ScanPhoto[]>([]);
+    const [strips, setStrips] = useState<Strip[]>([]);
     const [rows, setRows] = useState<Row[]>([]);
+    const [preparing, setPreparing] = useState(false);
+    const [elapsed, setElapsed] = useState<number | null>(null);
     const [error, setError] = useState("");
+    const [hint, setHint] = useState("");
+
+    // 重拍到第 N 张时，前面几张的结果还在路上，序号用来丢弃过期结果
+    const seqRef = useRef(0);
+    const startedRef = useRef(0);
+    const itemsRef = useRef<ErrorItem[]>([]);
+    itemsRef.current = items;
+
+    const idsParam = searchParams.get("ids") || "";
+    const ids = useMemo(() => idsParam.split(",").filter(Boolean), [idsParam]);
 
     useEffect(() => {
-        const ids = (searchParams.get("ids") || "").split(",").filter(Boolean);
         if (!ids.length) return;
         apiClient
             .get<{ items: ErrorItem[] }>(`/api/error-items/details?ids=${ids.join(",")}`)
@@ -57,64 +94,157 @@ function ScanContent() {
                 setItems(ids.map((id) => byId.get(id)).filter(Boolean) as ErrorItem[]);
             })
             .catch(() => setError("题目加载失败"));
-    }, [searchParams]);
+    }, [ids]);
 
-    const pickFile = async (file?: File | null) => {
-        if (!file) return;
+    const toRow = useCallback((r: ScanRow, index: number): Row => {
+        const list = itemsRef.current;
+        const hit = list.find((i) => String(i.shortCode || "") === r.code);
+        // 选择题本地定论优先于模型判断
+        const local = hit ? localChoiceVerdict(r.studentAnswer, String(hit.answerText || "")) : null;
+        return {
+            ...r,
+            verdict: local ?? r.verdict,
+            localChecked: !!local,
+            id: hit?.id || "",
+            label: hit ? `第 ${list.findIndex((i) => i.id === hit.id) + 1} 题` : `未匹配 ${index + 1}`,
+        };
+    }, []);
+
+    /** 并发跑一批段，边跑边把结果塞进列表 */
+    const runStrips = useCallback(
+        async (list: Strip[], seq: number) => {
+            if (!list.length) return;
+            const queue = [...list];
+            const total = queue.length;
+            let done = 0;
+            const candidates = itemsRef.current
+                .filter((i) => i.shortCode)
+                .map((i) => ({ code: String(i.shortCode), answer: String(i.answerText || "") }));
+
+            const worker = async () => {
+                for (;;) {
+                    const strip = queue.shift();
+                    if (!strip) return;
+                    if (seq !== seqRef.current) return;
+                    const t0 = performance.now();
+                    setStrips((prev) =>
+                        prev.map((x) => (x.key === strip.key ? { ...x, state: "run" } : x)),
+                    );
+                    try {
+                        const res = await apiClient.post<{ results: ScanRow[] }>(
+                            "/api/grade-page",
+                            { imageBase64: strip.dataUrl, candidates },
+                            { timeout: 120000 },
+                        );
+                        if (seq !== seqRef.current) return;
+                        const mapped = (res.results || []).map((r, i) => toRow(r, i));
+                        setRows((prev) => mergeRows(prev, mapped));
+                        setStrips((prev) =>
+                            prev.map((x) =>
+                                x.key === strip.key
+                                    ? { ...x, state: "ok", ms: Math.round(performance.now() - t0), found: mapped.length }
+                                    : x,
+                            ),
+                        );
+                    } catch (e) {
+                        if (seq !== seqRef.current) return;
+                        setStrips((prev) =>
+                            prev.map((x) => (x.key === strip.key ? { ...x, state: "err", ms: Math.round(performance.now() - t0) } : x)),
+                        );
+                        setError(e instanceof Error ? e.message : "识别失败");
+                    } finally {
+                        done++;
+                        if (seq === seqRef.current) {
+                            setHint(`识别中 ${done}/${total} 段…`);
+                        }
+                    }
+                }
+            };
+
+            await Promise.all(Array.from({ length: Math.min(CONCURRENCY, total) }, worker));
+            if (seq !== seqRef.current) return;
+            setElapsed(Date.now() - startedRef.current);
+            setHint("");
+        },
+        [toRow],
+    );
+
+    /** 选到照片后立刻开始：压缩 → 切段 → 并发识别 */
+    const addFiles = async (files: FileList | null) => {
+        if (!files?.length) return;
+        const picked = Array.from(files).slice(0, 4);
         setError("");
-        setBusy(true);
-        setStatus("正在压缩照片…");
+        setPreparing(true);
+        setHint("正在切分试卷…");
         try {
-            const base64 = await compressImage(file, 1.5, 2000, 0.85);
-            setImage(base64);
-            setRows([]);
-            setStatus("");
+            const seq = ++seqRef.current;
+            startedRef.current = startedRef.current || Date.now();
+            const fresh: ScanPhoto[] = [];
+            const freshStrips: Strip[] = [];
+            for (const file of picked) {
+                const dataUrl = await compressImage(file, 2.2, 2000, 0.86);
+                const page = { id: `${Date.now()}-${fresh.length}`, dataUrl };
+                fresh.push(page);
+                const parts = await splitForScan(dataUrl);
+                parts.forEach((p, i) => {
+                    freshStrips.push({
+                        key: `${page.id}-${i}`,
+                        pageId: page.id,
+                        index: i,
+                        dataUrl: p.dataUrl,
+                        state: "wait",
+                    });
+                });
+            }
+            setPages((prev) => [...prev, ...fresh]);
+            setStrips((prev) => [...prev, ...freshStrips]);
+            setHint(`已切成 ${freshStrips.length} 段，并发识别中…`);
+            // 只跑新加的段，之前几页的结果保持不变
+            void runStrips(freshStrips, seq);
         } catch (e) {
             setError(e instanceof Error ? e.message : "图片处理失败");
+            setHint("");
         } finally {
-            setBusy(false);
+            setPreparing(false);
         }
     };
 
-    const recognize = async () => {
-        if (!image) return;
-        setBusy(true);
+    /** 整批重来：丢弃所有结果，重新切分所有页 */
+    const rerunAll = async () => {
+        if (!pages.length) return;
+        const seq = ++seqRef.current;
+        startedRef.current = Date.now();
+        setRows([]);
+        setElapsed(null);
         setError("");
-        setStatus("正在识别题号与作答，大约 10-20 秒…");
+        setStrips([]);
+        setPreparing(true);
+        setHint("重新切分…");
         try {
-            const candidates = items
-                .filter((i) => i.shortCode)
-                .map((i) => ({ code: String(i.shortCode), answer: String(i.answerText || "") }));
-            const res = await apiClient.post<{ results: ScanRow[] }>(
-                "/api/grade-page",
-                { imageBase64: image, candidates },
-                { timeout: 150000 },
-            );
-            const byCode = new Map(items.map((i) => [String(i.shortCode || ""), i]));
-            const mapped: Row[] = (res.results || []).map((r, index) => {
-                const hit = byCode.get(r.code);
-                // 选择题本地定论优先于模型判断
-                const local = hit ? localChoiceVerdict(r.studentAnswer, String(hit.answerText || "")) : null;
-                return {
-                    ...r,
-                    verdict: local ?? r.verdict,
-                    localChecked: !!local,
-                    id: hit?.id || "",
-                    label: hit ? `第 ${items.findIndex((i) => i.id === hit.id) + 1} 题` : `未匹配 ${index + 1}`,
-                };
-            });
-            setRows(mapped);
-            setStatus(
-                mapped.length
-                    ? `识别到 ${mapped.length} 道题，其中 ${mapped.filter((r) => r.matched && r.confidence >= 0.6).length} 道高置信`
-                    : "没有识别到题号，请确认照片里能看到 # 开头的编号",
-            );
-        } catch (e) {
-            setError(e instanceof Error ? e.message : "识别失败");
-            setStatus("");
-        } finally {
-            setBusy(false);
+            const next: Strip[] = [];
+            for (const page of pages) {
+                const parts = await splitForScan(page.dataUrl);
+                parts.forEach((p, i) => {
+                    next.push({ key: `${page.id}-${Date.now()}-${i}`, pageId: page.id, index: i, dataUrl: p.dataUrl, state: "wait" });
+                });
+            }
+            setStrips(next);
+            setPreparing(false);
+            setHint(`已切成 ${next.length} 段，并发识别中…`);
+            await runStrips(next, seq);
+        } catch {
+            setPreparing(false);
+            setError("处理失败，请重新拍照");
         }
+    };
+
+    const removePage = (id: string) => {
+        seqRef.current++;
+        setPages((prev) => prev.filter((p) => p.id !== id));
+        setStrips((prev) => prev.filter((s) => s.pageId !== id));
+        setRows([]);
+        setElapsed(null);
+        setHint("");
     };
 
     const apply = () => {
@@ -131,9 +261,47 @@ function ScanContent() {
         } catch {
             /* 隐私模式下不持久，仍可直接跳转 */
         }
-        const ids = items.map((i) => i.id).join(",");
-        router.push(`/grade?ids=${ids}`);
+        router.push(`/grade?ids=${items.map((i) => i.id).join(",")}`);
     };
+
+    const running = strips.some((s) => s.state === "run" || s.state === "wait");
+    const okStrips = strips.filter((s) => s.state === "ok").length;
+    const errStrips = strips.filter((s) => s.state === "err").length;
+    const highConf = rows.filter((r) => r.matched && r.confidence >= 0.6).length;
+
+    /**
+     * 这批卷子里还没被识别出来的题。多半是作答框空白（模型容易整条跳过），
+     * 也可能是那一页没拍到。不自动判，但给一个一键标记的入口，省得逐题点。
+     */
+    const missing = useMemo(() => {
+        const seen = new Set(rows.map((r) => r.code));
+        return items.filter((i) => i.shortCode && !seen.has(String(i.shortCode)));
+    }, [items, rows]);
+
+    const markMissingAsSkip = () => {
+        const add: Row[] = missing.map((i) => ({
+            code: String(i.shortCode),
+            matched: true,
+            verdict: "skip",
+            studentAnswer: "",
+            confidence: 1,
+            id: i.id,
+            label: `第 ${items.findIndex((x) => x.id === i.id) + 1} 题`,
+        }));
+        setRows((prev) => mergeRows(prev, add));
+    };
+
+    const orderOf = useCallback(
+        (code: string) => {
+            const i = items.findIndex((x) => String(x.shortCode || "") === code);
+            return i < 0 ? 9999 : i;
+        },
+        [items],
+    );
+    const sortedRows = useMemo(
+        () => [...rows].sort((a, b) => orderOf(a.code) - orderOf(b.code)),
+        [rows, orderOf],
+    );
 
     return (
         <div className="min-h-screen bg-slate-50 pb-28">
@@ -142,64 +310,164 @@ function ScanContent() {
                 <div className="flex-1">
                     <div className="font-bold leading-tight">拍照批改</div>
                     <div className="text-[11px] text-muted-foreground">
-                        拍整页试卷，自动读题号与作答
+                        拍整页试卷 · 自动切段并发识别
                     </div>
                 </div>
             </div>
 
             <div className="max-w-3xl mx-auto px-3 py-3 space-y-3">
+                {/* 拍照和选相册分开两个 input：带 capture 的 input 会强制调相机，multiple 会失效 */}
                 <input
-                    ref={fileRef}
+                    ref={camRef}
                     type="file"
                     accept="image/*"
                     capture="environment"
                     className="hidden"
-                    onChange={(e) => pickFile(e.target.files?.[0])}
+                    onChange={(e) => {
+                        void addFiles(e.target.files);
+                        e.currentTarget.value = "";
+                    }}
+                />
+                <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                        void addFiles(e.target.files);
+                        e.currentTarget.value = "";
+                    }}
                 />
 
-                {!image ? (
-                    <button
-                        onClick={() => fileRef.current?.click()}
-                        className="w-full rounded-xl border-2 border-dashed border-slate-300 bg-white py-16 flex flex-col items-center gap-2"
-                    >
+                {pages.length === 0 ? (
+                    <div className="w-full rounded-xl border-2 border-dashed border-slate-300 bg-white py-10 px-4 flex flex-col items-center gap-3">
                         <span className="text-3xl">📷</span>
-                        <span className="text-sm font-semibold text-slate-700">拍照 / 从相册选择</span>
-                        <span className="text-xs text-slate-400 px-8 text-center leading-relaxed">
-                            整页拍进去，尽量拍正、光照均匀；编号和作答框要都能看清
+                        <span className="text-sm font-semibold text-slate-700">拍整页试卷，自动判分</span>
+                        <span className="text-xs text-slate-400 text-center leading-relaxed">
+                            拍正、光照均匀，编号和作答框都要看清。
+                            整页会被切成几段并发识别，比一次读全页快一倍。
                         </span>
-                    </button>
-                ) : (
-                    <>
-                        <div className="rounded-xl overflow-hidden border bg-white">
-                            <img src={image} alt="试卷" className="w-full h-auto max-h-[52vh] object-contain" />
-                        </div>
-                        <div className="flex gap-2">
+                        <div className="flex gap-2 w-full max-w-xs mt-1">
+                            <button
+                                onClick={() => camRef.current?.click()}
+                                className="flex-1 rounded-lg bg-slate-900 text-white py-2.5 text-sm font-semibold"
+                            >
+                                拍照
+                            </button>
                             <button
                                 onClick={() => fileRef.current?.click()}
                                 className="flex-1 rounded-lg border bg-white py-2.5 text-sm"
                             >
+                                相册（可多页）
+                            </button>
+                        </div>
+                    </div>
+                ) : (
+                    <>
+                        <div className="grid grid-cols-2 gap-2">
+                            {pages.map((p) => (
+                                <div key={p.id} className="relative rounded-xl overflow-hidden border bg-white">
+                                    <img src={p.dataUrl} alt="试卷" className="w-full h-40 object-cover object-top" />
+                                    <button
+                                        onClick={() => removePage(p.id)}
+                                        aria-label="移除这页"
+                                        className="absolute top-1 right-1 h-6 w-6 rounded-full bg-black/55 text-white text-xs leading-none"
+                                    >
+                                        ✕
+                                    </button>
+                                </div>
+                            ))}
+                            {pages.length < 4 && (
+                                <button
+                                    onClick={() => fileRef.current?.click()}
+                                    disabled={preparing}
+                                    className="rounded-xl border-2 border-dashed border-slate-300 bg-white h-40 flex flex-col items-center justify-center gap-1 text-slate-500 disabled:opacity-50"
+                                >
+                                    <span className="text-xl">＋</span>
+                                    <span className="text-xs">再加一页</span>
+                                </button>
+                            )}
+                        </div>
+
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => camRef.current?.click()}
+                                disabled={preparing}
+                                className="flex-1 rounded-lg border bg-white py-2.5 text-sm disabled:opacity-50"
+                            >
                                 重拍
                             </button>
                             <button
-                                onClick={recognize}
-                                disabled={busy}
+                                onClick={rerunAll}
+                                disabled={preparing || running}
                                 className="flex-[2] rounded-lg bg-slate-900 text-white py-2.5 text-sm font-semibold disabled:opacity-50"
                             >
-                                {busy ? "识别中…" : "开始识别"}
+                                {preparing ? "处理中…" : running ? "识别中…" : "重新识别"}
                             </button>
                         </div>
+
+                        {/* 分段进度：让用户看到「不是卡住了，是在并行跑」 */}
+                        {strips.length > 0 && (
+                            <div className="flex items-center gap-1.5 flex-wrap px-1">
+                                {strips.map((s) => (
+                                    <span
+                                        key={s.key}
+                                        title={s.state === "ok" ? `识别到 ${s.found ?? 0} 道 · ${s.ms}ms` : undefined}
+                                        className={`h-1.5 rounded-full transition-all ${
+                                            s.state === "ok"
+                                                ? "w-6 bg-green-500"
+                                                : s.state === "err"
+                                                    ? "w-6 bg-red-400"
+                                                    : s.state === "run"
+                                                        ? "w-6 bg-slate-800 animate-pulse"
+                                                        : "w-6 bg-slate-200"
+                                        }`}
+                                    />
+                                ))}
+                                <span className="text-[11px] text-slate-500 ml-1">
+                                    {okStrips}/{strips.length} 段
+                                    {errStrips > 0 ? ` · ${errStrips} 段失败` : ""}
+                                    {elapsed ? ` · 用时 ${(elapsed / 1000).toFixed(1)} 秒` : ""}
+                                </span>
+                            </div>
+                        )}
                     </>
                 )}
 
-                {status && <p className="text-xs text-muted-foreground px-1">{status}</p>}
-                {error && <p className="text-xs text-red-600 px-1">{error}</p>}
+                {(hint || error) && (
+                    <p className={`text-xs px-1 ${error ? "text-red-600" : "text-muted-foreground"}`}>
+                        {error || hint}
+                    </p>
+                )}
 
-                {rows.length > 0 && (
+                {!running && rows.length > 0 && (
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                        识别到 {rows.length} 道题，其中 {highConf} 道高置信；
+                        识别不到的可以手动补，或直接在批改页点。
+                    </div>
+                )}
+
+                {!running && rows.length > 0 && missing.length > 0 && (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 flex items-center gap-2">
+                        <span className="flex-1 leading-relaxed">
+                            还有 {missing.length} 道没识别到：多半是作答框空白，也可能这页没拍到
+                        </span>
+                        <button
+                            onClick={markMissingAsSkip}
+                            className="shrink-0 rounded border border-amber-300 bg-white px-2 py-1 font-semibold"
+                        >
+                            标为没做
+                        </button>
+                    </div>
+                )}
+
+                {sortedRows.length > 0 && (
                     <div className="space-y-2">
                         <div className="text-xs text-muted-foreground px-1">
                             逐条核对，判定错了直接点按钮改，改完应用
                         </div>
-                        {rows.map((r, index) => (
+                        {sortedRows.map((r, index) => (
                             <div key={`${r.code}-${index}`} className="rounded-lg border bg-white p-2.5">
                                 <div className="flex items-center gap-2">
                                     <span className="font-mono text-[10px] text-slate-400">#{r.code}</span>
@@ -227,7 +495,7 @@ function ScanContent() {
                                             key={v}
                                             onClick={() =>
                                                 setRows((prev) =>
-                                                    prev.map((x, i) => (i === index ? { ...x, verdict: v } : x)),
+                                                    prev.map((x) => (x.code === r.code ? { ...x, verdict: v } : x)),
                                                 )
                                             }
                                             className={`flex-1 rounded-md border py-1.5 text-xs font-semibold ${
