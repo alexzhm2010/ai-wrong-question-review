@@ -1,9 +1,9 @@
 1:"$Sreact.fragment"
 2:I[47257,["/ai-wrong-question-review/_next/static/chunks/ff1a16fafef87110.js","/ai-wrong-question-review/_next/static/chunks/894700145f5af490.js"],"ClientPageRoot"]
-3:I[86906,["/ai-wrong-question-review/_next/static/chunks/ea77d13b943eb532.js","/ai-wrong-question-review/_next/static/chunks/91c73e0b0dd3b1e4.js","/ai-wrong-question-review/_next/static/chunks/195c216f52dae3f8.js","/ai-wrong-question-review/_next/static/chunks/ffe78af09362bf3b.js","/ai-wrong-question-review/_next/static/chunks/812df05d8814bce8.js"],"default"]
+3:I[86906,["/ai-wrong-question-review/_next/static/chunks/03416903d2e4d844.js","/ai-wrong-question-review/_next/static/chunks/91c73e0b0dd3b1e4.js","/ai-wrong-question-review/_next/static/chunks/195c216f52dae3f8.js","/ai-wrong-question-review/_next/static/chunks/f52faf0483e25743.js","/ai-wrong-question-review/_next/static/chunks/a61ca933c0b7312d.js"],"default"]
 6:I[97367,["/ai-wrong-question-review/_next/static/chunks/ff1a16fafef87110.js","/ai-wrong-question-review/_next/static/chunks/894700145f5af490.js"],"OutletBoundary"]
 7:"$Sreact.suspense"
-0:{"buildId":"ZEhKxg_NHZ6sI-yy-qXUK","rsc":["$","$1","c",{"children":[["$","$L2",null,{"Component":"$3","serverProvidedParams":{"searchParams":{},"params":{},"promises":["$@4","$@5"]}}],[["$","script","script-0",{"src":"/ai-wrong-question-review/_next/static/chunks/812df05d8814bce8.js","async":true}]],["$","$L6",null,{"children":["$","$7",null,{"name":"Next.MetadataOutlet","children":"$@8"}]}]]}],"loading":null,"isPartial":false}
+0:{"buildId":"cJISja_nGygw2IKeJu_vS","rsc":["$","$1","c",{"children":[["$","$L2",null,{"Component":"$3","serverProvidedParams":{"searchParams":{},"params":{},"promises":["$@4","$@5"]}}],[["$","script","script-0",{"src":"/ai-wrong-question-review/_next/static/chunks/a61ca933c0b7312d.js","async":true}]],["$","$L6",null,{"children":["$","$7",null,{"name":"Next.MetadataOutlet","children":"$@8"}]}]]}],"loading":null,"isPartial":false}
 4:{}
 5:{}
 8:null
