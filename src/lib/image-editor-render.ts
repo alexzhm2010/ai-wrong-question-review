@@ -26,7 +26,10 @@ export function loadImage(src: string): Promise<HTMLImageElement> {
     return new Promise((resolve, reject) => {
         const img = new Image();
         img.decoding = "async";
-        // data URL 同源，不设 crossOrigin；将来换成对象存储要在这里加 anonymous
+        // data URL 同源不用管；但库里的引用将来换成对象存储就是 https 地址，
+        // 不声明匿名跨域会把画布「污染」，编辑完 toDataURL 直接抛 SecurityError。
+        // 所以「编辑已入库的图片」这条路要能一直用下去，这一行是前提。
+        if (/^https?:\/\//i.test(src)) img.crossOrigin = "anonymous";
         img.onload = () => resolve(img);
         img.onerror = () => reject(new Error("图片加载失败"));
         img.src = src;

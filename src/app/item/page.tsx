@@ -8,7 +8,7 @@ import { useQueryId } from "@/lib/use-query-id";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, CheckCircle, XCircle, RefreshCw, Trash2, Edit, Save, X, Eye, EyeOff, ImageIcon, ImagePlus } from "lucide-react";
+import { ArrowLeft, CheckCircle, XCircle, RefreshCw, Trash2, Edit, Save, X, Eye, EyeOff, ImageIcon, ImagePlus, PencilLine } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import Link from "next/link";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -75,7 +75,14 @@ export default function ErrorDetailPage() {
     const [isImageViewerOpen, setIsImageViewerOpen] = useState(false);
     const [replacingImage, setReplacingImage] = useState(false);
     /** 选完图后进入编辑器，导出结果再落库 */
-    const [editingImage, setEditingImage] = useState<string | null>(null);
+    /**
+     * 图片编辑器当前的目标图。
+     * fromExisting=true：编辑的是数据库里已保存的那张，不需要再打开系统相册；
+     * 这时若用户什么都没改就点「完成」，应当直接关闭，避免把照片重新编码一遍、
+     * 再白白写一次库（反复 JPEG 压缩会掉画质）。
+     */
+    const [imageEdit, setImageEdit] = useState<{ src: string; fromExisting: boolean } | null>(null);
+    const [savingImage, setSavingImage] = useState(false);
     const [isEditingTags, setIsEditingTags] = useState(false);
     const [tagsInput, setTagsInput] = useState<string[]>([]);
     const [isEditingMetadata, setIsEditingMetadata] = useState(false);
@@ -340,7 +347,7 @@ export default function ErrorDetailPage() {
         // 卡片背面的缩略图缓存必须一起作废，否则列表里还显示旧照片
         void dropThumb(item.id);
         setShowQuestionImage(true);
-        toast.success("原图已替换");
+        toast.success("图片已保存");
     };
 
     // --- Question Handlers ---
@@ -620,12 +627,31 @@ export default function ErrorDetailPage() {
                         </div>
 
                         <div className="pt-3 border-t space-y-2">
-                            <div className="flex justify-between items-center">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
                                 <h4 className="text-sm font-semibold">题目原图</h4>
-                                <Button variant="ghost" size="sm" onClick={() => setReplacingImage(true)}>
-                                    <ImagePlus className="h-4 w-4 mr-1" />
-                                    {item.originalImageUrl ? "更换图片" : "上传图片"}
-                                </Button>
+                                <div className="flex items-center gap-1.5">
+                                    {item.originalImageUrl && (
+                                        /*
+                                         * 编辑「已入库的那张图」：不再弹相册，直接把库里的引用
+                                         * 交给编辑器。必须做成看得见的主按钮 —— 之前批量导入
+                                         * 的「先逐张检查」因为做成 11px 小字，用户完全没发现。
+                                         */
+                                        <Button
+                                            size="sm"
+                                            onClick={() => setImageEdit({
+                                                src: imageSrc(item.originalImageUrl),
+                                                fromExisting: true,
+                                            })}
+                                        >
+                                            <PencilLine className="h-4 w-4 mr-1" />
+                                            编辑图片
+                                        </Button>
+                                    )}
+                                    <Button variant={item.originalImageUrl ? "ghost" : "default"} size="sm" onClick={() => setReplacingImage(true)}>
+                                        <ImagePlus className="h-4 w-4 mr-1" />
+                                        {item.originalImageUrl ? "更换图片" : "上传图片"}
+                                    </Button>
+                                </div>
                             </div>
                             {item.originalImageUrl ? (
                                 <>
@@ -634,7 +660,7 @@ export default function ErrorDetailPage() {
                                     </Button>
                                     {showQuestionImage && <div className="mt-4"><img src={imageSrc(item.originalImageUrl)} alt={t.detail.originalProblem || "Original Problem"} className="w-full rounded-lg border cursor-pointer hover:opacity-90 transition-opacity" onClick={() => setIsImageViewerOpen(true)} /><p className="text-xs text-muted-foreground mt-1 text-center">{t.detail?.clickToEnlarge || "Click to enlarge"}</p></div>}
                                     <p className="text-[11px] text-muted-foreground">
-                                        拍模糊了可以直接重拍替换，题干和解析不受影响
+                                        点「编辑图片」可直接裁边、抹掉批改痕迹、搬移选区，改完保存即覆盖这张图，不用重新选照片；拍模糊了再用「更换图片」重拍。题干和解析不受影响
                                     </p>
                                 </>
                             ) : (
@@ -741,19 +767,39 @@ export default function ErrorDetailPage() {
                 onClose={() => setReplacingImage(false)}
                 onSave={async (dataUrl) => {
                     setReplacingImage(false);
-                    setEditingImage(dataUrl);
+                    setImageEdit({ src: dataUrl, fromExisting: false });
                 }}
             />
 
             <ImageEditor
-                open={!!editingImage}
-                imageSrc={editingImage || ""}
-                title="编辑题目原图"
-                subtitle="裁边、抹掉批改痕迹，保存后替换原图"
-                onCancel={() => setEditingImage(null)}
-                onDone={async (dataUrl) => {
-                    await saveOriginalImage(dataUrl);
-                    setEditingImage(null);
+                open={!!imageEdit}
+                imageSrc={imageEdit?.src || ""}
+                title={imageEdit?.fromExisting ? "编辑已保存的原图" : "编辑题目原图"}
+                subtitle={imageEdit?.fromExisting
+                    ? "改完点完成即覆盖数据库里这张图，无需重新选照片"
+                    : "裁边、抹掉批改痕迹，保存后替换原图"}
+                busy={savingImage}
+                /* 已入库的图多半是想擦掉手写痕迹，直接停在抹除，少点一次 */
+                initialMode={imageEdit?.fromExisting ? "erase" : "crop"}
+                onCancel={() => { if (!savingImage) setImageEdit(null); }}
+                onDone={async (dataUrl, changed) => {
+                    // 编辑现有图但一笔没动：直接关，不重编码也不写库。
+                    // 换图流程不能这么跳 —— 那张图本身就是新的，必须入库。
+                    if (imageEdit?.fromExisting && !changed) {
+                        setImageEdit(null);
+                        return;
+                    }
+                    setSavingImage(true);
+                    try {
+                        await saveOriginalImage(dataUrl);
+                        setImageEdit(null);
+                    } catch (err) {
+                        // 保持编辑器打开，用户可以直接重试，不用重新编辑一遍
+                        toast.error("保存失败，请重试");
+                        console.error("[item] 保存图片失败", err);
+                    } finally {
+                        setSavingImage(false);
+                    }
                 }}
             />
         </main >
