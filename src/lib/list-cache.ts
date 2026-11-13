@@ -160,6 +160,8 @@ export interface ListState {
     search: string;
     mastery: string;
     time: string;
+    /** 做题情况（错 2 次以上 / 从没做对 / 连续对 ≥2） */
+    practice?: string;
     tag: string | null;
     grade: string;
     chapter: string;

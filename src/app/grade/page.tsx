@@ -207,8 +207,8 @@ function GradeContent() {
                 </div>
                 <div className="max-w-lg mx-auto px-6 py-16 text-center space-y-4">
                     <p className="text-sm text-muted-foreground">{error}</p>
-                    <Link href="/print-preview" className="inline-block text-sm text-blue-600 underline">
-                        去打印页选题
+                    <Link href="/notebooks" className="inline-block text-sm text-blue-600 underline">
+                        去错题本选题
                     </Link>
                 </div>
             </div>
@@ -292,7 +292,7 @@ function GradeContent() {
                                 重做这 {wrongIds.length} 道错题
                             </Link>
                         )}
-                        <Link href="/print-preview" className="block w-full text-center rounded-lg bg-slate-900 text-white py-3 text-sm font-semibold">
+                        <Link href="/notebooks" className="block w-full text-center rounded-lg bg-slate-900 text-white py-3 text-sm font-semibold">
                             再打印一批
                         </Link>
                         <Link href="/mastery" className="block w-full text-center rounded-lg border py-3 text-sm">

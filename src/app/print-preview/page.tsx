@@ -1,75 +1,146 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useRef, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
-import Link from "next/link";
-import { ArrowUp } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
+import { Printer, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { BackButton } from "@/components/ui/back-button";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 import { ReferenceAnswer } from "@/components/reference-answer";
 import { apiClient } from "@/lib/api-client";
 import { ErrorItem, PaginatedResponse } from "@/types/api";
 import { PRINT_PREVIEW_PAGE_SIZE } from "@/lib/constants/pagination";
-import { getSelectedPrintItems } from "@/lib/print-preview";
-import { AutoCropImage } from "@/components/auto-crop-image";
 import { autoCrop } from "@/lib/image-autocrop";
 
-type FilterKey = "all" | "w2" | "w3" | "never" | "streak";
 type SpaceKey = "none" | "sm" | "md" | "lg";
 
 const SPACE_CM: Record<SpaceKey, number> = { none: 0, sm: 4, md: 6, lg: 9 };
 
-const FILTERS: Array<{ key: FilterKey; label: string; test: (i: ErrorItem) => boolean }> = [
-    { key: "all", label: "全部", test: () => true },
-    { key: "w2", label: "错 2 次以上", test: (i) => (i.wrongCount || 0) >= 2 },
-    { key: "w3", label: "错 3 次以上", test: (i) => (i.wrongCount || 0) >= 3 },
-    { key: "never", label: "从没做对", test: (i) => (i.correctCount || 0) === 0 },
-    { key: "streak", label: "连续对 ≥2", test: (i) => (i.correctStreak || 0) >= 2 },
-];
+/**
+ * 错题本多选后把题目 id 放这里再跳过来。
+ * 用 sessionStorage 而不是 URL：80 个 id 拼进 query 就是 2 KB 以上，
+ * 几百道直接超浏览器上限；而且这批选择本来就只活这一次会话。
+ */
+export const PRINT_PAYLOAD_KEY = "wq:print-payload";
+
+/** 排版设置沿用上次，否则每次进来都要重调图宽和作答区 */
+const SETTINGS_KEY = "wq:print-settings";
+
+/** 一次请求最多带多少个 id：再多 URL 就太长，分批并发 */
+const ID_CHUNK = 40;
+
+type PrintSettings = {
+    showQuestionText: boolean;
+    autoCropOn: boolean;
+    showAnswers: boolean;
+    showAnalysis: boolean;
+    showTags: boolean;
+    space: SpaceKey;
+    imageScale: number;
+};
+
+const DEFAULT_SETTINGS: PrintSettings = {
+    showQuestionText: false,
+    autoCropOn: true,
+    showAnswers: false,
+    showAnalysis: false,
+    showTags: false,
+    space: "sm",
+    imageScale: 60,
+};
+
+function loadSettings(): PrintSettings {
+    try {
+        const raw = localStorage.getItem(SETTINGS_KEY);
+        if (raw) {
+            const parsed = JSON.parse(raw) as Partial<PrintSettings>;
+            return { ...DEFAULT_SETTINGS, ...parsed };
+        }
+        // 兼容旧版本单独存的裁边开关
+        if (localStorage.getItem("wq:autocrop") === "0") {
+            return { ...DEFAULT_SETTINGS, autoCropOn: false };
+        }
+    } catch {
+        /* 无痕模式读不到就用默认值 */
+    }
+    return DEFAULT_SETTINGS;
+}
+
+function readPayloadIds(): string[] {
+    try {
+        const raw = sessionStorage.getItem(PRINT_PAYLOAD_KEY);
+        if (!raw) return [];
+        const data = JSON.parse(raw) as { ids?: unknown; at?: number };
+        // 半小时前的那批选择已经过时了，别让用户莫名其妙看到旧题
+        if (typeof data?.at === "number" && Date.now() - data.at > 30 * 60 * 1000) return [];
+        return Array.isArray(data?.ids) ? (data.ids as string[]).filter(Boolean) : [];
+    } catch {
+        return [];
+    }
+}
+
+/** URL 上是不是带着别的筛选条件（掌握度页按知识点进来就是 ?tag=） */
+function hasUrlScope(sp: URLSearchParams): boolean {
+    return ["tag", "subjectId", "gradeSemester", "chapter", "query", "mastery", "timeRange"].some(
+        (k) => !!sp.get(k),
+    );
+}
+
+function chunk<T>(list: T[], size: number): T[][] {
+    const out: T[][] = [];
+    for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
+    return out;
+}
 
 function PrintPreviewContent() {
     const searchParams = useSearchParams();
+    const router = useRouter();
     const [items, setItems] = useState<ErrorItem[]>([]);
     const [loading, setLoading] = useState(true);
-    const [showAnswers, setShowAnswers] = useState(false);
-    const [showAnalysis, setShowAnalysis] = useState(false);
-    const [showTags, setShowTags] = useState(false);
-    const [imageScale, setImageScale] = useState(60);
-    const [showQuestionText, setShowQuestionText] = useState(false);
-    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-    const [filter, setFilter] = useState<FilterKey>("all");
-    const [space, setSpace] = useState<SpaceKey>("sm");
-    const [previewAt, setPreviewAt] = useState<number | null>(null);
+    const [settings, setSettings] = useState<PrintSettings>(DEFAULT_SETTINGS);
     const [imageProgress, setImageProgress] = useState({ loaded: 0, total: 0 });
-    const [autoCropOn, setAutoCropOn] = useState(true);
-    const [cropSum, setCropSum] = useState({ count: 0, saved: 0 });
     const [printCrops, setPrintCrops] = useState<Record<string, string>>({});
     const [preparing, setPreparing] = useState(false);
+    const [showFloatPrint, setShowFloatPrint] = useState(false);
     const imageLoadStarted = useRef(false);
 
-    /**
-     * 三段接力滚动。
-     *
-     * 手机上一屏 700px 装不下「选题 + 设置 + 预览」三块，之前的做法是把整坨
-     * 控制区 sticky 在顶部（实测 614px，占视口 88%），再给选题墙加
-     * overscroll-contain —— 结果是选题墙滚到底就卡死，预览区永远只在底下
-     * 86px 的缝里露头。现在拆成三段：
-     *   1. 顶栏 sticky top:0，只放标题和操作；
-     *   2. 选题墙自己滚，滚到底的余量顺着滚动链交给页面；
-     *   3. 设置区 sticky 在顶栏下方，预览区在它下面继续滚。
-     * 反向滚回时顺序天然反过来，不需要额外代码。
-     */
     const topbarRef = useRef<HTMLDivElement>(null);
-    const wallRef = useRef<HTMLDivElement>(null);
-    /** 顶栏真实高度：设置区要吸在它下面，写死数字在标题换行时会错位 */
-    const [topH, setTopH] = useState(104);
-    const [wallProg, setWallProg] = useState({ top: 0, h: 100 });
-    const [backToTop, setBackToTop] = useState(false);
+    const [topH, setTopH] = useState(88);
+
+    const {
+        showQuestionText,
+        autoCropOn,
+        showAnswers,
+        showAnalysis,
+        showTags,
+        space,
+        imageScale,
+    } = settings;
+
+    const patchSettings = (patch: Partial<PrintSettings>) => {
+        setSettings((prev) => {
+            const next = { ...prev, ...patch };
+            try {
+                localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+            } catch {
+                /* 写不进去不影响本次使用 */
+            }
+            return next;
+        });
+    };
+
+    /** 题目 id 来源之一：URL 上的（批改页 / 今日卷） */
+    const urlIds = useMemo(() => {
+        return (searchParams.get("ids") || "")
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean);
+    }, [searchParams]);
 
     useEffect(() => {
-        // 加载态会提前 return，顶栏那时还没挂上，得等它渲染出来再量
-        if (loading) return;
+        setSettings(loadSettings());
+    }, []);
+
+    useEffect(() => {
         const el = topbarRef.current;
         if (!el) return;
         const sync = () => setTopH(el.offsetHeight);
@@ -79,118 +150,83 @@ function PrintPreviewContent() {
         return () => ro.disconnect();
     }, [loading]);
 
-    const onWallScroll = useCallback(() => {
-        const el = wallRef.current;
-        if (!el) return;
-        const max = el.scrollHeight - el.clientHeight;
-        if (max <= 4) {
-            setWallProg({ top: 0, h: 100 });
-            return;
-        }
-        const h = Math.max(14, (el.clientHeight / el.scrollHeight) * 100);
-        setWallProg({ top: (el.scrollTop / max) * (100 - h), h });
-    }, []);
-
     useEffect(() => {
-        onWallScroll();
-        const onScroll = () => setBackToTop(window.scrollY > 240);
+        const onScroll = () => setShowFloatPrint(window.scrollY > 700);
         window.addEventListener("scroll", onScroll, { passive: true });
         onScroll();
         return () => window.removeEventListener("scroll", onScroll);
-    }, [onWallScroll]);
-
-    /** 换筛选或补进新题后内容高度会变，进度条要跟着重算 */
-    useEffect(() => {
-        const id = requestAnimationFrame(onWallScroll);
-        return () => cancelAnimationFrame(id);
-    }, [onWallScroll, filter, items.length]);
+    }, []);
 
     /**
-     * 反向的最后一棒。
-     *
-     * 正向（墙滚到底 → 页面）浏览器原生就会接力；反向不会——页面滚到顶之后，
-     * 滚轮事件落在设置条或预览区上，浏览器不知道该转给上面的选题墙，桌面端
-     * 会觉得「滚不动了」。这里把页面已经在顶部时的上滚余量手动转过去。
-     * 鼠标停在墙内时不介入，否则会和墙自己的滚动打架。
+     * 取数。三条路：
+     *   1. URL 带 ids（批改页「重做这 N 道」、今日卷）—— 只取这几道；
+     *   2. 错题本多选后跳转，ids 在 sessionStorage 里 —— 同样只取这几道；
+     *   3. 掌握度页按知识点进来，只有 tag —— 按 tag 取。
+     * 没有选择也没有条件时给空态，不再默默打印整库。
      */
-    useEffect(() => {
-        const onWheel = (e: WheelEvent) => {
-            if (e.deltaY >= 0 || window.scrollY > 0) return;
-            const el = wallRef.current;
-            if (!el || el.contains(e.target as Node) || el.scrollTop <= 0) return;
-            el.scrollTop += e.deltaY;
-            e.preventDefault();
-        };
-        window.addEventListener("wheel", onWheel, { passive: false });
-        return () => window.removeEventListener("wheel", onWheel);
-    }, []);
-
-    useEffect(() => {
+    const fetchItems = useCallback(async () => {
+        // 带条件进来的（知识点 / 错题本筛选）就用条件，不要被上次残留的选题顶掉
+        const ids = urlIds.length ? urlIds : hasUrlScope(searchParams) ? [] : readPayloadIds();
         try {
-            const saved = localStorage.getItem("wq:autocrop");
-            if (saved === "0") setAutoCropOn(false);
-        } catch {
-            /* 隐私模式读不到就用默认值 */
-        }
-    }, []);
-
-    const toggleAutoCrop = (next: boolean) => {
-        setAutoCropOn(next);
-        setCropSum({ count: 0, saved: 0 });
-        try {
-            localStorage.setItem("wq:autocrop", next ? "1" : "0");
-        } catch {
-            /* 写不进去不影响本次使用 */
-        }
-    };
-
-    const onCropDone = useCallback((saved: number) => {
-        if (saved <= 0) return;
-        setCropSum((s) => ({ count: s.count + 1, saved: s.saved + saved }));
-    }, []);
-
-    useEffect(() => {
-        fetchItems();
-    }, []);
-
-    const fetchItems = async () => {
-        try {
-            const params = new URLSearchParams(searchParams.toString());
-            params.set("pageSize", String(PRINT_PREVIEW_PAGE_SIZE));
-            const response = await apiClient.get<PaginatedResponse<ErrorItem>>(
-                `/api/error-items/list?${params.toString()}`,
-            );
-            // 带 ids 进来（今日卷 / 指定必刷）时按传入顺序排，卷子顺序就是推荐顺序
-            const wanted = (searchParams.get("ids") || "")
-                .split(",")
-                .map((s) => s.trim())
-                .filter(Boolean);
-            let list = response.items;
-            if (wanted.length) {
-                const rank = new Map(wanted.map((id, i) => [id, i]));
-                list = list
-                    .filter((i) => rank.has(i.id))
-                    .sort((a, b) => (rank.get(a.id) || 0) - (rank.get(b.id) || 0));
+            let list: ErrorItem[] = [];
+            if (ids.length) {
+                const parts = chunk(ids, ID_CHUNK);
+                const results = await Promise.all(
+                    parts.map((part) => {
+                        const q = new URLSearchParams();
+                        q.set("ids", part.join(","));
+                        q.set("page", "1");
+                        q.set("pageSize", String(Math.max(part.length, 1)));
+                        const extra = searchParams.get("subjectId");
+                        if (extra) q.set("subjectId", extra);
+                        return apiClient
+                            .get<PaginatedResponse<ErrorItem>>(`/api/error-items/list?${q.toString()}`)
+                            .then((r) => r.items)
+                            .catch(() => [] as ErrorItem[]);
+                    }),
+                );
+                list = results.flat();
+            } else if (hasUrlScope(searchParams)) {
+                const q = new URLSearchParams(searchParams.toString());
+                q.delete("ids");
+                q.delete("src");
+                q.set("page", "1");
+                q.set("pageSize", String(PRINT_PREVIEW_PAGE_SIZE));
+                const res = await apiClient.get<PaginatedResponse<ErrorItem>>(
+                    `/api/error-items/list?${q.toString()}`,
+                );
+                list = res.items;
             }
+            // 既没有点名题目、也没有筛选条件：保持空态。
+            // 以前这里会默默把整个库拉进来打印，用户根本不知道打了什么。
             setItems(list);
-            setSelectedIds(new Set(list.map((item) => item.id)));
         } catch (error) {
             console.error(error);
         } finally {
             setLoading(false);
         }
-    };
+    }, [searchParams, urlIds]);
 
-    /** 文本就绪后按片补图：4 片并发，缩略图墙与打印区共用同一份数据 */
     useEffect(() => {
-        if (loading || imageLoadStarted.current || items.length === 0) return;
+        void fetchItems();
+    }, [fetchItems]);
+
+    /** 按选择时的顺序排，卷子顺序就是用户点选的顺序 */
+    const orderedItems = useMemo(() => {
+        if (!urlIds.length) return items;
+        const rank = new Map(urlIds.map((id, i) => [id, i]));
+        return items
+            .slice()
+            .sort((a, b) => (rank.get(a.id) ?? 1e9) - (rank.get(b.id) ?? 1e9));
+    }, [items, urlIds]);
+
+    /** 文本就绪后按片补图：4 片并发，图片全到齐之前打印会缺图 */
+    useEffect(() => {
+        if (loading || imageLoadStarted.current || orderedItems.length === 0) return;
         imageLoadStarted.current = true;
         let cancelled = false;
-        const ids = items.map((item) => item.id);
-        const BATCH = 8;
-        const CONCURRENCY = 4;
-        const chunks: string[][] = [];
-        for (let i = 0; i < ids.length; i += BATCH) chunks.push(ids.slice(i, i + BATCH));
+        const ids = orderedItems.map((item) => item.id);
+        const parts = chunk(ids, 8);
         let cursor = 0;
         let loaded = 0;
         setImageProgress({ loaded: 0, total: ids.length });
@@ -198,17 +234,21 @@ function PrintPreviewContent() {
             const worker = async () => {
                 while (!cancelled) {
                     const idx = cursor++;
-                    if (idx >= chunks.length) return;
-                    const chunk = chunks[idx];
+                    if (idx >= parts.length) return;
+                    const part = parts[idx];
                     try {
-                        const res = await apiClient.get<{ images: Array<{ id: string; originalImageUrl: string }> }>(
-                            `/api/error-items/images?ids=${chunk.join(",")}`,
+                        const res = await apiClient.get<{
+                            images: Array<{ id: string; originalImageUrl: string }>;
+                        }>(`/api/error-items/images?ids=${part.join(",")}`);
+                        const byId = new Map(
+                            (res.images || []).map((x) => [x.id, x.originalImageUrl]),
                         );
-                        const byId = new Map((res.images || []).map((x) => [x.id, x.originalImageUrl]));
                         if (!cancelled && byId.size) {
                             setItems((prev) =>
                                 prev.map((it) =>
-                                    byId.has(it.id) ? { ...it, originalImageUrl: byId.get(it.id) } : it,
+                                    byId.has(it.id)
+                                        ? { ...it, originalImageUrl: byId.get(it.id) }
+                                        : it,
                                 ),
                             );
                         }
@@ -216,48 +256,40 @@ function PrintPreviewContent() {
                         /* 单片失败不影响其余 */
                     }
                     if (!cancelled) {
-                        loaded += chunk.length;
-                        setImageProgress({ loaded: Math.min(loaded, ids.length), total: ids.length });
+                        loaded += part.length;
+                        setImageProgress({
+                            loaded: Math.min(loaded, ids.length),
+                            total: ids.length,
+                        });
                     }
                 }
             };
-            await Promise.all(Array.from({ length: Math.min(CONCURRENCY, chunks.length) }, () => worker()));
+            await Promise.all(
+                Array.from({ length: Math.min(4, parts.length) }, () => worker()),
+            );
         })();
-        return () => { cancelled = true; };
-    }, [loading, items.length]);
+        return () => {
+            cancelled = true;
+        };
+    }, [loading, orderedItems.length]);
 
-    const visibleItems = useMemo(() => {
-        const test = FILTERS.find((f) => f.key === filter)!.test;
-        return items
-            .filter(test)
-            .slice()
-            .sort((a, b) => (b.wrongCount || 0) - (a.wrongCount || 0)
-                || (a.correctCount || 0) - (b.correctCount || 0));
-    }, [items, filter]);
-
-    const selectedItems = getSelectedPrintItems(items, selectedIds);
-    const selectedKey = selectedItems.map((i) => i.id).join(",");
-    /**
-     * 图片是分批补进来的，selectedKey 在补图前后都一样，
-     * 所以这里要单独盯着「哪些题已经有图了」，否则第一轮跑完就再也不跑了。
-     */
-    const imageKey = items
-        .map((i) => (i.originalImageUrl ? `${i.id}:${i.originalImageUrl.length}` : ""))
-        .filter(Boolean)
-        .join(",");
     const reserveSpace = !showAnswers && !showAnalysis;
 
     /**
-     * 打印区的高清裁边图：选中后就在后台一张张算，进打印对话框前已经备好，
-     * 用户看到的排版就是印出来的排版。每次只算一张并让出主线程，页面不会卡。
+     * 后台先把高清裁边图算好，进打印对话框前已经备好，
+     * 用户看到的排版就是印出来的排版。每次只算一张并让出主线程。
      */
     const cropJobs = useRef<Set<string>>(new Set());
     const cropInflight = useRef<Set<string>>(new Set());
+    const imageKey = orderedItems
+        .map((i) => (i.originalImageUrl ? `${i.id}:${i.originalImageUrl.length}` : ""))
+        .filter(Boolean)
+        .join(",");
     useEffect(() => {
-        if (!autoCropOn || !selectedKey) return;
+        if (!autoCropOn || !orderedItems.length) return;
         let cancelled = false;
-        const byId = new Map(items.map((i) => [i.id, i]));
-        const queue = selectedKey.split(",").slice(0, 80);
+        const byId = new Map(orderedItems.map((i) => [i.id, i]));
+        const queue = orderedItems.map((i) => i.id).slice(0, 80);
         (async () => {
             for (const id of queue) {
                 if (cancelled) return;
@@ -280,20 +312,7 @@ function PrintPreviewContent() {
         };
         // items 每次补图都会变，但这里只关心「有没有图、图换没换」
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [selectedKey, autoCropOn, imageKey]);
-
-    const toggle = (id: string) => {
-        setSelectedIds((prev) => {
-            const next = new Set(prev);
-            next.has(id) ? next.delete(id) : next.add(id);
-            return next;
-        });
-    };
-
-    const toggleAt = (index: number) => {
-        const item = visibleItems[index];
-        if (item) toggle(item.id);
-    };
+    }, [autoCropOn, imageKey]);
 
     /**
      * 打印的同时把这批题目记到本地：用户做完卷子回来点「批改」，
@@ -303,20 +322,15 @@ function PrintPreviewContent() {
         try {
             localStorage.setItem(
                 "wq:last-print",
-                JSON.stringify({ ids: selectedItems.map((i) => i.id), at: Date.now() }),
+                JSON.stringify({ ids: orderedItems.map((i) => i.id), at: Date.now() }),
             );
         } catch {
             /* 隐私模式下写不进去，不影响打印 */
         }
 
-        /**
-         * 打印前把这一批题的高清裁边图算好再进打印对话框。
-         * 不放任 <img> 自己裁，是因为打印区默认全选会有七八十张，
-         * 每张 1200px 重编码会白烧内存；只在真正要印的时候算这一次。
-         */
-        if (autoCropOn && selectedItems.length) {
+        if (autoCropOn && orderedItems.length) {
             setPreparing(true);
-            const targets = selectedItems.filter((i) => i.originalImageUrl).slice(0, 60);
+            const targets = orderedItems.filter((i) => i.originalImageUrl).slice(0, 60);
             try {
                 const results = await Promise.all(
                     targets.map((i) =>
@@ -329,31 +343,15 @@ function PrintPreviewContent() {
                 for (const [id, url] of results) if (url) map[id] = url;
                 setPrintCrops(map);
                 // 等 React 把新图刷进 DOM，否则打印出来还是原图
-                await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+                await new Promise<void>((r) =>
+                    requestAnimationFrame(() => requestAnimationFrame(() => r())),
+                );
             } finally {
                 setPreparing(false);
             }
         }
         window.print();
     };
-
-    const previewItem = previewAt === null ? null : visibleItems[previewAt];
-
-    useEffect(() => {
-        if (previewAt === null) return;
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key === "Escape") setPreviewAt(null);
-            if (e.key === "ArrowLeft") setPreviewAt((v) => (v === null ? v : Math.max(0, v - 1)));
-            if (e.key === "ArrowRight")
-                setPreviewAt((v) => (v === null ? v : Math.min(visibleItems.length - 1, v + 1)));
-            if (e.key === " ") {
-                e.preventDefault();
-                if (previewAt !== null) toggleAt(previewAt);
-            }
-        };
-        window.addEventListener("keydown", onKey);
-        return () => window.removeEventListener("keydown", onKey);
-    }, [previewAt, visibleItems]);
 
     if (loading) {
         return (
@@ -363,266 +361,162 @@ function PrintPreviewContent() {
         );
     }
 
+    const total = orderedItems.length;
+    const gotImages = imageProgress.total > 0 && imageProgress.loaded < imageProgress.total;
+
     return (
         <>
-            {/* 顶栏：常驻吸附，只留标题与操作，保证「打印 / PDF」随时能点 */}
+            {/* 顶栏：只留「这是哪一批、怎么回去、开始打印」 */}
             <div
                 ref={topbarRef}
                 className="print:hidden sticky top-0 z-20 border-b bg-background/95 backdrop-blur"
             >
-                <div className="max-w-6xl mx-auto px-3 sm:px-4 pt-2 pb-1.5 space-y-1.5">
+                <div className="max-w-4xl mx-auto px-3 sm:px-4 py-2">
                     <div className="flex items-center gap-2.5">
-                        <BackButton fallbackUrl="/notebooks" />
-                        <div className="flex-1 min-w-0">
-                            {/*
-                             * 窄屏下这里原本是三行（标题换行 + 统计换三行），顶栏被撑到 163px，
-                             * 吸附后吃掉四分之一屏。改成各自单行、超出省略：信息还在，高度砍半。
-                             */}
-                            <div className="truncate text-[15px] font-bold leading-tight sm:text-lg">选择要打印的错题</div>
+                        <button
+                            type="button"
+                            onClick={() => router.back()}
+                            aria-label="返回改选"
+                            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-600 transition-colors hover:bg-slate-100"
+                        >
+                            <ArrowLeft className="h-5 w-5" />
+                        </button>
+                        <div className="min-w-0 flex-1">
+                            <div className="truncate text-[15px] font-bold leading-tight">
+                                打印设置
+                            </div>
                             <div className="truncate text-[11px] leading-tight text-muted-foreground">
-                                {filter === "all"
-                                    ? `共 ${items.length}`
-                                    : `筛选 ${visibleItems.length}/${items.length}`}
-                                {" · 已选 "}
-                                {selectedItems.length}
-                                {imageProgress.total > 0 && imageProgress.loaded < imageProgress.total
+                                共 {total} 道
+                                {gotImages
                                     ? ` · 图 ${imageProgress.loaded}/${imageProgress.total}`
                                     : ""}
-                                {cropSum.count > 0
-                                    ? ` · 已裁 ${cropSum.count}，省 ${Math.round((cropSum.saved / cropSum.count) * 100)}%`
-                                    : ""}
+                                {total > 0 ? " · 左上角可返回" : ""}
                             </div>
                         </div>
-                        <Button onClick={handlePrint} size="sm" className="whitespace-nowrap" disabled={selectedItems.length === 0 || preparing}>
+                        <Button
+                            onClick={handlePrint}
+                            size="sm"
+                            className="shrink-0 whitespace-nowrap"
+                            disabled={total === 0 || preparing}
+                        >
                             {preparing ? "准备图片…" : "打印 / PDF"}
                         </Button>
                     </div>
-
-                    {/* 筛选 */}
-                    <div className="flex gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                        {FILTERS.map((f) => (
-                            <button
-                                key={f.key}
-                                onClick={() => setFilter(f.key)}
-                                className={`shrink-0 rounded-full border px-3 py-1 text-xs transition-colors ${
-                                    filter === f.key
-                                        ? f.key === "w2" || f.key === "w3"
-                                            ? "bg-red-600 border-red-600 text-white font-semibold"
-                                            : "bg-slate-900 border-slate-900 text-white font-semibold"
-                                        : f.key === "w2" || f.key === "w3"
-                                            ? "border-red-200 bg-red-50 text-red-700"
-                                            : "border-slate-200 bg-white text-slate-600"
-                                }`}
-                            >
-                                {f.label}
-                            </button>
-                        ))}
-                        <span className="w-px shrink-0 bg-border mx-1" />
-                        <button
-                            onClick={() => setSelectedIds(new Set([...selectedIds, ...visibleItems.map((i) => i.id)]))}
-                            className="shrink-0 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-600"
-                        >
-                            全选当前
-                        </button>
-                        <button
-                            onClick={() => setSelectedIds(new Set())}
-                            className="shrink-0 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-600"
-                        >
-                            清空
-                        </button>
-                    </div>
                 </div>
             </div>
 
-            {/* 选题区：自己滚。去掉 overscroll-contain 之后，滚到底的余量会顺着滚动链交给页面 */}
-            <div className="print:hidden max-w-6xl mx-auto px-3 sm:px-4 pt-2">
-                <div className="relative">
-                    <div
-                        ref={wallRef}
-                        onScroll={onWallScroll}
-                        className="print-scroll min-h-[168px] max-h-[36vh] overflow-y-auto overscroll-y-auto rounded-md border bg-white p-1.5 sm:max-h-[46vh]"
-                    >
-
-                <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4 lg:grid-cols-6">
-                    {visibleItems.map((item, index) => {
-                        const on = selectedIds.has(item.id);
-                        const wc = item.wrongCount || 0;
-                        const cc = item.correctCount || 0;
-                        const practiced = wc + cc > 0;
-                        const tone = wc >= 3 ? "bg-red-100 text-red-700" : wc === 2 ? "bg-orange-100 text-orange-700" : "bg-white/90 text-slate-500";
-                        const brief = (item.questionText || "")
-                            .replace(/\$[^$]*\$/g, " ")
-                            .replace(/\\[a-zA-Z]+/g, " ")
-                            .replace(/[{}$\\^_]/g, " ")
-                            .replace(/\s+/g, " ")
-                            .trim();
-                        return (
-                            <div
-                                key={item.id}
-                                className={`relative h-28 sm:h-32 rounded-md overflow-hidden bg-slate-100 cursor-pointer transition ${
-                                    on ? "ring-2 ring-blue-600 ring-offset-1" : "ring-1 ring-slate-200"
-                                }`}
-                                onClick={() => setPreviewAt(index)}
-                            >
-                                {item.originalImageUrl ? (
-                                    <AutoCropImage
-                                        src={item.originalImageUrl}
-                                        maxWidth={420}
-                                        enabled={autoCropOn}
-                                        onCrop={onCropDone}
-                                        alt=""
-                                        loading="lazy"
-                                        className={`w-full h-full object-contain bg-white transition-opacity ${on ? "opacity-80" : ""}`}
-                                    />
-                                ) : (
-                                    <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-400 p-1 text-center line-clamp-4">
-                                        {brief.slice(0, 40) || "无图"}
-                                    </div>
-                                )}
-
-                                {/* 题干摘要：整页截图缩略后认不出题，靠这行兜住 */}
-                                {brief && (
-                                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 via-black/40 to-transparent px-1.5 pt-4 pb-1">
-                                        <p className="text-[10px] leading-tight text-white line-clamp-1">{brief}</p>
-                                    </div>
-                                )}
-
-                                <button
-                                    aria-label={on ? "取消选择" : "选择"}
-                                    onClick={(e) => { e.stopPropagation(); toggle(item.id); }}
-                                    className={`absolute right-1 top-1 w-6 h-6 rounded-full flex items-center justify-center shadow-sm transition ${
-                                        on ? "bg-blue-600 border-blue-600" : "bg-white/90 border border-slate-400"
-                                    }`}
-                                >
-                                    <svg viewBox="0 0 24 24" className={`w-3.5 h-3.5 ${on ? "opacity-100" : "opacity-0"}`}
-                                        fill="none" stroke="#fff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
-                                        <polyline points="20 6 9 17 4 12" />
-                                    </svg>
-                                </button>
-
-                                {practiced && (
-                                    <span className={`absolute left-1 top-1 rounded px-1 py-0.5 text-[10px] font-bold leading-none shadow-sm ${tone}`}>
-                                        错{wc}·对{cc}
-                                    </span>
-                                )}
-                                {!practiced && (
-                                    <span className="absolute left-1 top-1 rounded bg-white/85 px-1 py-0.5 text-[10px] leading-none text-slate-500 shadow-sm">
-                                        未练
-                                    </span>
-                                )}
-                            </div>
-                        );
-                    })}
-                    {visibleItems.length === 0 && (
-                        <div className="col-span-full py-8 text-center text-xs text-muted-foreground">
-                            这个条件下没有题目
-                            <div className="mt-1 text-[11px] text-slate-400">
-                                筛选只影响这里，下方预览仍是已选的 {selectedItems.length} 道
-                            </div>
-                        </div>
-                    )}
-                </div>
-
-                    </div>
-                    {/* 手机上没有常驻滚动条，用右侧细进度条告诉用户「还能往下滚」 */}
-                    {wallProg.h < 99 && (
-                        <div className="pointer-events-none absolute top-1.5 bottom-1.5 right-0.5 w-1 rounded-full bg-slate-200/70 sm:hidden">
-                            <div
-                                className="w-full rounded-full bg-slate-400/80"
-                                style={{ height: `${wallProg.h}%`, marginTop: `${wallProg.top}%` }}
-                            />
-                        </div>
-                    )}
-                </div>
-            </div>
-
-            {/* 设置区：滚到顶就吸在顶栏下方，预览区在它下面继续滚 */}
+            {/* 设置条：滚到顶就吸住，预览在它下面滚动 */}
             <div
-                className="print:hidden sticky z-10 mt-2 border-y bg-background/95 backdrop-blur"
+                className="print:hidden sticky z-10 border-b bg-background/95 backdrop-blur"
                 style={{ top: topH }}
             >
-                <div className="max-w-6xl mx-auto px-3 sm:px-4 py-1.5">
-                {/* 排版选项 */}
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-0.5 text-xs">
-                    <label className="flex items-center gap-1.5 cursor-pointer">
-                        <input type="checkbox" checked={showQuestionText} onChange={(e) => setShowQuestionText(e.target.checked)}
-                            className="rounded border-gray-300 accent-blue-600" />
-                        用文字（默认用原图）
-                    </label>
-                    <label className="flex items-center gap-1.5 cursor-pointer" title="去掉手机状态栏与四周白边，题会印得更大更清楚">
-                        <input type="checkbox" checked={autoCropOn} onChange={(e) => toggleAutoCrop(e.target.checked)}
-                            className="rounded border-gray-300 accent-blue-600" />
-                        自动裁边
-                    </label>
-                    <label className="flex items-center gap-1.5 cursor-pointer">
-                        <input type="checkbox" checked={showAnswers} onChange={(e) => setShowAnswers(e.target.checked)}
-                            className="rounded border-gray-300 accent-blue-600" />
-                        附答案（放卷末）
-                    </label>
-                    <label className="flex items-center gap-1.5 cursor-pointer">
-                        <input type="checkbox" checked={showAnalysis} onChange={(e) => setShowAnalysis(e.target.checked)}
-                            className="rounded border-gray-300 accent-blue-600" />
-                        附解析
-                    </label>
-                    <label className="flex items-center gap-1.5 cursor-pointer">
-                        <input type="checkbox" checked={showTags} onChange={(e) => setShowTags(e.target.checked)}
-                            className="rounded border-gray-300 accent-blue-600" />
-                        知识点
-                    </label>
-                    <span className="flex items-center gap-1.5">
-                        作答区
-                        <select
-                            value={space}
-                            onChange={(e) => setSpace(e.target.value as SpaceKey)}
-                            className="rounded border border-slate-200 bg-white px-1.5 py-0.5"
+                <div className="max-w-4xl mx-auto px-3 sm:px-4 py-1.5">
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={showQuestionText}
+                                onChange={(e) =>
+                                    patchSettings({ showQuestionText: e.target.checked })
+                                }
+                                className="rounded border-gray-300 accent-blue-600"
+                            />
+                            用文字（默认用原图）
+                        </label>
+                        <label
+                            className="flex items-center gap-1.5 cursor-pointer"
+                            title="去掉手机状态栏与四周白边，题会印得更大更清楚"
                         >
-                            <option value="none">不留</option>
-                            <option value="sm">小 4cm</option>
-                            <option value="md">中 6cm</option>
-                            <option value="lg">大 9cm</option>
-                        </select>
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                        图宽
-                        <input type="range" min={30} max={100} value={imageScale}
-                            onChange={(e) => setImageScale(Number(e.target.value))}
-                            className="w-16 accent-blue-600" />
-                        {imageScale}%
-                    </span>
-
-                    {/* 从顶栏挪下来：窄屏顶栏一行塞不下五个元素，标题只能被截断 */}
-                    <span className="ml-auto flex items-center gap-3 text-slate-500">
-                        <Link href="/review" className="underline-offset-2 active:underline">
-                            今日卷
-                        </Link>
-                        <Link
-                            href={
-                                selectedItems.length
-                                    ? `/grade?ids=${selectedItems.map((i) => i.id).join(",")}`
-                                    : "/grade"
-                            }
-                            className="underline-offset-2 active:underline"
-                        >
-                            批改
-                        </Link>
-                    </span>
-                </div>
+                            <input
+                                type="checkbox"
+                                checked={autoCropOn}
+                                onChange={(e) => patchSettings({ autoCropOn: e.target.checked })}
+                                className="rounded border-gray-300 accent-blue-600"
+                            />
+                            自动裁边
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={showAnswers}
+                                onChange={(e) => patchSettings({ showAnswers: e.target.checked })}
+                                className="rounded border-gray-300 accent-blue-600"
+                            />
+                            附答案（放卷末）
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={showAnalysis}
+                                onChange={(e) =>
+                                    patchSettings({ showAnalysis: e.target.checked })
+                                }
+                                className="rounded border-gray-300 accent-blue-600"
+                            />
+                            附解析
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={showTags}
+                                onChange={(e) => patchSettings({ showTags: e.target.checked })}
+                                className="rounded border-gray-300 accent-blue-600"
+                            />
+                            知识点
+                        </label>
+                        <span className="flex items-center gap-1.5">
+                            作答区
+                            <select
+                                value={space}
+                                onChange={(e) =>
+                                    patchSettings({ space: e.target.value as SpaceKey })
+                                }
+                                className="rounded border border-slate-200 bg-white px-1.5 py-0.5"
+                            >
+                                <option value="none">不留</option>
+                                <option value="sm">小 4cm</option>
+                                <option value="md">中 6cm</option>
+                                <option value="lg">大 9cm</option>
+                            </select>
+                        </span>
+                        <span className="flex items-center gap-1.5">
+                            图宽
+                            <input
+                                type="range"
+                                min={30}
+                                max={100}
+                                value={imageScale}
+                                onChange={(e) =>
+                                    patchSettings({ imageScale: Number(e.target.value) })
+                                }
+                                className="w-16 accent-blue-600"
+                            />
+                            {imageScale}%
+                        </span>
+                    </div>
                 </div>
             </div>
 
             {/* 打印内容 */}
             <div className="max-w-4xl mx-auto px-4 py-6 print:p-0">
-                {selectedItems.length === 0 ? (
-                    <div className="text-center py-16 text-muted-foreground text-sm">
-                        {items.length === 0 ? "没有符合条件的错题" : "还没有选择题目"}
+                {total === 0 ? (
+                    <div className="py-16 text-center text-sm text-muted-foreground">
+                        <p>还没有选题</p>
+                        <p className="mt-1 text-xs text-slate-400">
+                            回到错题本，点「多选」勾上要打印的题，再点「导出打印」
+                        </p>
                     </div>
                 ) : (
                     <div className="space-y-8">
-                        {selectedItems.map((item, index) => {
+                        {orderedItems.map((item, index) => {
                             let tags: string[] = [];
                             if (item.tags && item.tags.length > 0) tags = item.tags.map((t) => t.name);
                             else {
-                                try { tags = JSON.parse(item.knowledgePoints || "[]"); } catch { tags = []; }
+                                try {
+                                    tags = JSON.parse(item.knowledgePoints || "[]");
+                                } catch {
+                                    tags = [];
+                                }
                             }
                             return (
                                 <div key={item.id} className="break-inside-avoid">
@@ -635,10 +529,14 @@ function PrintPreviewContent() {
                                             第 {index + 1} 题
                                         </span>
                                         {item.subject && (
-                                            <span className="text-xs text-muted-foreground">{item.subject.name}</span>
+                                            <span className="text-xs text-muted-foreground">
+                                                {item.subject.name}
+                                            </span>
                                         )}
                                         {showTags && tags.length > 0 && (
-                                            <span className="text-xs text-muted-foreground">{tags.join(" · ")}</span>
+                                            <span className="text-xs text-muted-foreground">
+                                                {tags.join(" · ")}
+                                            </span>
                                         )}
                                     </div>
 
@@ -671,12 +569,15 @@ function PrintPreviewContent() {
                 )}
 
                 {/* 答案区：统一放卷末，避免做题时瞄到下一题答案 */}
-                {showAnswers && selectedItems.some((i) => i.answerText) && (
+                {showAnswers && orderedItems.some((i) => i.answerText) && (
                     <div className="mt-10 pt-6 border-t-2 border-dashed break-before-page print:break-before-page">
                         <h2 className="text-base font-bold mb-3 print:text-[12pt]">参考答案</h2>
                         <div className="space-y-2.5">
-                            {selectedItems.map((item, index) => (
-                                <div key={`ans-${item.id}`} className="flex gap-2 text-sm break-inside-avoid">
+                            {orderedItems.map((item, index) => (
+                                <div
+                                    key={`ans-${item.id}`}
+                                    className="flex gap-2 text-sm break-inside-avoid"
+                                >
                                     <span className="font-mono text-[10px] text-slate-400 pt-0.5 shrink-0">
                                         #{item.shortCode || item.id.slice(-8)}
                                     </span>
@@ -696,68 +597,17 @@ function PrintPreviewContent() {
                 )}
             </div>
 
-            {/*
-             * 26 道题打印出来两万多像素，滚到下面看排版之后想改选项得往上拖半天，
-             * 这里给一个回顶部的入口；只在离开顶部后出现。
-             */}
-            {backToTop && (
+            {/* 几十道题滚到一半想打印，不必再滚回顶部 */}
+            {showFloatPrint && total > 0 && (
                 <button
                     type="button"
-                    onClick={() => {
-                        window.scrollTo({ top: 0, behavior: "smooth" });
-                        wallRef.current?.scrollTo({ top: 0, behavior: "smooth" });
-                    }}
-                    className="print:hidden fixed right-4 bottom-5 z-30 flex items-center gap-1.5 rounded-full bg-slate-900/85 px-3 py-2 text-[11px] text-white shadow-lg backdrop-blur transition active:scale-95"
+                    onClick={handlePrint}
+                    disabled={preparing}
+                    className="print:hidden fixed right-4 bottom-5 z-30 flex items-center gap-1.5 rounded-full bg-slate-900/90 px-3.5 py-2.5 text-xs font-medium text-white shadow-lg backdrop-blur transition active:scale-95 disabled:opacity-60"
                 >
-                    <ArrowUp className="h-3.5 w-3.5" />
-                    回到选题
+                    <Printer className="h-3.5 w-3.5" />
+                    {preparing ? "准备中…" : "打印"}
                 </button>
-            )}
-
-            {/* 大图：点缩略图进来，可左右翻、可直接选中 */}
-            {previewItem && (
-                <div className="fixed inset-0 z-50 bg-slate-950/95 flex flex-col print:hidden" onClick={() => setPreviewAt(null)}>
-                    <div className="flex items-center gap-3 px-4 py-3 text-white shrink-0" onClick={(e) => e.stopPropagation()}>
-                        <span className="font-mono text-xs text-slate-400">#{previewItem.shortCode || "—"}</span>
-                        <span className="text-xs text-slate-300">
-                            {(previewAt || 0) + 1} / {visibleItems.length}
-                        </span>
-                        <span className="text-xs">
-                            <span className="text-red-300 font-semibold">错 {previewItem.wrongCount || 0}</span>
-                            <span className="text-slate-500"> · </span>
-                            <span className="text-green-300 font-semibold">对 {previewItem.correctCount || 0}</span>
-                        </span>
-                        <button className="ml-auto w-8 h-8 rounded-full bg-white/10 text-white text-lg leading-none" onClick={() => setPreviewAt(null)}>
-                            ×
-                        </button>
-                    </div>
-                    <div className="flex-1 relative flex items-center justify-center overflow-auto px-2" onClick={(e) => e.stopPropagation()}>
-                        <button
-                            className="absolute left-2 w-10 h-10 rounded-full bg-white/10 text-white text-2xl disabled:opacity-25"
-                            disabled={previewAt === 0}
-                            onClick={() => setPreviewAt((v) => Math.max(0, (v || 0) - 1))}
-                        >‹</button>
-                        <img src={previewItem.originalImageUrl} alt="" className="max-w-full max-h-full object-contain bg-white rounded" />
-                        <button
-                            className="absolute right-2 w-10 h-10 rounded-full bg-white/10 text-white text-2xl disabled:opacity-25"
-                            disabled={(previewAt || 0) >= visibleItems.length - 1}
-                            onClick={() => setPreviewAt((v) => Math.min(visibleItems.length - 1, (v || 0) + 1))}
-                        >›</button>
-                    </div>
-                    <div className="shrink-0 px-4 pb-5 pt-2" onClick={(e) => e.stopPropagation()}>
-                        <p className="text-slate-300 text-xs line-clamp-3 mb-3">{previewItem.questionText || ""}</p>
-                        <button
-                            onClick={() => previewAt !== null && toggleAt(previewAt)}
-                            className={`w-full rounded-xl py-3 text-sm font-semibold border ${
-                                selectedIds.has(previewItem.id)
-                                    ? "bg-blue-600 border-blue-600 text-white"
-                                    : "border-white/30 text-white"
-                            }`}
-                        >
-                            {selectedIds.has(previewItem.id) ? "✓ 已选中，点击取消" : "选中这道"}
-                        </button>
-                    </div>
-                </div>
             )}
         </>
     );
@@ -765,7 +615,9 @@ function PrintPreviewContent() {
 
 export default function PrintPreviewPage() {
     return (
-        <Suspense fallback={<div className="min-h-screen flex items-center justify-center">加载中…</div>}>
+        <Suspense
+            fallback={<div className="min-h-screen flex items-center justify-center">加载中…</div>}
+        >
             <PrintPreviewContent />
         </Suspense>
     );

@@ -177,6 +177,13 @@ async function handleFixed(ctx: RouteContext, sub: string): Promise<Response | n
     if (mastery === "1") params.append("masteryLevel", "gt.0");
     else if (mastery === "0") params.append("masteryLevel", "eq.0");
     else if (mastery) params.append("masteryLevel", `eq.${mastery}`);
+    // 「错几次 / 从没做对 / 连续对」：原来是打印页独有的选题条件，
+    // 现在并进错题本筛选，服务端过滤才不会出现「本页 18 条里只剩 2 条」的假分页
+    const minWrong = Number(q.get("minWrong") || 0);
+    if (minWrong > 0) params.append("wrongCount", `gte.${minWrong}`);
+    if (q.get("neverCorrect") === "1") params.append("correctCount", "eq.0");
+    const minStreak = Number(q.get("minStreak") || 0);
+    if (minStreak > 0) params.append("correctStreak", `gte.${minStreak}`);
     if (timeRange === "week" || timeRange === "month") {
       const days = timeRange === "week" ? 7 : 30;
       params.append("createdAt", `gte.${new Date(Date.now() - days * 86_400_000).toISOString()}`);

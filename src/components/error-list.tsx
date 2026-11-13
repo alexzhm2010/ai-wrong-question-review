@@ -45,10 +45,42 @@ const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : use
 /** 整页视图（文字 / 截图）在会话内记住，返回列表时不至于悄悄退回文字态 */
 const VIEW_MODE_KEY = "wq:list-view-mode";
 
+/**
+ * 打印选题集合。
+ *
+ * 按错题本分 key 存在 sessionStorage：翻页、切筛选、去详情再回来都不丢，
+ * 关掉标签页自动作废；换个错题本就是另一个 key，互不串。
+ * 这样「多选」就不再只服务批量删除，而是整个错题本范围内的一批待打印题目。
+ */
+const selectionKey = (scope: string) => `wq:print-sel:${scope}`;
+/** 交给打印设置页的交接单 */
+const PRINT_PAYLOAD_KEY = "wq:print-payload";
+
+function readSelection(scope: string): string[] {
+    try {
+        const raw = sessionStorage.getItem(selectionKey(scope));
+        if (!raw) return [];
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === "string") : [];
+    } catch {
+        return [];
+    }
+}
+
 interface ErrorListProps {
     subjectId?: string;
     subjectName?: string;
 }
+
+/** 做题情况：从打印页搬过来的选题条件 */
+const PRACTICE_OPTIONS = [
+    // 下拉里已经有两个「全部」（掌握度、时间），这里用「不限」区分开
+    { key: "all", label: "不限" },
+    { key: "w2", label: "错 2 次以上" },
+    { key: "w3", label: "错 3 次以上" },
+    { key: "never", label: "从没做对" },
+    { key: "streak", label: "连续对 ≥2" },
+] as const;
 
 type KnowledgeFilterChange = {
     gradeSemester?: string;
@@ -66,6 +98,8 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
     const [searching, setSearching] = useState(false);
     const [masteryFilter, setMasteryFilter] = useState<"all" | "mastered" | "unmastered">("all");
     const [timeFilter, setTimeFilter] = useState<"all" | "week" | "month">("all");
+    /** 做题情况：原来只在打印页有，选题并进错题本后跟着一起搬过来 */
+    const [practiceFilter, setPracticeFilter] = useState<"all" | "w2" | "w3" | "never" | "streak">("all");
     const [gradeFilter, setGradeFilter] = useState("");
     const [chapterFilter, setChapterFilter] = useState("");
     const [selectedTag, setSelectedTag] = useState<string | null>(null);
@@ -87,6 +121,8 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
     const [viewMode, setViewMode] = useState<"text" | "image">("text");
     /** 每次点总开关加 1，卡片据此清掉各自翻过的状态，重新统一 */
     const [flipEpoch, setFlipEpoch] = useState(0);
+    /** 选择集合是否已从会话里恢复：恢复前别把空集合写回去 */
+    const selectionReadyRef = useRef(false);
     /**
      * 整页截图态的图片正在批量取。
      * 这期间卡片不要各自去拉图，否则一页 18 次请求白跑一遍。
@@ -100,6 +136,29 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
     const abortRef = useRef<AbortController | null>(null);
 
     const scope = subjectId || "all";
+
+    /** 进来先把上次的选题恢复出来，连多选模式一起还原，否则勾了也看不见 */
+    useIsoLayoutEffect(() => {
+        const saved = readSelection(scope);
+        if (saved.length) {
+            setSelectedIds(new Set(saved));
+            setIsSelectMode(true);
+        }
+        selectionReadyRef.current = true;
+    }, [scope]);
+
+    useEffect(() => {
+        if (!selectionReadyRef.current) return;
+        try {
+            if (selectedIds.size) {
+                sessionStorage.setItem(selectionKey(scope), JSON.stringify([...selectedIds]));
+            } else {
+                sessionStorage.removeItem(selectionKey(scope));
+            }
+        } catch {
+            /* 无痕模式写不进去，本次会话内仍可用 */
+        }
+    }, [selectedIds, scope]);
     // 离开列表去详情时，路由会把滚动重置成 0；如果这时再保存一次，
     // 记住的位置就被 0 覆盖了 —— 返回自然回到顶部。用 ref 兜住这个坑。
     const leavingRef = useRef(false);
@@ -115,13 +174,14 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
                     search,
                     mastery: masteryFilter,
                     time: timeFilter,
+                    practice: practiceFilter,
                     tag: selectedTag,
                     grade: gradeFilter,
                     chapter: chapterFilter,
                 },
                 page,
             ),
-        [scope, search, masteryFilter, timeFilter, selectedTag, gradeFilter, chapterFilter, page],
+        [scope, search, masteryFilter, timeFilter, practiceFilter, selectedTag, gradeFilter, chapterFilter, page],
     );
     const cacheKeyRef = useRef(cacheKey);
     cacheKeyRef.current = cacheKey;
@@ -165,6 +225,7 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
                     saved.search !== search ||
                     saved.mastery !== masteryFilter ||
                     saved.time !== timeFilter ||
+                    saved.practice !== practiceFilter ||
                     saved.tag !== selectedTag ||
                     saved.grade !== gradeFilter ||
                     saved.chapter !== chapterFilter);
@@ -172,6 +233,7 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
                 setSearch(saved.search || "");
                 setMasteryFilter((saved.mastery as typeof masteryFilter) || "all");
                 setTimeFilter((saved.time as typeof timeFilter) || "all");
+                setPracticeFilter((saved.practice as typeof practiceFilter) || "all");
                 setSelectedTag(saved.tag ?? null);
                 setGradeFilter(saved.grade || "");
                 setChapterFilter(saved.chapter || "");
@@ -259,24 +321,36 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
         };
     }, [scope]);
 
+    /** 勾了题才算数：没勾就进多选模式并提示，不再默默按筛选打印整库 */
     const handleExportPrint = () => {
-        const params = new URLSearchParams();
-        if (subjectId) params.append("subjectId", subjectId);
-        if (search) params.append("query", search);
-        if (masteryFilter !== "all") {
-            params.append("mastery", masteryFilter === "mastered" ? "1" : "0");
+        if (selectedIds.size === 0) {
+            if (!isSelectMode) setIsSelectMode(true);
+            toast.info(t.notebook?.pickBeforePrint || "先勾选要打印的题目");
+            return;
         }
-        if (timeFilter !== "all") {
-            params.append("timeRange", timeFilter);
+        const ids = [...selectedIds];
+        try {
+            sessionStorage.setItem(
+                PRINT_PAYLOAD_KEY,
+                JSON.stringify({ ids, scope, at: Date.now() }),
+            );
+        } catch {
+            toast.error("浏览器存储不可用，无法带过去选题");
+            return;
         }
-        if (selectedTag) {
-            params.append("tag", selectedTag);
-        }
-        if (gradeFilter) params.append("gradeSemester", gradeFilter);
-        if (chapterFilter) params.append("chapter", chapterFilter); // 章节筛选
-
-        router.push(`/print-preview?${params.toString()}`);
+        router.push("/print-preview?src=list");
     };
+
+    /** 本页全选：跨页靠选择集合累积，翻页不会清掉前面选的 */
+    const selectAllOnPage = () => {
+        setSelectedIds((prev) => {
+            const next = new Set(prev);
+            items.forEach((it) => next.add(it.id));
+            return next;
+        });
+    };
+
+    const pageSelected = items.filter((it) => selectedIds.has(it.id)).length;
 
     const handleTagClick = (tag: string) => {
         setSelectedTag(selectedTag === tag ? null : tag);
@@ -373,6 +447,7 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
         search,
         masteryFilter,
         timeFilter,
+        practiceFilter,
         selectedTag,
         subjectId,
         gradeFilter,
@@ -392,6 +467,7 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
                 prevFilters.search !== search ||
                 prevFilters.masteryFilter !== masteryFilter ||
                 prevFilters.timeFilter !== timeFilter ||
+                prevFilters.practiceFilter !== practiceFilter ||
                 prevFilters.selectedTag !== selectedTag ||
                 prevFilters.subjectId !== subjectId ||
                 prevFilters.gradeFilter !== gradeFilter ||
@@ -402,6 +478,7 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
                 search,
                 masteryFilter,
                 timeFilter,
+                practiceFilter,
                 selectedTag,
                 subjectId,
                 gradeFilter,
@@ -420,7 +497,7 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
 
         return () => clearTimeout(timer);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [page, search, masteryFilter, timeFilter, selectedTag, subjectId, gradeFilter, chapterFilter]);
+    }, [page, search, masteryFilter, timeFilter, practiceFilter, selectedTag, subjectId, gradeFilter, chapterFilter]);
 
     const fetchItems = async (opts: { background?: boolean; withPhotos?: boolean } = {}) => {
         const seq = ++requestSeqRef.current;
@@ -445,6 +522,10 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
             if (timeFilter !== "all") {
                 params.append("timeRange", timeFilter);
             }
+            if (practiceFilter === "w2") params.append("minWrong", "2");
+            else if (practiceFilter === "w3") params.append("minWrong", "3");
+            else if (practiceFilter === "never") params.append("neverCorrect", "1");
+            else if (practiceFilter === "streak") params.append("minStreak", "2");
             if (selectedTag) {
                 params.append("tag", selectedTag);
             }
@@ -514,11 +595,12 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
             search,
             mastery: masteryFilter,
             time: timeFilter,
+            practice: practiceFilter,
             tag: selectedTag,
             grade: gradeFilter,
             chapter: chapterFilter,
         });
-    }, [scope, page, search, masteryFilter, timeFilter, selectedTag, gradeFilter, chapterFilter]);
+    }, [scope, page, search, masteryFilter, timeFilter, practiceFilter, selectedTag, gradeFilter, chapterFilter]);
 
     const openItem = (id: string) => {
         // 记住三件事：哪道题、从哪个列表来的、滚到哪儿了
@@ -532,7 +614,7 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
     };
 
     return (
-        <div className="space-y-6">
+        <div className={isSelectMode ? "space-y-6 pb-32" : "space-y-6"}>
             <div className="flex flex-col sm:flex-row gap-4">
                 <div className="relative w-full sm:flex-1">
                     <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
@@ -587,6 +669,16 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
                             {timeFilter === "month" && "✓ "}
                             {t.filter.lastMonth || "Last Month"}
                         </DropdownMenuItem>
+
+                        <DropdownMenuSeparator />
+
+                        <DropdownMenuLabel>做题情况</DropdownMenuLabel>
+                        {PRACTICE_OPTIONS.map((o) => (
+                            <DropdownMenuItem key={o.key} onClick={() => setPracticeFilter(o.key)}>
+                                {practiceFilter === o.key && "✓ "}
+                                {o.label}
+                            </DropdownMenuItem>
+                        ))}
                     </DropdownMenuContent>
                 </DropdownMenu>
                 {/* 这三个是「对当前这一页动手」的操作，手机上也排在同一行，别各占一行 */}
@@ -669,7 +761,7 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
 
             {!loading && items.length === 0 && (
                 <div className="py-16 text-center text-sm text-muted-foreground">
-                    {search || selectedTag || masteryFilter !== "all" || timeFilter !== "all" || gradeFilter || chapterFilter
+                    {search || selectedTag || masteryFilter !== "all" || timeFilter !== "all" || practiceFilter !== "all" || gradeFilter || chapterFilter
                         ? "没有符合条件的题目，试试放宽筛选"
                         : t.notebooks?.empty || "这个错题本还没有题目"}
                 </div>
@@ -684,27 +776,58 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
                 onPageChange={setPage}
             />
 
-            {/* 多选模式底部操作栏 */}
+            {/* 多选模式底部操作栏：选择集合跨页累积，顶部是本页快捷操作 */}
             {isSelectMode && (
-                <div className="fixed bottom-0 left-0 right-0 bg-background border-t shadow-lg p-4 z-50">
-                    <div className="max-w-6xl mx-auto flex items-center justify-between gap-4">
-                        <span className="text-sm text-muted-foreground">
-                            {(t.notebook?.selectedCount || "{count} selected").replace(
-                                "{count}",
-                                selectedIds.size.toString(),
-                            )}
-                        </span>
-                        <div className="flex gap-2">
-                            <Button variant="outline" onClick={toggleSelectMode}>
-                                <X className="mr-2 h-4 w-4" />
+                <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 shadow-lg backdrop-blur px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+                    <div className="max-w-6xl mx-auto space-y-2">
+                        <div className="flex items-center justify-between gap-3 text-xs">
+                            <span className="text-muted-foreground">
+                                已选{" "}
+                                <b className="text-foreground tabular-nums">{selectedIds.size}</b> 道
+                                {selectedIds.size > pageSelected && pageSelected > 0 && (
+                                    <span className="text-slate-400">（本页 {pageSelected}）</span>
+                                )}
+                            </span>
+                            <div className="flex items-center gap-3 text-slate-500">
+                                <button type="button" onClick={selectAllOnPage} className="active:underline">
+                                    全选本页
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setSelectedIds(new Set())}
+                                    className="active:underline"
+                                >
+                                    清空
+                                </button>
+                            </div>
+                        </div>
+                        <div className="flex gap-2 pb-1">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="flex-1"
+                                onClick={toggleSelectMode}
+                            >
+                                <X className="mr-1.5 h-4 w-4" />
                                 {t.notebook?.cancelSelect || "取消"}
                             </Button>
                             <Button
+                                size="sm"
+                                className="flex-1"
+                                onClick={handleExportPrint}
+                                disabled={selectedIds.size === 0}
+                            >
+                                <Printer className="mr-1.5 h-4 w-4" />
+                                {t.notebook?.exportPrint || "导出打印"}
+                            </Button>
+                            <Button
                                 variant="destructive"
+                                size="sm"
+                                className="flex-1"
                                 onClick={handleBatchDelete}
                                 disabled={selectedIds.size === 0 || isDeleting}
                             >
-                                <Trash2 className="mr-2 h-4 w-4" />
+                                <Trash2 className="mr-1.5 h-4 w-4" />
                                 {t.notebook?.deleteSelected || "删除选中"}
                             </Button>
                         </div>
