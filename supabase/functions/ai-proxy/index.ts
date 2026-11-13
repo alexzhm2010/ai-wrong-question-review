@@ -588,7 +588,45 @@ Deno.serve(async (req: Request) => {
         ? candidates.map((c) => `#${c.code} 标准答案：${c.answer || "（未存答案）"}`).join("\n")
         : "（未提供候选题目）";
 
-      const systemPrompt = `你是一名严谨的阅卷老师。输入是学生做完的试卷照片，可能只是整页中的一段（上下被裁切）。
+      /**
+       * 复核模式：首轮对个别题把握不足（置信度低，或两段给出相反判定），
+       * 前端把那一块放大重裁后再送来一次，并指定只判这几道。
+       * 此时 prompt 完全换掉——不再要求「找出所有编号」，
+       * 只要求对着编号逐个转写 + 判定，避免模型又把注意力摊到整段上。
+       */
+      const focusCodes: string[] = Array.isArray(payload.focusCodes)
+        ? payload.focusCodes.map((c: any) => String(c || "").replace(/\D/g, "")).filter((c: string) => c.length >= 6).slice(0, 8)
+        : [];
+
+      const focusList = focusCodes.length
+        ? focusCodes.map((code) => {
+            const hit = candidates.find((c) => c.code === code);
+            return `#${code} 标准答案：${hit?.answer || "（未存答案）"}`;
+          }).join("\n")
+        : "";
+
+      const systemPrompt = focusCodes.length
+        ? `你是一名阅卷老师，正在**复核**试卷局部放大图上少数几道题的判定。上一轮自动识别对这几道题把握不足，请你重新仔细看一遍。
+
+卷面结构：
+- 每道题上方有一行小字编号，格式为 # 加 10 位数字，例如 #2611120174。
+- 编号下方是题目，题目下方有一个虚线方框，学生手写作答写在框里。
+
+本次只需判定下列编号，**每个编号必须输出一条记录，一条不能少**：
+${focusList}
+
+复核要求：
+1. 先用 answer 字段逐字转写虚线框里的手写内容，看不清的单个字符写 "?"，不要凭题意脑补成"应该是的答案"。
+2. 框内确实是空的才用 verdict "blank"；只要看到笔迹就必须给出 correct 或 wrong。
+3. 转写完成后再与标准答案比对：
+   - 选择题选项集合必须完全一致，漏选或多选都判 wrong；只忽略顺序与分隔符。
+   - 数值/表达式化简后等价即算对；解答题结论正确即算对。
+4. 看不清、被笔迹遮挡、或图片模糊 → verdict "wrong"，confidence 不高于 0.3，并在 answer 里写出你实际看到的字符（哪怕是 "?"）。
+5. 不要输出任何解释文字，只输出一个 JSON 数组。
+
+输出格式（严格遵守）：
+[{"code":"2611120174","verdict":"correct","answer":"逐字转写的手写内容","confidence":0.9}]`
+        : `你是一名严谨的阅卷老师。输入是学生做完的试卷照片，可能只是整页中的一段（上下被裁切）。
 
 卷面结构：
 - 每道题上方有一行小字编号，格式为 # 加 10 位数字，例如 #2611120174（前 6 位日期，中间 3 位序号，最后 1 位校验）。
@@ -616,18 +654,25 @@ Deno.serve(async (req: Request) => {
 输出格式（严格遵守）：
 [{"code":"2611120174","verdict":"correct","answer":"学生写的答案","confidence":0.9}]`;
 
-      const userText = `本批候选题目及标准答案：\n${list}\n\n请批改照片中可见的题目。`;
+      const userText = focusCodes.length
+        ? `请只复核这几道题：\n${focusList}\n\n逐个转写作答框内容并给出判定。`
+        : `本批候选题目及标准答案：\n${list}\n\n请批改照片中可见的题目。`;
 
       const text = await chat({
         systemPrompt,
         userText,
         imageBase64,
         mimeType,
-        maxTokens: 900,
+        maxTokens: focusCodes.length ? 700 : 900,
         reasoningMode: "fast",
       });
-      const results = parseGradeResults(text, candidates);
-      return json({ results, model: MODEL });
+      let results = parseGradeResults(text, candidates);
+      // 复核模式只认点名的那几道，防止模型顺手把整段的题都重答一遍
+      if (focusCodes.length) {
+        const want = new Set(focusCodes);
+        results = results.filter((r: any) => want.has(r.code));
+      }
+      return json({ results, model: MODEL, mode: focusCodes.length ? "review" : "scan" });
     }
 
     if (action === "geogebra_analyze") {

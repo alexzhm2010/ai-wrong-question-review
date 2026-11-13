@@ -250,3 +250,51 @@ export async function splitForScan(dataUrl: string, maxWidth = 1600): Promise<Sc
 
     return strips.length ? strips : whole;
 }
+
+/**
+ * 复核用的「放大重裁」：从**原始整页**重新裁出这一段，并按原图宽度重采样，
+ * 而不是拿已经缩到 1600px 的段图去放大——那样只是把糊的字放大成更大的糊字。
+ *
+ * 顺手加一点对比度：学生常用铅笔，拍出来偏灰，模型对低对比度的手写体把握很差。
+ * 任何异常都退回原段图，不阻断复核。
+ */
+export async function zoomCrop(
+    pageDataUrl: string,
+    y0: number,
+    y1: number,
+    opts: { targetWidth?: number; padRatio?: number } = {},
+): Promise<string> {
+    try {
+        const img = await loadImage(pageDataUrl);
+        const sw = img.naturalWidth;
+        const sh = img.naturalHeight;
+        if (!sw || !sh) return pageDataUrl;
+
+        // y1 <= y0 表示这张页根本没切段（整页就是一段），复核就按整页来
+        const hasRange = y1 > y0;
+        const pad = hasRange ? Math.round((y1 - y0) * (opts.padRatio ?? 0.06)) : 0;
+        const sy = hasRange ? Math.max(0, Math.min(sh - 1, y0 - pad)) : 0;
+        const sh2 = hasRange ? Math.max(1, Math.min(sh - sy, y1 - y0 + pad * 2)) : sh;
+
+        const outW = Math.min(sw, Math.max(1200, Math.min(opts.targetWidth ?? 2000, sw)));
+        const outH = Math.max(1, Math.round((sh2 * outW) / sw));
+
+        const canvas = document.createElement("canvas");
+        canvas.width = outW;
+        canvas.height = outH;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return pageDataUrl;
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, outW, outH);
+        // filter 在老浏览器上是空字符串，赋值不生效但也不会报错
+        ctx.filter = "contrast(1.12)";
+        ctx.drawImage(img, 0, sy, sw, sh2, 0, 0, outW, outH);
+        ctx.filter = "none";
+
+        return canvas.toDataURL("image/jpeg", 0.9);
+    } catch {
+        return pageDataUrl;
+    }
+}

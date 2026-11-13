@@ -5,22 +5,18 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { BackButton } from "@/components/ui/back-button";
 import { apiClient } from "@/lib/api-client";
 import { compressImage } from "@/lib/image-utils";
-import { splitForScan } from "@/lib/scan-split";
+import { splitForScan, zoomCrop } from "@/lib/scan-split";
+import { mergeHits, needsReview, planReview, VERDICT_TEXT, type MergedHit, type ScanHit, type Verdict } from "@/lib/scan-merge";
 import { AttemptResult, ErrorItem } from "@/types/api";
 
 const SCAN_KEY = "wq:scan-results";
 /** 同时发几段。段数固定不超过 4，所以基本是一轮发完，墙钟≈最慢那一段 */
 const CONCURRENCY = 4;
-
-type ScanRow = {
-    code: string;
-    matched: boolean;
-    verdict: AttemptResult;
-    studentAnswer: string;
-    confidence: number;
-};
-
-type Row = ScanRow & { id: string; label: string; localChecked?: boolean };
+/** 低于这个置信度的题，会自动放大重读一次 */
+const REVIEW_THRESHOLD = 0.62;
+/** 复核最多重读几段、每段最多几道题：兜底不能变成第二遍全量识别 */
+const REVIEW_MAX_STRIPS = 4;
+const REVIEW_MAX_CODES = 6;
 
 type ScanPhoto = { id: string; dataUrl: string };
 
@@ -29,12 +25,34 @@ type Strip = {
     pageId: string;
     index: number;
     dataUrl: string;
+    /** 源图中的像素范围，复核时按这个范围重新放大裁切 */
+    y0: number;
+    y1: number;
     state: "wait" | "run" | "ok" | "err";
     ms?: number;
     found?: number;
 };
 
-const VERDICT_LABEL: Record<AttemptResult, string> = { correct: "对", wrong: "错", skip: "没做" };
+type Row = MergedHit & {
+    id: string;
+    matched: boolean;
+    label: string;
+    /** 选择题字母集合本地定过，不再依赖模型 */
+    localChecked: boolean;
+    /** 用户手动改过判定 */
+    overridden: boolean;
+    /** 需要人看一眼：冲突或置信度低 */
+    needsReview: boolean;
+};
+
+/** 接口返回的原始行 */
+type ScanRow = {
+    code: string;
+    matched: boolean;
+    verdict: AttemptResult;
+    studentAnswer: string;
+    confidence: number;
+};
 
 /**
  * 选择题本地复核：把「标准答案」和「学生答案」都归一成字母集合再比。
@@ -49,14 +67,25 @@ function localChoiceVerdict(student: string, standard: string): AttemptResult | 
     return [...std].sort().join("") === [...stu].sort().join("") ? "correct" : "wrong";
 }
 
-/** 同一编号可能出现在两段的重叠区，也可能因为重拍出现两次：留置信度高的那条 */
-function mergeRows(prev: Row[], incoming: Row[]): Row[] {
-    const byCode = new Map<string, Row>();
-    for (const r of [...prev, ...incoming]) {
-        const old = byCode.get(r.code);
-        if (!old || r.confidence > old.confidence) byCode.set(r.code, r);
-    }
-    return [...byCode.values()];
+/** 把原始命中合并成页面要显示的行。列表与复核挑题都走这一条路径，避免两套判定 */
+function buildRows(hits: ScanHit[], items: ErrorItem[], overrides: Record<string, Verdict>): Row[] {
+    return mergeHits(hits).map((h) => {
+        const item = items.find((i) => String(i.shortCode || "") === h.code);
+        const local = item ? localChoiceVerdict(h.studentAnswer, String(item.answerText || "")) : null;
+        const overridden = !!overrides[h.code];
+        const verdict = overrides[h.code] ?? local ?? h.verdict;
+        return {
+            ...h,
+            verdict,
+            id: item?.id || "",
+            matched: !!item,
+            localChecked: !!local,
+            overridden,
+            label: item ? `第 ${items.findIndex((i) => i.id === item.id) + 1} 题` : "库里没有",
+            // 手动改过的题不再提示，本地字母定过的也不提示
+            needsReview: overridden ? false : needsReview(h, { localChecked: !!local, threshold: REVIEW_THRESHOLD }),
+        };
+    });
 }
 
 function ScanContent() {
@@ -68,17 +97,25 @@ function ScanContent() {
     const [items, setItems] = useState<ErrorItem[]>([]);
     const [pages, setPages] = useState<ScanPhoto[]>([]);
     const [strips, setStrips] = useState<Strip[]>([]);
-    const [rows, setRows] = useState<Row[]>([]);
+    const [hits, setHits] = useState<ScanHit[]>([]);
+    const [overrides, setOverrides] = useState<Record<string, Verdict>>({});
     const [preparing, setPreparing] = useState(false);
     const [elapsed, setElapsed] = useState<number | null>(null);
     const [error, setError] = useState("");
     const [hint, setHint] = useState("");
+    const [reviewState, setReviewState] = useState<{ running: boolean; done: number; total: number } | null>(null);
+    const [reviewedCount, setReviewedCount] = useState(0);
+    const [onlyTodo, setOnlyTodo] = useState(false);
 
     // 重拍到第 N 张时，前面几张的结果还在路上，序号用来丢弃过期结果
     const seqRef = useRef(0);
     const startedRef = useRef(0);
     const itemsRef = useRef<ErrorItem[]>([]);
     itemsRef.current = items;
+    const hitsRef = useRef<ScanHit[]>([]);
+    const stripsRef = useRef<Strip[]>([]);
+    const pagesRef = useRef<ScanPhoto[]>([]);
+    const reviewedRef = useRef<Set<string>>(new Set());
 
     const idsParam = searchParams.get("ids") || "";
     const ids = useMemo(() => idsParam.split(",").filter(Boolean), [idsParam]);
@@ -96,19 +133,123 @@ function ScanContent() {
             .catch(() => setError("题目加载失败"));
     }, [ids]);
 
-    const toRow = useCallback((r: ScanRow, index: number): Row => {
-        const list = itemsRef.current;
-        const hit = list.find((i) => String(i.shortCode || "") === r.code);
-        // 选择题本地定论优先于模型判断
-        const local = hit ? localChoiceVerdict(r.studentAnswer, String(hit.answerText || "")) : null;
-        return {
-            ...r,
-            verdict: local ?? r.verdict,
-            localChecked: !!local,
-            id: hit?.id || "",
-            label: hit ? `第 ${list.findIndex((i) => i.id === hit.id) + 1} 题` : `未匹配 ${index + 1}`,
-        };
+    const addHits = useCallback((extra: ScanHit[]) => {
+        if (!extra.length) return;
+        hitsRef.current = [...hitsRef.current, ...extra];
+        setHits(hitsRef.current);
     }, []);
+
+    const rows = useMemo(() => buildRows(hits, items, overrides), [hits, items, overrides]);
+
+    /**
+     * 复核：把「把握不足」和「根本没识别出来」的题，从**原始整页**放大重裁后再读一次。
+     *
+     * 两条触发路径，一条靠模型自报置信度，一条不靠：
+     *   1. 置信度低于阈值、或两处结论打架 → 重读那一块；
+     *   2. 这一批里有题整条没出现 → 按它在这批里的位置估出所在段再读。
+     *      实测模型对潦草笔迹会**很自信地**说「空白」，所以光看置信度会漏，
+     *      必须有一条独立于置信度的补漏。
+     *
+     * 两条路径合计最多 4 段、每段 6 道，兜底不能变成第二遍全量识别。
+     */
+    const runReview = useCallback(
+        async (seq: number) => {
+            if (seq !== seqRef.current) return;
+            const current = buildRows(hitsRef.current, itemsRef.current, {});
+
+            // 1) 把握不足的题：用置信度最高的那一段作为重裁来源，它最可能把作答框拍全
+            const uncertain = current
+                .filter((r) => r.matched && !r.localChecked && r.needsReview && !reviewedRef.current.has(r.code))
+                .map((r) => {
+                    const src = [...r.sources]
+                        .filter((s) => s.pass === 1)
+                        .sort((a, b) => b.confidence - a.confidence)[0];
+                    return { code: r.code, stripKey: src?.stripKey ?? null };
+                });
+
+            // 2) 补漏：整条都没出现的题，位置未知，按批内序号估段
+            const seen = new Set(hitsRef.current.map((h) => h.code));
+            const missing = itemsRef.current
+                .map((item, order) => ({ code: String(item.shortCode || ""), order }))
+                .filter((x) => x.code && !seen.has(x.code) && !reviewedRef.current.has(x.code));
+
+            const tasks = planReview({
+                uncertain,
+                missing,
+                strips: stripsRef.current.map((s) => ({ key: s.key })),
+                itemCount: itemsRef.current.length,
+                maxStrips: REVIEW_MAX_STRIPS,
+                maxCodes: REVIEW_MAX_CODES,
+            });
+            const plan = tasks
+                .map((t) => ({ strip: stripsRef.current.find((s) => s.key === t.stripKey), codes: t.codes }))
+                .filter((p): p is { strip: Strip; codes: string[] } => !!p.strip);
+
+            if (!plan.length) return;
+
+            const total = plan.reduce((n, p) => n + p.codes.length, 0);
+            setReviewState({ running: true, done: 0, total });
+            setHint(`二次确认 ${total} 道把握不足或漏掉的题…`);
+
+            const candidates = itemsRef.current
+                .filter((i) => i.shortCode)
+                .map((i) => ({ code: String(i.shortCode), answer: String(i.answerText || "") }));
+
+            let done = 0;
+            const worker = async (slot: { strip: Strip; codes: string[] }) => {
+                for (const code of slot.codes) reviewedRef.current.add(code);
+                try {
+                    const page = pagesRef.current.find((p) => p.id === slot.strip.pageId);
+                    if (!page) return;
+                    const img = await zoomCrop(page.dataUrl, slot.strip.y0, slot.strip.y1);
+                    const res = await apiClient.post<{ results: ScanRow[] }>(
+                        "/api/grade-page",
+                        { imageBase64: img, candidates, focusCodes: slot.codes },
+                        { timeout: 120000 },
+                    );
+                    if (seq !== seqRef.current) return;
+                    const want = new Set(slot.codes);
+                    const second: ScanHit[] = (res.results || [])
+                        .filter((r) => want.has(r.code))
+                        .map((r) => ({
+                            code: r.code,
+                            verdict: r.verdict,
+                            studentAnswer: r.studentAnswer,
+                            confidence: r.confidence,
+                            stripKey: `${slot.strip.key}:r2`,
+                            pageId: slot.strip.pageId,
+                            pass: 2 as const,
+                        }));
+                    addHits(second);
+                    done += slot.codes.length;
+                    setReviewedCount((n) => n + second.length);
+                    setReviewState((prev) => (prev ? { ...prev, done } : prev));
+                } catch {
+                    // 复核失败不影响首轮结果，那几道题就留着「待确认」
+                    done += slot.codes.length;
+                    setReviewState((prev) => (prev ? { ...prev, done } : prev));
+                }
+            };
+
+            // 复核最多 3 段，一次性全发：多等一轮就多 4 秒，而这本来就是兜底
+            const queue = [...plan];
+            await Promise.all(
+                Array.from({ length: queue.length }, async () => {
+                    for (;;) {
+                        const slot = queue.shift();
+                        if (!slot) return;
+                        await worker(slot);
+                    }
+                }),
+            );
+
+            if (seq !== seqRef.current) return;
+            setReviewState(null);
+            setElapsed(Date.now() - startedRef.current);
+            setHint("");
+        },
+        [addHits],
+    );
 
     /** 并发跑一批段，边跑边把结果塞进列表 */
     const runStrips = useCallback(
@@ -137,12 +278,22 @@ function ScanContent() {
                             { timeout: 120000 },
                         );
                         if (seq !== seqRef.current) return;
-                        const mapped = (res.results || []).map((r, i) => toRow(r, i));
-                        setRows((prev) => mergeRows(prev, mapped));
+                        const found = res.results || [];
+                        addHits(
+                            found.map((r) => ({
+                                code: r.code,
+                                verdict: r.verdict,
+                                studentAnswer: r.studentAnswer,
+                                confidence: r.confidence,
+                                stripKey: strip.key,
+                                pageId: strip.pageId,
+                                pass: 1 as const,
+                            })),
+                        );
                         setStrips((prev) =>
                             prev.map((x) =>
                                 x.key === strip.key
-                                    ? { ...x, state: "ok", ms: Math.round(performance.now() - t0), found: mapped.length }
+                                    ? { ...x, state: "ok", ms: Math.round(performance.now() - t0), found: found.length }
                                     : x,
                             ),
                         );
@@ -165,8 +316,9 @@ function ScanContent() {
             if (seq !== seqRef.current) return;
             setElapsed(Date.now() - startedRef.current);
             setHint("");
+            await runReview(seq);
         },
-        [toRow],
+        [addHits, runReview],
     );
 
     /** 选到照片后立刻开始：压缩 → 切段 → 并发识别 */
@@ -192,12 +344,16 @@ function ScanContent() {
                         pageId: page.id,
                         index: i,
                         dataUrl: p.dataUrl,
+                        y0: p.y0,
+                        y1: p.y1,
                         state: "wait",
                     });
                 });
             }
-            setPages((prev) => [...prev, ...fresh]);
-            setStrips((prev) => [...prev, ...freshStrips]);
+            pagesRef.current = [...pagesRef.current, ...fresh];
+            stripsRef.current = [...stripsRef.current, ...freshStrips];
+            setPages(pagesRef.current);
+            setStrips(stripsRef.current);
             setHint(`已切成 ${freshStrips.length} 段，并发识别中…`);
             // 只跑新加的段，之前几页的结果保持不变
             void runStrips(freshStrips, seq);
@@ -209,25 +365,44 @@ function ScanContent() {
         }
     };
 
+    const resetResults = () => {
+        hitsRef.current = [];
+        reviewedRef.current = new Set();
+        setHits([]);
+        setOverrides({});
+        setElapsed(null);
+        setReviewState(null);
+        setReviewedCount(0);
+        setOnlyTodo(false);
+        setError("");
+    };
+
     /** 整批重来：丢弃所有结果，重新切分所有页 */
     const rerunAll = async () => {
-        if (!pages.length) return;
+        if (!pagesRef.current.length) return;
         const seq = ++seqRef.current;
         startedRef.current = Date.now();
-        setRows([]);
-        setElapsed(null);
-        setError("");
+        resetResults();
         setStrips([]);
         setPreparing(true);
         setHint("重新切分…");
         try {
             const next: Strip[] = [];
-            for (const page of pages) {
+            for (const page of pagesRef.current) {
                 const parts = await splitForScan(page.dataUrl);
                 parts.forEach((p, i) => {
-                    next.push({ key: `${page.id}-${Date.now()}-${i}`, pageId: page.id, index: i, dataUrl: p.dataUrl, state: "wait" });
+                    next.push({
+                        key: `${page.id}-${Date.now()}-${i}`,
+                        pageId: page.id,
+                        index: i,
+                        dataUrl: p.dataUrl,
+                        y0: p.y0,
+                        y1: p.y1,
+                        state: "wait",
+                    });
                 });
             }
+            stripsRef.current = next;
             setStrips(next);
             setPreparing(false);
             setHint(`已切成 ${next.length} 段，并发识别中…`);
@@ -240,10 +415,11 @@ function ScanContent() {
 
     const removePage = (id: string) => {
         seqRef.current++;
-        setPages((prev) => prev.filter((p) => p.id !== id));
-        setStrips((prev) => prev.filter((s) => s.pageId !== id));
-        setRows([]);
-        setElapsed(null);
+        pagesRef.current = pagesRef.current.filter((p) => p.id !== id);
+        stripsRef.current = stripsRef.current.filter((s) => s.pageId !== id);
+        setPages(pagesRef.current);
+        setStrips(stripsRef.current);
+        resetResults();
         setHint("");
     };
 
@@ -264,10 +440,12 @@ function ScanContent() {
         router.push(`/grade?ids=${items.map((i) => i.id).join(",")}`);
     };
 
-    const running = strips.some((s) => s.state === "run" || s.state === "wait");
+    const running = strips.some((s) => s.state === "run" || s.state === "wait") || !!reviewState?.running;
     const okStrips = strips.filter((s) => s.state === "ok").length;
     const errStrips = strips.filter((s) => s.state === "err").length;
-    const highConf = rows.filter((r) => r.matched && r.confidence >= 0.6).length;
+    const highConf = rows.filter((r) => r.matched && r.confidence >= REVIEW_THRESHOLD).length;
+    const todo = rows.filter((r) => r.needsReview);
+    const conflictCount = rows.filter((r) => r.conflict && !r.overridden).length;
 
     /**
      * 这批卷子里还没被识别出来的题。多半是作答框空白（模型容易整条跳过），
@@ -279,16 +457,16 @@ function ScanContent() {
     }, [items, rows]);
 
     const markMissingAsSkip = () => {
-        const add: Row[] = missing.map((i) => ({
+        const add: ScanHit[] = missing.map((i) => ({
             code: String(i.shortCode),
-            matched: true,
             verdict: "skip",
             studentAnswer: "",
             confidence: 1,
-            id: i.id,
-            label: `第 ${items.findIndex((x) => x.id === i.id) + 1} 题`,
+            stripKey: "manual",
+            pageId: "manual",
+            pass: 1,
         }));
-        setRows((prev) => mergeRows(prev, add));
+        addHits(add);
     };
 
     const orderOf = useCallback(
@@ -298,10 +476,24 @@ function ScanContent() {
         },
         [items],
     );
-    const sortedRows = useMemo(
-        () => [...rows].sort((a, b) => orderOf(a.code) - orderOf(b.code)),
-        [rows, orderOf],
-    );
+    const sortedRows = useMemo(() => {
+        const list = onlyTodo ? rows.filter((r) => r.needsReview) : rows;
+        return [...list].sort((a, b) => orderOf(a.code) - orderOf(b.code));
+    }, [rows, onlyTodo, orderOf]);
+
+    const setVerdict = (code: string, v: Verdict) =>
+        setOverrides((prev) => ({ ...prev, [code]: v }));
+
+    /**
+     * 标准答案也要摆出来。模型读错一个字母（D 读成 B）时置信度照样很高，
+     * 只有把「学生写 B / 标准 D」并排放，人才一眼看得出是误读还是真错。
+     */
+    const standardOf = (code: string) => {
+        const item = items.find((i) => String(i.shortCode || "") === code);
+        const ans = (item?.answerText || "").replace(/\s+/g, " ").trim();
+        if (!ans) return "";
+        return ans.length > 60 ? `${ans.slice(0, 60)}…` : ans;
+    };
 
     return (
         <div className="min-h-screen bg-slate-50 pb-28">
@@ -429,6 +621,7 @@ function ScanContent() {
                                     {okStrips}/{strips.length} 段
                                     {errStrips > 0 ? ` · ${errStrips} 段失败` : ""}
                                     {elapsed ? ` · 用时 ${(elapsed / 1000).toFixed(1)} 秒` : ""}
+                                    {reviewState?.running ? ` · 复核 ${reviewState.done}/${reviewState.total}` : ""}
                                 </span>
                             </div>
                         )}
@@ -443,19 +636,36 @@ function ScanContent() {
 
                 {!running && rows.length > 0 && (
                     <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
-                        识别到 {rows.length} 道题，其中 {highConf} 道高置信；
-                        识别不到的可以手动补，或直接在批改页点。
+                        识别到 {rows.length} 道题，{highConf} 道高置信
+                        {reviewedCount > 0 ? ` · 复核过 ${reviewedCount} 道` : ""}
+                        {conflictCount > 0 ? ` · ${conflictCount} 道两次判定不一致` : ""}
+                    </div>
+                )}
+
+                {/* 待确认清单：低置信 + 冲突，一条条走完比事后在批改页发现错判省事 */}
+                {!running && todo.length > 0 && (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 flex items-center gap-2">
+                        <span className="flex-1 leading-relaxed">
+                            {todo.length} 道需要你确认
+                            {conflictCount > 0 ? `（${conflictCount} 道两次识别结论相反）` : "（识别把握不足）"}
+                        </span>
+                        <button
+                            onClick={() => setOnlyTodo((v) => !v)}
+                            className="shrink-0 rounded border border-amber-300 bg-white px-2 py-1 font-semibold"
+                        >
+                            {onlyTodo ? "看全部" : "只看这些"}
+                        </button>
                     </div>
                 )}
 
                 {!running && rows.length > 0 && missing.length > 0 && (
-                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 flex items-center gap-2">
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 flex items-center gap-2">
                         <span className="flex-1 leading-relaxed">
                             还有 {missing.length} 道没识别到：多半是作答框空白，也可能这页没拍到
                         </span>
                         <button
                             onClick={markMissingAsSkip}
-                            className="shrink-0 rounded border border-amber-300 bg-white px-2 py-1 font-semibold"
+                            className="shrink-0 rounded border border-slate-300 bg-white px-2 py-1 font-semibold"
                         >
                             标为没做
                         </button>
@@ -468,8 +678,13 @@ function ScanContent() {
                             逐条核对，判定错了直接点按钮改，改完应用
                         </div>
                         {sortedRows.map((r, index) => (
-                            <div key={`${r.code}-${index}`} className="rounded-lg border bg-white p-2.5">
-                                <div className="flex items-center gap-2">
+                            <div
+                                key={`${r.code}-${index}`}
+                                className={`rounded-lg border bg-white p-2.5 ${
+                                    r.needsReview ? "border-amber-300" : ""
+                                }`}
+                            >
+                                <div className="flex items-center gap-2 flex-wrap">
                                     <span className="font-mono text-[10px] text-slate-400">#{r.code}</span>
                                     <span className="text-xs font-semibold">{r.label}</span>
                                     {!r.matched && (
@@ -482,22 +697,54 @@ function ScanContent() {
                                             选择题核对
                                         </span>
                                     )}
-                                    <span className={`ml-auto text-[10px] ${r.confidence >= 0.6 ? "text-slate-400" : "text-amber-600"}`}>
+                                    {r.multiPage && (
+                                        <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-600">
+                                            两页都有
+                                        </span>
+                                    )}
+                                    {r.corrected && (
+                                        <span className="rounded bg-orange-100 px-1.5 py-0.5 text-[10px] text-orange-700">
+                                            复核改判
+                                        </span>
+                                    )}
+                                    {r.verified && !r.conflict && (
+                                        <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700">
+                                            复核一致
+                                        </span>
+                                    )}
+                                    {r.reviewedBlank && (
+                                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">
+                                            复核确认空白
+                                        </span>
+                                    )}
+                                    {r.needsReview && (
+                                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                                            待确认
+                                        </span>
+                                    )}
+                                    <span className={`ml-auto text-[10px] ${r.confidence >= REVIEW_THRESHOLD ? "text-slate-400" : "text-amber-600"}`}>
                                         置信 {Math.round(r.confidence * 100)}%
+                                        {r.sources.length > 1 ? ` · ${r.sources.length} 处看到` : ""}
                                     </span>
                                 </div>
+                                {r.conflict && !r.overridden && (
+                                    <p className="mt-1 text-[11px] text-red-600">
+                                        两处识别结论相反（
+                                        {[...new Set(r.sources.map((s) => VERDICT_TEXT[s.verdict]))].join(" / ")}
+                                        ），请看一眼卷面再定
+                                    </p>
+                                )}
                                 {r.studentAnswer && (
                                     <p className="mt-1 text-xs text-slate-600 line-clamp-2">学生写：{r.studentAnswer}</p>
                                 )}
+                                {standardOf(r.code) && (
+                                    <p className="mt-0.5 text-[11px] text-slate-400 line-clamp-1">标准：{standardOf(r.code)}</p>
+                                )}
                                 <div className="mt-1.5 flex gap-1.5">
-                                    {(["correct", "wrong", "skip"] as AttemptResult[]).map((v) => (
+                                    {(["correct", "wrong", "skip"] as Verdict[]).map((v) => (
                                         <button
                                             key={v}
-                                            onClick={() =>
-                                                setRows((prev) =>
-                                                    prev.map((x) => (x.code === r.code ? { ...x, verdict: v } : x)),
-                                                )
-                                            }
+                                            onClick={() => setVerdict(r.code, v)}
                                             className={`flex-1 rounded-md border py-1.5 text-xs font-semibold ${
                                                 r.verdict === v
                                                     ? v === "correct"
@@ -508,7 +755,7 @@ function ScanContent() {
                                                     : "bg-white text-slate-600"
                                             }`}
                                         >
-                                            {VERDICT_LABEL[v]}
+                                            {VERDICT_TEXT[v]}
                                         </button>
                                     ))}
                                 </div>
@@ -523,6 +770,7 @@ function ScanContent() {
                     <div className="max-w-3xl mx-auto flex gap-2">
                         <div className="flex-1 text-xs text-slate-500 self-center">
                             可用 {rows.filter((r) => r.id).length} / {rows.length} 条
+                            {todo.length > 0 ? ` · ${todo.length} 道待确认` : ""}
                         </div>
                         <button
                             onClick={apply}

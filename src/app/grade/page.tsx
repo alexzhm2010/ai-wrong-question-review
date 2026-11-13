@@ -8,6 +8,51 @@ import { apiClient } from "@/lib/api-client";
 import { AttemptResult, ErrorItem } from "@/types/api";
 
 const LAST_PRINT_KEY = "wq:last-print";
+const HISTORY_KEY = "wq:grade-history";
+
+type Summary = { at: number; correct: number; wrong: number; skip: number };
+
+/** 上一次批改的汇总：用来算「比上次高/低多少」 */
+function readLastSummary(): Summary | null {
+    try {
+        const raw = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+        if (!Array.isArray(raw) || !raw.length) return null;
+        const last = raw[raw.length - 1];
+        if (typeof last?.correct !== "number") return null;
+        return { at: Number(last.at) || 0, correct: last.correct, wrong: last.wrong, skip: last.skip || 0 };
+    } catch {
+        return null;
+    }
+}
+
+function pushSummary(s: Omit<Summary, "at">) {
+    try {
+        const raw = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+        const list: Summary[] = Array.isArray(raw) ? raw.slice(-19) : [];
+        list.push({ ...s, at: Date.now() });
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(list));
+    } catch {
+        /* 隐私模式下不记，不影响批改 */
+    }
+}
+
+/** 得分率只算「做了的题」：没做既不算对也不算错，否则做一半的卷子永远是低分 */
+function rateOf(s: { correct: number; wrong: number }): number {
+    const total = s.correct + s.wrong;
+    return total ? Math.round((s.correct / total) * 100) : 0;
+}
+
+/** 知识点字段是 JSON 数组字符串，个别历史数据是逗号串，两种都吃 */
+function parsePoints(raw?: string | null): string[] {
+    if (!raw) return [];
+    try {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) return arr.map(String).filter(Boolean);
+    } catch {
+        /* 落到下面的分隔符解析 */
+    }
+    return raw.split(/[,，、;；]/).map((s) => s.trim()).filter(Boolean);
+}
 
 /** 读出上一次打印的题目 id：优先 URL，其次本地记录 */
 function resolveIds(fromUrl: string | null): string[] {
@@ -38,6 +83,7 @@ function GradeContent() {
     const [cur, setCur] = useState(0);
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState<{ correct: number; wrong: number; skip: number } | null>(null);
+    const [prevSummary, setPrevSummary] = useState<Summary | null>(null);
     const [showAnswer, setShowAnswer] = useState(false);
     const [preFilled, setPreFilled] = useState(0);
 
@@ -121,6 +167,8 @@ function GradeContent() {
         try {
             const payload = Object.entries(results).map(([id, result]) => ({ id, result }));
             await apiClient.post<{ success: boolean; updated: number }>("/api/error-items/attempt-batch", { items: payload });
+            setPrevSummary(readLastSummary());
+            pushSummary(stats);
             setSaved(stats);
             try { localStorage.removeItem(LAST_PRINT_KEY); } catch { /* 忽略 */ }
         } catch (e) {
@@ -129,6 +177,22 @@ function GradeContent() {
             setSaving(false);
         }
     };
+
+    /** 本次做错的题：完成页「重做这批错题」直接用 */
+    const wrongIds = useMemo(
+        () => items.filter((i) => results[i.id] === "wrong").map((i) => i.id),
+        [items, results],
+    );
+
+    /** 本次错题砸在哪些知识点上，按出现次数排 */
+    const weakPoints = useMemo(() => {
+        const counter = new Map<string, number>();
+        for (const it of items) {
+            if (results[it.id] !== "wrong") continue;
+            for (const p of parsePoints(it.knowledgePoints)) counter.set(p, (counter.get(p) ?? 0) + 1);
+        }
+        return [...counter.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+    }, [items, results]);
 
     if (loading) {
         return <div className="min-h-screen flex items-center justify-center text-muted-foreground">加载中…</div>;
@@ -153,14 +217,41 @@ function GradeContent() {
 
     if (saved) {
         const total = saved.correct + saved.wrong;
-        const rate = total ? Math.round((saved.correct / total) * 100) : 0;
+        const rate = rateOf(saved);
+        const prevRate = prevSummary ? rateOf(prevSummary) : null;
+        const delta = prevRate === null ? null : rate - prevRate;
         return (
             <div className="min-h-screen">
                 <div className="sticky top-0 z-10 bg-background/95 backdrop-blur border-b px-3 py-2 flex items-center gap-3">
                     <BackButton fallbackUrl="/notebooks" />
                     <span className="font-bold">批改完成</span>
                 </div>
-                <div className="max-w-lg mx-auto px-5 py-10 space-y-6">
+                <div className="max-w-lg mx-auto px-5 py-6 space-y-5">
+                    {/* 本次卷面得分率 */}
+                    <div className="rounded-2xl border bg-white px-5 py-5 text-center">
+                        <div className="text-xs text-muted-foreground">本次卷面得分率</div>
+                        <div className="mt-1 flex items-end justify-center gap-1">
+                            <span className={`text-5xl font-bold leading-none ${
+                                rate >= 80 ? "text-green-600" : rate >= 60 ? "text-amber-600" : "text-red-600"
+                            }`}>
+                                {rate}
+                            </span>
+                            <span className="text-lg text-muted-foreground pb-1">%</span>
+                        </div>
+                        <div className="mt-1.5 text-xs text-muted-foreground">
+                            {saved.correct}/{total} 道做了的题
+                            {saved.skip > 0 ? ` · ${saved.skip} 道没做未计入` : ""}
+                        </div>
+                        {delta !== null && (
+                            <div className={`mt-2 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${
+                                delta > 0 ? "bg-green-50 text-green-700" : delta < 0 ? "bg-red-50 text-red-700" : "bg-slate-100 text-slate-600"
+                            }`}>
+                                {delta > 0 ? `↑ 比上次高 ${delta} 分` : delta < 0 ? `↓ 比上次低 ${-delta} 分` : "和上次持平"}
+                                <span className="font-normal opacity-70">（上次 {prevRate}%）</span>
+                            </div>
+                        )}
+                    </div>
+
                     <div className="grid grid-cols-3 gap-2 text-center">
                         <div className="rounded-lg border border-green-200 bg-green-50 py-3">
                             <div className="text-2xl font-bold text-green-700">{saved.correct}</div>
@@ -175,10 +266,32 @@ function GradeContent() {
                             <div className="text-xs text-slate-500 mt-0.5">没做</div>
                         </div>
                     </div>
-                    <p className="text-center text-sm text-muted-foreground">
-                        本次正确率 {rate}%（{saved.correct}/{total}）· 已经写回每道题的记录
-                    </p>
+
+                    {weakPoints.length > 0 && (
+                        <div className="rounded-xl border bg-white px-4 py-3">
+                            <div className="text-xs text-muted-foreground">这次错在</div>
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                                {weakPoints.map(([name, n]) => (
+                                    <span key={name} className="rounded-full bg-red-50 px-2.5 py-1 text-[11px] text-red-700">
+                                        {name}
+                                        {n > 1 ? ` ×${n}` : ""}
+                                    </span>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    <p className="text-center text-xs text-muted-foreground">已写回每道题的作答记录</p>
+
                     <div className="space-y-2">
+                        {wrongIds.length > 0 && (
+                            <Link
+                                href={`/print-preview?ids=${wrongIds.join(",")}`}
+                                className="block w-full text-center rounded-lg bg-red-600 text-white py-3 text-sm font-semibold"
+                            >
+                                重做这 {wrongIds.length} 道错题
+                            </Link>
+                        )}
                         <Link href="/print-preview" className="block w-full text-center rounded-lg bg-slate-900 text-white py-3 text-sm font-semibold">
                             再打印一批
                         </Link>
@@ -208,6 +321,7 @@ function GradeContent() {
                     <div className="font-bold leading-tight">批改</div>
                     <div className="text-[11px] text-muted-foreground">
                         {cur + 1} / {items.length} · 已标 {markedCount} 道{unanswered > 0 ? ` · 还剩 ${unanswered}` : " · 可以保存了"}
+                        {stats.correct + stats.wrong > 0 ? ` · 得分率 ${rateOf(stats)}%` : ""}
                         {preFilled > 0 ? ` · 扫描预填 ${preFilled}` : ""}
                     </div>
                 </div>
@@ -219,8 +333,11 @@ function GradeContent() {
                 </Link>
             </div>
 
-            <div className="h-0.5 bg-slate-200 shrink-0">
-                <div className="h-full bg-blue-600 transition-all" style={{ width: `${(markedCount / items.length) * 100}%` }} />
+            {/* 对错比例条：比单一进度条更能一眼看出这份卷子做得怎么样 */}
+            <div className="h-1 bg-slate-200 shrink-0 flex">
+                <div className="h-full bg-green-500 transition-all" style={{ width: `${(stats.correct / items.length) * 100}%` }} />
+                <div className="h-full bg-red-500 transition-all" style={{ width: `${(stats.wrong / items.length) * 100}%` }} />
+                <div className="h-full bg-slate-400 transition-all" style={{ width: `${(stats.skip / items.length) * 100}%` }} />
             </div>
 
             {/* 题目图 */}
