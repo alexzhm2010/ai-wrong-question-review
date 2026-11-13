@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+    printFileName,
     getPrintPreviewCountLabel,
     getPrintPreviewEmptyState,
     getSelectedPrintItems,
@@ -35,5 +36,31 @@ describe('print preview helpers', () => {
         expect(getPrintPreviewEmptyState(0, 0)).toBe('noItems');
         expect(getPrintPreviewEmptyState(88, 0)).toBe('noSelection');
         expect(getPrintPreviewEmptyState(88, 2)).toBeNull();
+    });
+});
+
+describe('打印文件名', () => {
+    const at = new Date(2026, 10, 13, 20, 10, 33); // 2026-11-13 20:10:33
+
+    it('错题本名 + 年月日时分秒', () => {
+        expect(printFileName(['高二数学'], at)).toBe('高二数学_20261113_201033');
+    });
+
+    it('清掉文件名非法字符，空格换下划线', () => {
+        expect(printFileName(['高二/数学: 必修*?'], at)).toBe('高二数学_必修_20261113_201033');
+    });
+
+    it('多个学科收敛成「主学科等N科」，同名去重', () => {
+        expect(printFileName(['数学', '物理'], at)).toBe('数学等2科_20261113_201033');
+        expect(printFileName(['数学', '数学', '物理'], at)).toBe('数学等2科_20261113_201033');
+    });
+
+    it('拿不到学科时退回通用名', () => {
+        expect(printFileName([], at)).toBe('错题本_20261113_201033');
+        expect(printFileName(['', '  '], at)).toBe('错题本_20261113_201033');
+    });
+
+    it('超长学科名截断到 120 字，不产生非法长文件名', () => {
+        expect(printFileName(['数'.repeat(300)], at).length).toBe(120);
     });
 });

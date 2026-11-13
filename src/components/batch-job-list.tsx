@@ -5,9 +5,10 @@ import { useRouter } from "next/navigation";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { apiClient } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
-import { Loader2, AlertTriangle, CheckCircle2, PauseCircle, Clock } from "lucide-react";
+import { openBatch } from "@/lib/batch-nav";
+import { Loader2, AlertTriangle, CheckCircle2, PauseCircle, Clock, ImagePlus } from "lucide-react";
 
-export type JobStatus = "queued" | "processing" | "confirming" | "paused" | "done" | "canceled";
+export type JobStatus = "draft" | "queued" | "processing" | "confirming" | "paused" | "done" | "canceled";
 
 export interface BatchJobRow {
     id: string;
@@ -35,6 +36,7 @@ interface Props {
 
 function statusMeta(status: JobStatus, b: any) {
     switch (status) {
+        case "draft": return { label: b.draft || "待检查", cls: "bg-sky-500/10 text-sky-600 dark:text-sky-400" };
         case "queued": return { label: b.queued, cls: "bg-muted text-muted-foreground" };
         case "processing": return { label: b.processing, cls: "bg-blue-500/10 text-blue-600 dark:text-blue-400" };
         case "confirming": return { label: b.confirming, cls: "bg-amber-500/10 text-amber-600 dark:text-amber-400" };
@@ -135,6 +137,8 @@ export function BatchJobList({ jobs: external, onOpen, limit, className }: Props
     }
 
     const groups: { key: string; title: string; icon: typeof Clock; items: BatchJobRow[] }[] = [
+        // 草稿是唯一「必须由用户动手才能往下走」的状态，排最前面
+        { key: "draft", title: "待检查的批次", icon: ImagePlus, items: jobs.filter((j) => j.status === "draft") },
         { key: "paused", title: b.paused, icon: PauseCircle, items: jobs.filter((j) => j.status === "paused") },
         { key: "confirming", title: b.confirming, icon: AlertTriangle, items: jobs.filter((j) => j.status === "confirming") },
         {
@@ -152,7 +156,7 @@ export function BatchJobList({ jobs: external, onOpen, limit, className }: Props
     ].filter((g) => g.items.length);
 
     const shown = limit ? groups.slice(0, 3) : groups;
-    const open = onOpen || ((id: string) => router.push(`/batch?id=${id}`));
+    const open = onOpen || ((id: string) => openBatch(id));
 
     return (
         <div className={cn("space-y-4", className)}>

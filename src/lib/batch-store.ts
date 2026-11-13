@@ -14,12 +14,12 @@ import { apiClient } from "@/lib/api-client";
 
 export interface ActiveBatch {
     id: string;
-    status: "queued" | "processing" | "confirming" | "paused";
+    status: "draft" | "queued" | "processing" | "confirming" | "paused";
     totalCount: number;
     failedCount: number;
     reasoningMode: "fast" | "deep";
     createdAt: string;
-    counts: { total: number; done: number; failed: number; saved: number };
+    counts: { total: number; done: number; failed: number; saved: number; edited?: number };
 }
 
 let jobs: ActiveBatch[] | undefined = undefined; // undefined = 尚未加载
@@ -93,6 +93,6 @@ export function useActiveBatch(): ActiveBatch | null | undefined {
     const list = useActiveBatches();
     if (!list.length) return null;
     const weight = (s: ActiveBatch["status"]) =>
-        s === "paused" ? 0 : s === "confirming" ? 1 : s === "processing" ? 2 : 3;
+        s === "draft" ? 0 : s === "paused" ? 1 : s === "confirming" ? 2 : s === "processing" ? 3 : 4;
     return [...list].sort((a, b) => weight(a.status) - weight(b.status))[0];
 }

@@ -10,7 +10,8 @@ import { apiClient } from "@/lib/api-client";
 import { ErrorItem, PaginatedResponse } from "@/types/api";
 import { PRINT_PREVIEW_PAGE_SIZE } from "@/lib/constants/pagination";
 import { autoCrop } from "@/lib/image-autocrop";
-import { PRINT_PAYLOAD_KEY } from "@/lib/print-preview";
+import { PRINT_PAYLOAD_KEY, printFileName } from "@/lib/print-preview";
+import { imageSrc } from "@/lib/storage";
 
 type SpaceKey = "none" | "sm" | "md" | "lg";
 
@@ -302,7 +303,7 @@ function PrintPreviewContent() {
                 const url = item?.originalImageUrl;
                 if (!url || cropJobs.current.has(id) || cropInflight.current.has(id)) continue;
                 cropInflight.current.add(id);
-                const res = await autoCrop(url, 1200).catch(() => null);
+                const res = await autoCrop(imageSrc(url), 1200).catch(() => null);
                 cropInflight.current.delete(id);
                 if (!res) continue;
                 if (res.changed) {
@@ -333,13 +334,27 @@ function PrintPreviewContent() {
             /* 隐私模式下写不进去，不影响打印 */
         }
 
+        /*
+         * 「另存为 PDF」的默认文件名取的是 document.title。
+         * 打印前临时换成「错题本名_年月日时分秒」，打完（afterprint）恢复，
+         * 否则从打印页返回后标签页标题会一直是文件名。
+         */
+        const prevTitle = document.title;
+        const restoreTitle = () => {
+            document.title = prevTitle;
+        };
+        document.title = printFileName(orderedItems.map((i) => i.subject?.name || ""));
+        window.addEventListener("afterprint", restoreTitle, { once: true });
+        // 少数内嵌浏览器不派发 afterprint，兜一层定时恢复，避免标题永久被改
+        setTimeout(restoreTitle, 15000);
+
         if (autoCropOn && orderedItems.length) {
             setPreparing(true);
             const targets = orderedItems.filter((i) => i.originalImageUrl).slice(0, 60);
             try {
                 const results = await Promise.all(
                     targets.map((i) =>
-                        autoCrop(i.originalImageUrl as string, 1200)
+                        autoCrop(imageSrc(i.originalImageUrl as string), 1200)
                             .then((r) => [i.id, r.changed ? r.url : ""] as const)
                             .catch(() => [i.id, ""] as const),
                     ),
@@ -549,7 +564,7 @@ function PrintPreviewContent() {
                                         <MarkdownRenderer content={item.questionText} />
                                     ) : item.originalImageUrl ? (
                                         <img
-                                            src={printCrops[item.id] || item.originalImageUrl}
+                                            src={imageSrc(printCrops[item.id] || item.originalImageUrl)}
                                             alt="题目"
                                             className="h-auto border rounded"
                                             style={{ maxWidth: `${imageScale}%` }}

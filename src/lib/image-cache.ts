@@ -10,6 +10,8 @@
  * IndexedDB 不可用（无痕模式、部分 WebView）时退化为内存 Map，功能不受影响。
  */
 
+import { imageSrc } from "./storage";
+
 const DB_NAME = "wq-thumbs";
 const DB_VERSION = 1;
 const STORE = "thumbs";
@@ -253,7 +255,8 @@ export async function ensureThumb(
             const detail = await fetcher();
             const raw = detail?.originalImageUrl;
             if (!raw) return null;
-            const thumb = await makeThumb(raw);
+            // 引用可能是 data URL，也可能是对象存储 key —— 统一在这里转成能加载的地址
+            const thumb = await makeThumb(imageSrc(raw));
             memThumbs.set(id, { url: thumb, sig });
             scheduleWrite({ id, url: thumb, sig, at: Date.now() });
             return thumb;
@@ -323,8 +326,9 @@ export async function ensureFullImage(
             const detail = await fetcher();
             const raw = detail?.originalImageUrl || "";
             if (!raw) return null;
-            rememberFull(id, raw);
-            return raw;
+            const src = imageSrc(raw);
+            rememberFull(id, src);
+            return src;
         } catch {
             return null;
         }

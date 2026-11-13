@@ -1,7 +1,7 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -13,15 +13,33 @@ import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { BatchJobList } from "@/components/batch-job-list";
 import { refreshActiveBatch } from "@/lib/batch-store";
-import { CorrectionEditor } from "@/components/correction-editor";
+import { draftDaysLeft } from "@/lib/batch-draft";
+import { backToBatch, openBatch, readOpenBatch } from "@/lib/batch-nav";
 import type { ParsedQuestion } from "@/lib/ai";
+
 import {
     AlertTriangle, ArrowLeft, CheckCircle2, Clock, ImagePlus, Loader2,
     PauseCircle, RefreshCw, Trash2, XCircle,
 } from "lucide-react";
+import dynamic from "next/dynamic";
+import { imageSrc } from "@/lib/storage";
 
-type JobStatus = "queued" | "processing" | "confirming" | "paused" | "done" | "canceled";
-type ItemStatus = "pending" | "processing" | "done" | "failed" | "saved";
+/*
+ * 这两个弹层是页面里最重的两块：编辑器带 react-image-crop + 画布逻辑，
+ * 校对器带 AI 结果渲染。它们只在点「编辑/继续检查」时才需要，
+ * 静态引入会让「打开批次列表」也背上这几十 KB，冷启动多拉好几个分片。
+ */
+const BatchDraftEditor = dynamic(
+    () => import("@/components/batch-draft-editor").then((m) => m.BatchDraftEditor),
+    { ssr: false },
+);
+const CorrectionEditor = dynamic(
+    () => import("@/components/correction-editor").then((m) => m.CorrectionEditor),
+    { ssr: false },
+);
+
+type JobStatus = "draft" | "queued" | "processing" | "confirming" | "paused" | "done" | "canceled";
+type ItemStatus = "pending" | "edited" | "processing" | "done" | "failed" | "saved";
 
 interface BatchJob {
     id: string;
@@ -36,6 +54,8 @@ interface BatchJob {
     finishedAt?: string | null;
     errorMessage?: string | null;
     createdAt: string;
+    /** 草稿的「最后一次动过」时间，用来算自动清理还剩几天 */
+    updatedAt?: string | null;
 }
 
 interface BatchItem {
@@ -84,6 +104,7 @@ function formatDuration(sec: number): string {
 
 function statusMeta(status: JobStatus, b: any) {
     switch (status) {
+        case "draft": return { label: "待检查", cls: "bg-sky-500/10 text-sky-600 dark:text-sky-400" };
         case "queued": return { label: b.queued, cls: "bg-muted text-muted-foreground" };
         case "processing": return { label: b.processing, cls: "bg-blue-500/10 text-blue-600 dark:text-blue-400" };
         case "confirming": return { label: b.confirming, cls: "bg-amber-500/10 text-amber-600 dark:text-amber-400" };
@@ -128,16 +149,18 @@ function BatchDetail({ jobId }: { jobId: string }) {
     const [editing, setEditing] = useState<BatchItem | null>(null);
     // 校对时展示的原图：先用 240px 缩略图占位，随后替换为按需拉取的清晰原图
     const [editingImage, setEditingImage] = useState<string | null>(null);
+    /** 草稿态：打开逐张检查队列 */
+    const [draftOpen, setDraftOpen] = useState(false);
 
     const openEditor = (item: BatchItem) => {
         setEditing(item);
-        setEditingImage(item.thumbBase64 ? `data:image/jpeg;base64,${item.thumbBase64}` : null);
+        setEditingImage(item.thumbBase64 ? imageSrc(item.thumbBase64) : null);
         // 详情接口不返回原图（避免一次拉几十 MB），点开这一条时单独取；
         // 不依赖 hasImage 判断，取不到就继续用缩略图占位。
         void apiClient
             .get<{ imageBase64: string }>("/api/batch/item-image", { params: { itemId: item.id } })
             .then((res) => {
-                if (res?.imageBase64) setEditingImage(`data:image/jpeg;base64,${res.imageBase64}`);
+                if (res?.imageBase64) setEditingImage(imageSrc(res.imageBase64));
             })
             .catch(() => {
                 /* 拉取失败就保留缩略图，至少不影响改题 */
@@ -330,6 +353,18 @@ function BatchDetail({ jobId }: { jobId: string }) {
         }
     };
 
+    /** 丢弃草稿：连已上传的原图一起删（BatchItem 级联），删完回列表 */
+    const discardDraftJob = async () => {
+        if (!window.confirm("丢弃这批？已上传的图片会一起删掉，不能恢复。")) return;
+        try {
+            await apiClient.post("/api/batch/dismiss", { jobId }, { timeout: 30000 });
+            refreshActiveBatch();
+            backToBatch();
+        } catch (e: any) {
+            toast.error(e?.message || t.common.error);
+        }
+    };
+
     const editSave = async (data: ParsedQuestion & { subjectId?: string; gradeSemester?: string; userGuidance?: string }) => {
         if (!editing) return;
         const willSave = editing.status !== "saved";
@@ -394,7 +429,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
         return (
             <div className="mx-auto max-w-3xl p-6 text-center">
                 <p className="text-sm text-muted-foreground">{b.empty}</p>
-                <Button className="mt-3" variant="outline" onClick={() => router.push("/batch")}>{b.tab}</Button>
+                <Button className="mt-3" variant="outline" onClick={backToBatch}>{b.tab}</Button>
             </div>
         );
     }
@@ -406,7 +441,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
         <div className="mx-auto w-full max-w-4xl pb-24">
             <div className="sticky top-0 z-10 space-y-2 border-b bg-background/95 p-3 backdrop-blur sm:p-4">
                 <div className="flex items-center gap-2">
-                    <Link href="/batch"><Button variant="ghost" size="icon"><ArrowLeft className="h-5 w-5" /></Button></Link>
+                    <Button variant="ghost" size="icon" onClick={backToBatch}><ArrowLeft className="h-5 w-5" /></Button>
                     <h1 className="min-w-0 flex-1 truncate text-base font-semibold sm:text-lg">
                         {b.tab} · {new Date(job.createdAt).toLocaleDateString()}
                     </h1>
@@ -430,6 +465,34 @@ function BatchDetail({ jobId }: { jobId: string }) {
                     <span>{job.reasoningMode === "deep" ? b.deep : b.fast}</span>
                 </div>
 
+                {job.status === "draft" && (
+                    <div className="rounded-md border border-sky-500/40 bg-sky-500/10 px-2.5 py-2 text-xs text-sky-700 dark:text-sky-300">
+                        <div className="flex items-start gap-2">
+                            <ImagePlus className="mt-0.5 h-4 w-4 shrink-0" />
+                            <p className="min-w-0 flex-1 leading-relaxed">
+                                图片已存进这个任务，还没开始解析。可以先逐张裁边、抹掉批改痕迹，也可以直接开始。
+                                <span className="ml-1 opacity-70">
+                                    {draftDaysLeft(job.updatedAt) > 0
+                                        ? `${draftDaysLeft(job.updatedAt)} 天后自动清理`
+                                        : "已到期，下次打开会被清理"}
+                                </span>
+                            </p>
+                        </div>
+                        <div className="mt-1.5 flex justify-end gap-1.5">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-sky-700/80 hover:text-sky-800 dark:text-sky-300/80"
+                                onClick={discardDraftJob}
+                            >
+                                丢弃
+                            </Button>
+                            <Button size="sm" className="h-7" onClick={() => setDraftOpen(true)}>
+                                继续检查
+                            </Button>
+                        </div>
+                    </div>
+                )}
                 {stalled && (
                     <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-700 dark:text-amber-400">
                         <AlertTriangle className="h-4 w-4 shrink-0" />
@@ -521,7 +584,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
                                 <div className="h-14 w-14 shrink-0 overflow-hidden rounded-md border bg-muted sm:h-16 sm:w-16">
                                     {item.thumbBase64 ? (
                                         // eslint-disable-next-line @next/next/no-img-element
-                                        <img src={`data:image/jpeg;base64,${item.thumbBase64}`} alt="" className="h-full w-full object-cover" />
+                                        <img src={imageSrc(item.thumbBase64)} alt="" className="h-full w-full object-cover" />
                                     ) : (
                                         <div className="flex h-full items-center justify-center text-muted-foreground">
                                             <ImagePlus className="h-5 w-5" />
@@ -551,6 +614,11 @@ function BatchDetail({ jobId }: { jobId: string }) {
                                         {item.status === "pending" && (
                                             <span className="flex items-center gap-0.5 text-[11px] text-muted-foreground">
                                                 <Clock className="h-3 w-3" />{b.pending}
+                                            </span>
+                                        )}
+                                        {item.status === "edited" && (
+                                            <span className="flex items-center gap-0.5 text-[11px] text-sky-600">
+                                                <CheckCircle2 className="h-3 w-3" />已检查
                                             </span>
                                         )}
                                         {item.status === "processing" && (
@@ -601,7 +669,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
             </div>
 
             {/* 底部固定操作栏：已归档/已取消时不再需要提交动作 */}
-            {job.status !== "done" && job.status !== "canceled" && (
+            {job.status !== "done" && job.status !== "canceled" && job.status !== "draft" && (
             <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-background/95 backdrop-blur">
                 <div className="mx-auto w-full max-w-4xl px-3 pb-3 pt-2 sm:px-4 sm:pb-4">
                     <p className="mb-1.5 truncate text-[11px] text-muted-foreground">
@@ -627,7 +695,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
                             <Button
                                 variant="ghost" size="icon" title={b.dismiss}
                                 className="h-8 w-8 shrink-0 text-muted-foreground"
-                                onClick={() => act("dismiss", { jobId }, b.dismissConfirm).then(() => router.push("/batch"))}
+                                onClick={() => act("dismiss", { jobId }, b.dismissConfirm).then(backToBatch)}
                             >
                                 <Trash2 className="h-4 w-4" />
                             </Button>
@@ -646,6 +714,17 @@ function BatchDetail({ jobId }: { jobId: string }) {
                     </div>
                 </div>
             </div>
+            )}
+
+            {draftOpen && (
+                <BatchDraftEditor
+                    jobId={jobId}
+                    onClose={() => setDraftOpen(false)}
+                    onStarted={(id) => {
+                        setDraftOpen(false);
+                        openBatch(id);
+                    }}
+                />
             )}
 
             <Dialog open={!!editing} onOpenChange={(v) => { if (!v) { setEditing(null); setEditingImage(null); } }}>
@@ -682,16 +761,36 @@ function BatchDetail({ jobId }: { jobId: string }) {
 
 /* --------------------------------- 入口页 --------------------------------- */
 
-function BatchContent() {
-    const searchParams = useSearchParams();
-    const id = searchParams.get("id");
-    return id ? <BatchDetail jobId={id} /> : <BatchList />;
-}
-
+/**
+ * 不用 next/navigation 的 useSearchParams。
+ *
+ * 静态导出（output: export）下它会让页面在客户端重新请求一次 RSC 数据，
+ * 而 GitHub Pages 上 `batch/index.txt?_rsc=` 是 404，结果是带 ?id= 进来
+ * 永远停在 Suspense 的转圈里（v1.18.47 打印页踩过同一个坑）。
+ * 直接读 location.search，并去掉外层多余的 Suspense 边界。
+ */
 export default function BatchPage() {
-    return (
-        <Suspense fallback={<div className="flex justify-center py-20"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>}>
-            <BatchContent />
-        </Suspense>
-    );
+    /**
+     * 首帧不读 location，先渲染 loading，等 effect 读到 ?id= 再决定渲染列表还是详情。
+     *
+     * 为什么不直接在 useState 初始化里读：预渲染出来的 HTML 是列表页，
+     * 客户端首帧变成详情页会造成 hydration 不一致，实测结果是**页面停在列表**、
+     * 点进去没反应。先 ready=false 让两端首帧一致，再切，最稳。
+     */
+    const [id, setId] = useState<string | null>(null);
+    const [ready, setReady] = useState(false);
+
+    useEffect(() => {
+        setId(readOpenBatch());
+        setReady(true);
+    }, []);
+
+    if (!ready) {
+        return (
+            <div className="flex justify-center py-20">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+        );
+    }
+    return id ? <BatchDetail jobId={id} /> : <BatchList />;
 }

@@ -6,13 +6,14 @@ import { useQueryId } from "@/lib/use-query-id";
 import Link from "next/link";
 import { UploadZone } from "@/components/upload-zone";
 import { CorrectionEditor } from "@/components/correction-editor";
-import { ImageCropper } from "@/components/image-cropper";
+import { ImageEditor } from "@/components/image-editor";
 import { ParsedQuestion } from "@/lib/ai";
 import { apiClient } from "@/lib/api-client";
 import { AnalyzeResponse, Notebook, AppConfig } from "@/types/api";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { processImageFile } from "@/lib/image-utils";
+import { putImage } from "@/lib/storage";
 import { ArrowLeft, Upload, PenLine } from "lucide-react";
 import type { ProgressStatus } from "@/components/ui/progress-feedback";
 import { TopProgressBar } from "@/components/top-progress-bar";
@@ -51,22 +52,12 @@ export default function AddErrorPage() {
     // Input mode: "image" for photo upload, "text" for manual text input
     const [inputMode, setInputMode] = useState<"image" | "text">("image");
 
-    // Cropper state
-    const [croppingImage, setCroppingImage] = useState<string | null>(null);
-    const [isCropperOpen, setIsCropperOpen] = useState(false);
+    // 编辑器状态：选中图后先进编辑器（裁剪/抹除/搬移），完成才送去解析
+    const [editingImage, setEditingImage] = useState<string | null>(null);
 
     // Timeout Config
     const aiTimeout = config?.timeouts?.analyze || 180000;
     const safetyTimeout = aiTimeout + 10000;
-
-    // Cleanup Blob URL to prevent memory leak
-    useEffect(() => {
-        return () => {
-            if (croppingImage) {
-                URL.revokeObjectURL(croppingImage);
-            }
-        };
-    }, [croppingImage]);
 
     useEffect(() => {
         // Fetch notebook info
@@ -166,19 +157,24 @@ export default function AddErrorPage() {
         toast.info(language === 'zh' ? '已取消本次 AI 分析' : 'AI analysis cancelled');
     };
 
+    /**
+     * 选图后不直接分析，先进编辑器。
+     * 读原图而不是先压缩：编辑器内部会缩到 2400px，导出时才编码一次；
+     * 先压再编辑等于白丢一次画质。
+     */
     const onImageSelect = (file: File) => {
-        const imageUrl = URL.createObjectURL(file);
-        setCroppingImage(imageUrl);
-        setIsCropperOpen(true);
+        const reader = new FileReader();
+        reader.onload = () => setEditingImage(String(reader.result || ""));
+        reader.onerror = () => toast.error("图片读取失败，请重试");
+        reader.readAsDataURL(file);
     };
 
-    const handleCropComplete = async (croppedBlob: Blob) => {
-        setIsCropperOpen(false);
-        const file = new File([croppedBlob], "cropped-image.jpg", { type: "image/jpeg" });
-        handleAnalyze(file);
+    const handleEditorDone = async (dataUrl: string) => {
+        setEditingImage(null);
+        void handleAnalyze(dataUrl);
     };
 
-    const handleAnalyze = async (file: File) => {
+    const handleAnalyze = async (file: File | string) => {
         const startTime = Date.now();
         frontendLogger.info('[AddAnalyze]', 'Starting analysis flow', {
             timeoutSettings: {
@@ -192,7 +188,8 @@ export default function AddErrorPage() {
         try {
             frontendLogger.info('[AddAnalyze]', 'Step 1/5: Compressing image');
             setAnalysisStep('compressing');
-            const base64Image = await processImageFile(file);
+            // 从编辑器出来已经是 2400px 的成品，直接用，避免二次压缩掉画质
+            const base64Image = typeof file === "string" ? file : await processImageFile(file);
             if (controller.signal.aborted) return;
             setCurrentImage(base64Image);
             frontendLogger.info('[AddAnalyze]', 'Image compressed successfully', {
@@ -427,9 +424,10 @@ export default function AddErrorPage() {
 
     const handleSave = async (finalData: ParsedQuestion & { subjectId?: string; gradeSemester?: string }): Promise<void> => {
         try {
+            const imageRef = currentImage ? await putImage(currentImage, { role: "question" }) : "";
             const result = await apiClient.post<{ id: string; duplicate?: boolean }>("/api/error-items", {
                 ...finalData,
-                originalImageUrl: currentImage || "",
+                originalImageUrl: imageRef,
                 subjectId: notebookId,
             });
 
@@ -558,11 +556,13 @@ export default function AddErrorPage() {
                 )}
             </div>
 
-            <ImageCropper
-                imageSrc={croppingImage || ""}
-                open={isCropperOpen}
-                onClose={() => setIsCropperOpen(false)}
-                onCropComplete={handleCropComplete}
+            <ImageEditor
+                open={!!editingImage}
+                imageSrc={editingImage || ""}
+                title="编辑题目图片"
+                subtitle="裁掉多余部分、抹掉批改痕迹，再送去解析"
+                onCancel={() => setEditingImage(null)}
+                onDone={handleEditorDone}
             />
         </main>
     );

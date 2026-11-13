@@ -8,12 +8,38 @@ import { accessToken, cuid, nowIso, requireUser, restJson } from "../core";
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from "../config";
 import { apiError, json, type RouteHandler } from "../http";
 import { buildItem } from "./error-items";
+import { hasImageRef, refToSrc } from "../../storage/ref";
 
 const WORKER_URL = `${SUPABASE_URL}/functions/v1/batch-worker`;
 /** 单批上限：与产品约定一致（约 3MB 图片，深度模式约 30 分钟跑完） */
 const MAX_BATCH = 30;
 /** 活跃态：用于首页横幅与并发约束 */
-const ACTIVE_STATUSES = ["queued", "processing", "confirming", "paused"];
+const ACTIVE_STATUSES = ["draft", "queued", "processing", "confirming", "paused"];
+
+/** 草稿存活期：超过这个天数没人动就清掉，否则 30 张原图会一直占库 */
+export const DRAFT_TTL_DAYS = 7;
+const DRAFT_TTL_MS = DRAFT_TTL_DAYS * 24 * 60 * 60 * 1000;
+
+/**
+ * 惰性清理过期草稿。
+ *
+ * 为什么不走定时任务：这个项目是静态站 + Supabase，没有常驻进程，
+ * 为一个「7 天没人碰」的场景专门起 cron 不划算。读活跃批次列表时顺手扫一遍，
+ * 只要有用户打开页面就会清，效果等价，代码只有十几行。
+ *
+ * BatchItem.jobId 是 on delete cascade，删 job 会连带删条目，不会留孤儿图。
+ */
+async function expireDrafts(userId: string): Promise<number> {
+  const cutoff = new Date(Date.now() - DRAFT_TTL_MS).toISOString();
+  const stale = await restJson<any[]>(
+    `/BatchJob?select=id&userId=eq.${encodeURIComponent(userId)}&status=eq.draft&updatedAt=lt.${encodeURIComponent(cutoff)}`,
+  ).catch(() => []);
+  if (!stale?.length) return 0;
+  for (const row of stale) {
+    await restJson(`/BatchJob?id=eq.${encodeURIComponent(row.id)}`, { method: "DELETE" }).catch(() => {});
+  }
+  return stale.length;
+}
 
 /** 后台任务不存在「请求-响应」生命周期，触发后不等待，交给 keepalive 送出 */
 function kickWorker(jobId: string): void {
@@ -40,7 +66,7 @@ function publicItem(row: Record<string, any>) {
   } catch {
     points = [];
   }
-  return { ...rest, knowledgePoints: points, hasImage: !!imageBase64 };
+  return { ...rest, knowledgePoints: points, hasImage: hasImageRef(imageBase64) };
 }
 
 async function loadJob(jobId: string, userId: string) {
@@ -138,8 +164,167 @@ export const BATCH_HANDLERS: RouteHandler[] = [
       return json({ id: jobId, queued, ...estimate(cleaned.length, mode) });
     }
 
+    /* ------------------- 草稿：选完图先落一个任务，防丢 ------------------- */
+    /**
+     * 为什么要有 draft：
+     * 旧流程是「点开始」才建 job，选图和改图全在浏览器内存里，崩一次全没。
+     * 现在选完图立刻建草稿，图片逐张写库，浏览器崩了也能从批量 tab 接着改。
+     * status 是 text 字段，'draft' 不需要改表结构。
+     */
+    if (action === "draft" && ctx.method === "POST") {
+      const body = ctx.body || {};
+      const total = Math.max(1, Math.min(MAX_BATCH, Math.floor(Number(body.totalCount) || 0)));
+      const mode: "fast" | "deep" = body.reasoningMode === "deep" ? "deep" : "fast";
+
+      // 先清过期草稿，否则「有一批 7 天前的半成品」会把用户永远挡在门外
+      await expireDrafts(user.id);
+
+      /**
+       * 同账号只留一个活跃草稿。
+       *
+       * 放开的后果是批量 tab 里堆一排半成品，用户自己都分不清哪批是哪批；
+       * 而草稿只可能是「刚选完图还没开始解析」，正常不会有第二个的正当理由。
+       * 想开新的就先处理或丢弃旧的——前端拿到 409 时会给出这两个出口。
+       */
+      const running = await restJson<any[]>(
+        `/BatchJob?select=id,totalCount,updatedAt&userId=eq.${encodeURIComponent(user.id)}&status=eq.draft&limit=1`,
+      ).catch(() => []);
+      const existing = running?.[0];
+      if (existing) {
+        return apiError(409, "还有一批没处理完", {
+          existingId: existing.id,
+          existingCount: Number(existing.totalCount) || 0,
+          existingAt: existing.updatedAt || null,
+        });
+      }
+
+      const jobId = cuid();
+      const now = nowIso();
+      await restJson("/BatchJob", {
+        method: "POST",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({
+          id: jobId,
+          userId: user.id,
+          status: "draft",
+          reasoningMode: mode,
+          totalCount: total,
+          doneCount: 0,
+          failedCount: 0,
+          savedCount: 0,
+          startedAt: null,
+          heartbeatAt: null,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      });
+      return json({ id: jobId, total });
+    }
+
+    /* ---------------- 草稿：逐张写入 / 覆盖（同一 idx 幂等） ---------------- */
+    if (action === "image" && ctx.method === "POST") {
+      const body = ctx.body || {};
+      const jobId = String(body.jobId || "");
+      const idx = Math.max(0, Math.min(MAX_BATCH - 1, Math.floor(Number(body.idx) || 0)));
+      const image = String(body.image || "").replace(/^data:[^;]+;base64,/, "");
+      const thumb = String(body.thumb || "").replace(/^data:[^;]+;base64,/, "");
+      if (!jobId) return apiError(400, "缺少批次");
+      if (image.length < 100) return apiError(400, "图片为空");
+      if (image.length > 2_800_000) return apiError(413, "单张图片过大，请压缩后重试");
+
+      const job = await loadJob(jobId, user.id);
+      if (!job) return apiError(404, "批次不存在");
+      if (job.status !== "draft") return apiError(409, "这批已经开始解析，不能再改图");
+
+      // 主键 = `${jobId}-${idx}`：同一张重复上传就是覆盖，断点重传不会长出重复行
+      const status = body.edited ? "edited" : "pending";
+      const now = nowIso();
+      await restJson("/BatchItem?on_conflict=id", {
+        method: "POST",
+        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify([{
+          id: `${jobId}-${idx}`,
+          jobId,
+          userId: user.id,
+          idx,
+          status,
+          imageBase64: image,
+          thumbBase64: thumb || null,
+          attempts: 0,
+          autoDeepRetry: false,
+          answerConflict: false,
+          createdAt: now,
+          updatedAt: now,
+        }]),
+      });
+      await restJson(`/BatchJob?id=eq.${encodeURIComponent(jobId)}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ updatedAt: now }),
+      }).catch(() => {});
+      return json({ ok: true, idx, status });
+    }
+
+    /* ------------------------------ 草稿详情 ------------------------------ */
+    if (action === "draft-detail" && ctx.method === "GET") {
+      const id = ctx.query.get("id") || "";
+      const job = await loadJob(id, user.id);
+      if (!job) return apiError(404, "批次不存在");
+      if (job.status !== "draft") return apiError(409, "这批已经开始解析，不能再改图");
+      const expiresAt = draftExpiresAt(job);
+      // 只回缩略图，30 张原图会把响应拉到几十 MB
+      const items = await restJson<any[]>(
+        `/BatchItem?select=id,idx,status,thumbBase64&jobId=eq.${encodeURIComponent(id)}&order=idx.asc`,
+      ).catch(() => []);
+      return json({ job: { ...job, expiresAt }, items: items || [] });
+    }
+
+    /* ---------------------------- 草稿开始解析 ---------------------------- */
+    if (action === "start" && ctx.method === "POST") {
+      const jobId = String(ctx.body?.jobId || "");
+      const job = await loadJob(jobId, user.id);
+      if (!job) return apiError(404, "批次不存在");
+      if (job.status !== "draft") return apiError(409, "这批已经启动过了");
+
+      const items = await restJson<any[]>(
+        `/BatchItem?select=id,status,imageBase64&jobId=eq.${encodeURIComponent(jobId)}`,
+      ).catch(() => []);
+      const ready = (items || []).filter((i) => hasImageRef(i.imageBase64));
+      if (!ready.length) return apiError(400, "还没有可解析的图片");
+
+      const ids = ready.map((i) => `"${String(i.id).replace(/["\\]/g, "")}"`).join(",");
+      // edited（人工改过）和 pending 统一回 pending：worker 只认 pending
+      await restJson(`/BatchItem?id=in.(${ids})`, {
+        method: "PATCH",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ status: "pending", updatedAt: nowIso() }),
+      });
+
+      const running = await restJson<any[]>(
+        `/BatchJob?select=id&userId=eq.${encodeURIComponent(user.id)}&status=in.(queued,processing)&limit=1`,
+      ).catch(() => []);
+      const queued = !!running?.length;
+      const now = nowIso();
+      await restJson(`/BatchJob?id=eq.${encodeURIComponent(jobId)}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({
+          status: queued ? "queued" : "processing",
+          totalCount: ready.length,
+          startedAt: queued ? null : now,
+          heartbeatAt: queued ? null : now,
+          updatedAt: now,
+        }),
+      });
+      if (!queued) kickWorker(jobId);
+      const mode: "fast" | "deep" = job.reasoningMode === "deep" ? "deep" : "fast";
+      return json({ id: jobId, queued, count: ready.length, ...estimate(ready.length, mode) });
+    }
+
     /* ------------------------- 活跃批次（横幅 / 角标） ------------------------- */
     if (action === "active" && ctx.method === "GET") {
+      // 用户每次打开首页都会走到这里，顺手把过期草稿清掉（有图的话能省几十 MB）
+      await expireDrafts(user.id);
       const rows = await restJson<any[]>(
         `/BatchJob?select=*&userId=eq.${encodeURIComponent(user.id)}&status=in.(${ACTIVE_STATUSES.join(",")})&order=createdAt.asc&limit=20`,
       ).catch(() => []);
@@ -157,7 +342,10 @@ export const BATCH_HANDLERS: RouteHandler[] = [
           const mine = items.filter((i) => i.jobId === job.id);
           return {
             ...job,
+            expiresAt: job.status === "draft" ? draftExpiresAt(job) : null,
             counts: {
+              // 草稿阶段没有 done，「已检查」用 edited 表示，卡片进度才有意义
+              edited: mine.filter((i) => i.status === "edited").length,
               done: mine.filter((i) => i.status === "done").length,
               failed: mine.filter((i) => i.status === "failed").length,
               saved: mine.filter((i) => i.status === "saved").length,
@@ -170,6 +358,7 @@ export const BATCH_HANDLERS: RouteHandler[] = [
 
     /* ------------------------------- 列表 -------------------------------- */
     if (action === "list" && ctx.method === "GET") {
+      await expireDrafts(user.id);
       const rows = await restJson<any[]>(
         `/BatchJob?select=*&userId=eq.${encodeURIComponent(user.id)}&order=createdAt.desc&limit=50`,
       ).catch(() => []);
@@ -279,9 +468,7 @@ export const BATCH_HANDLERS: RouteHandler[] = [
         const points = (() => {
           try { return JSON.parse(item.knowledgePoints || "[]"); } catch { return []; }
         })();
-        const fullImage = item.thumbBase64
-          ? `data:image/jpeg;base64,${item.thumbBase64}`
-          : "";
+        const fullImage = item.thumbBase64 ? refToSrc(String(item.thumbBase64)) : "";
         const row = buildItem({
           originalImageUrl: fullImage,
           questionText: item.questionText,
@@ -325,7 +512,7 @@ export const BATCH_HANDLERS: RouteHandler[] = [
          * 结果详情页永远是一张 240px 缩略图，用户重传多少次都一样 ——
          * 因为缩略图是在入库时写死的，跟后来传什么无关。
          */
-        const missingNow = candidates.filter((c) => !imgById.get(String(c.item.id)));
+        const missingNow = candidates.filter((c) => !hasImageRef(imgById.get(String(c.item.id))));
         if (missingNow.length) {
           await Promise.all(missingNow.map(async (c) => {
             try {
@@ -341,7 +528,8 @@ export const BATCH_HANDLERS: RouteHandler[] = [
         for (const c of candidates) {
           const b64 = imgById.get(String(c.item.id)) || "";
           // 取不到原图就留空：让详情页明确"无图"，而不是塞一张永远糊的缩略图冒充原图。
-          c.row.originalImageUrl = b64 ? `data:image/jpeg;base64,${b64}` : "";
+          // 批次里存的是图片引用（现在是 data URL，将来是对象 key），统一过一遍
+          c.row.originalImageUrl = hasImageRef(b64) ? refToSrc(b64) : "";
           if (!b64) imageMissing.push(String(c.item.id));
         }
       }
@@ -367,9 +555,7 @@ export const BATCH_HANDLERS: RouteHandler[] = [
           for (const c of candidates) ok.add(c.errorItemId);
         } catch {
           for (const c of candidates) {
-            const thumbUrl = c.item.thumbBase64
-              ? `data:image/jpeg;base64,${c.item.thumbBase64}`
-              : "";
+            const thumbUrl = c.item.thumbBase64 ? refToSrc(String(c.item.thumbBase64)) : "";
             try {
               await insertOne(c.row);
               ok.add(c.errorItemId);
@@ -446,6 +632,9 @@ export const BATCH_HANDLERS: RouteHandler[] = [
             status: "saved",
             errorItemId: c.errorItemId,
             failureReason: null,
+            // 入库后原图已经在 ErrorItem 里了，批次这张是同一份副本。
+            // 不清就会一直双份占数据库（30 张约 36MB），而免费额度只有 500MB。
+            imageBase64: "",
             updatedAt: nowIso(),
           }),
         }),
@@ -580,6 +769,14 @@ export const BATCH_HANDLERS: RouteHandler[] = [
     return apiError(404, "Unknown batch endpoint");
   },
 ];
+
+/** 草稿到期时间：最后一次改动 + TTL，前端据此显示「还有 N 天」 */
+function draftExpiresAt(job: any): string | null {
+  if (job?.status !== "draft") return null;
+  const base = Date.parse(job.updatedAt || job.createdAt || "");
+  if (!Number.isFinite(base)) return null;
+  return new Date(base + DRAFT_TTL_MS).toISOString();
+}
 
 /** 当前批次收尾后，把同账号排队最久的一批拉起来 */
 async function startNextQueued(userId: string, currentJobId: string): Promise<void> {

@@ -6,6 +6,7 @@ import Link from "next/link";
 import { BackButton } from "@/components/ui/back-button";
 import { apiClient } from "@/lib/api-client";
 import { AttemptResult, ErrorItem } from "@/types/api";
+import { imageSrc } from "@/lib/storage";
 
 const LAST_PRINT_KEY = "wq:last-print";
 const HISTORY_KEY = "wq:grade-history";
@@ -358,7 +359,7 @@ function GradeContent() {
                     </div>
                     {current.originalImageUrl ? (
                         <img
-                            src={current.originalImageUrl}
+                            src={imageSrc(current.originalImageUrl)}
                             alt="题目"
                             className="w-full h-auto rounded-lg border bg-white"
                         />

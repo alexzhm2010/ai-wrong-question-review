@@ -3,16 +3,28 @@
 import { useEffect, useRef, useState } from "react";
 import { Camera, ImagePlus, Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { compressImage } from "@/lib/image-utils";
 import { autoCrop } from "@/lib/image-autocrop";
+import { imageSrc } from "@/lib/storage";
 
 interface ImageReplaceDialogProps {
     open: boolean;
     current?: string | null;
     title?: string;
+    /** 确认按钮文案：换图流程里是「继续编辑」 */
+    actionLabel?: string;
     /** 传入最终要存的 data URL；抛错则弹窗不关闭，用户可重试 */
     onSave: (dataUrl: string) => Promise<void> | void;
     onClose: () => void;
+}
+
+/** 原样读成 data URL：这条链路上不先压缩，交给编辑器统一缩到 2400 再编码 */
+function readAsDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(new Error("图片读取失败"));
+        reader.readAsDataURL(file);
+    });
 }
 
 /** base64 长度换算成 KB（4 个字符 ≈ 3 字节） */
@@ -25,7 +37,7 @@ function kbOf(dataUrl: string): number {
  * 替换题目原图：拍照/选图 → 压缩 → 可选自动裁边 → 预览确认 → 回库。
  * 只在浏览器本地处理，图片对象不经过任何第三方。
  */
-export function ImageReplaceDialog({ open, current, title, onSave, onClose }: ImageReplaceDialogProps) {
+export function ImageReplaceDialog({ open, current, title, actionLabel, onSave, onClose }: ImageReplaceDialogProps) {
     const camRef = useRef<HTMLInputElement>(null);
     const fileRef = useRef<HTMLInputElement>(null);
     const [raw, setRaw] = useState("");
@@ -77,9 +89,7 @@ export function ImageReplaceDialog({ open, current, title, onSave, onClose }: Im
         setError("");
         setReading(true);
         try {
-            // 2200px 宽足够看清卷面上的小字，同时把 base64 控制在 1MB 上下
-            const dataUrl = await compressImage(file, 2.6, 2200, 0.88);
-            setRaw(dataUrl);
+            setRaw(await readAsDataUrl(file));
         } catch (e) {
             setError(e instanceof Error ? e.message : "图片处理失败");
         } finally {
@@ -93,7 +103,6 @@ export function ImageReplaceDialog({ open, current, title, onSave, onClose }: Im
         setError("");
         try {
             await onSave(preview);
-            onClose();
         } catch (e) {
             setError(e instanceof Error ? e.message : "保存失败，请重试");
         } finally {
@@ -114,7 +123,7 @@ export function ImageReplaceDialog({ open, current, title, onSave, onClose }: Im
                 <div className="flex items-center justify-between">
                     <div>
                         <div className="font-semibold">{title || "更换原图"}</div>
-                        <div className="text-[11px] text-muted-foreground">重新拍一张清晰的，只替换图片，题干/答案不动</div>
+                        <div className="text-[11px] text-muted-foreground">重新拍一张，下一步可以裁边、抹掉批改痕迹；题干/答案不动</div>
                     </div>
                     <button onClick={onClose} aria-label="关闭" className="text-muted-foreground p-1">
                         <X className="h-5 w-5" />
@@ -193,7 +202,7 @@ export function ImageReplaceDialog({ open, current, title, onSave, onClose }: Im
                         {current && (
                             <div className="rounded-lg border bg-white p-2">
                                 <div className="text-[11px] text-muted-foreground mb-1">当前图片</div>
-                                <img src={current} alt="当前原图" className="w-full max-h-[32vh] object-contain mx-auto" />
+                                <img src={imageSrc(current)} alt="当前原图" className="w-full max-h-[32vh] object-contain mx-auto" />
                             </div>
                         )}
                     </div>
@@ -206,7 +215,7 @@ export function ImageReplaceDialog({ open, current, title, onSave, onClose }: Im
                         取消
                     </Button>
                     <Button className="flex-[2]" onClick={confirm} disabled={!preview || saving || cropping || reading}>
-                        {saving ? "保存中…" : "用这张替换"}
+                        {saving ? "处理中…" : (actionLabel || "用这张替换")}
                     </Button>
                 </div>
             </div>

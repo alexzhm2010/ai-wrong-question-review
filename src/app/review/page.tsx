@@ -9,6 +9,7 @@ import { apiClient } from "@/lib/api-client";
 import { ErrorItem, PaginatedResponse } from "@/types/api";
 import { estimateMinutes, pickReview } from "@/lib/review-plan";
 import { knowledgeNames } from "@/lib/mastery";
+import { imageSrc } from "@/lib/storage";
 
 const SIZE_KEY = "wq:review-size";
 const PAPER_KEY = "wq:today-paper";
@@ -217,7 +218,7 @@ export default function ReviewPage() {
                                     <div className="w-20 h-24 shrink-0 rounded-lg bg-slate-100 overflow-hidden relative">
                                         {item.originalImageUrl ? (
                                             <AutoCropImage
-                                                src={item.originalImageUrl}
+                                                src={imageSrc(item.originalImageUrl)}
                                                 maxWidth={200}
                                                 enabled
                                                 alt=""

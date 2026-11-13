@@ -164,11 +164,35 @@ async function chatAnalyze(
   return content;
 }
 
+/**
+ * 图片引用 → 裸 base64。
+ *
+ * 批次表里的 imageBase64 现在存的是图片引用（前端 storage 层写入）：
+ *   - 现在是 data URL 或裸 base64 → 去掉前缀即可；
+ *   - 以后换成对象存储会是 https 地址 → 这里拉一次二进制再转 base64。
+ * 放在 worker 里而不是复用前端模块：Deno 运行时导不进 src/lib，逻辑只有这几行。
+ */
+async function resolveImage(ref: string): Promise<string> {
+  const s = String(ref || "").trim();
+  if (/^https?:\/\//i.test(s)) {
+    const res = await fetch(s);
+    if (!res.ok) throw new Error(`IMAGE_FETCH_${res.status}`);
+    const buf = new Uint8Array(await res.arrayBuffer());
+    let bin = "";
+    const CHUNK = 8192;
+    for (let i = 0; i < buf.length; i += CHUNK) {
+      bin += String.fromCharCode(...buf.subarray(i, i + CHUNK));
+    }
+    return btoa(bin);
+  }
+  return s.replace(/^data:[^;]+;base64,/, "");
+}
+
 async function analyzeOne(
   imageBase64: string,
   reasoningMode: "fast" | "deep",
 ): Promise<{ parsed: ReturnType<typeof parseAnalyzeResponse>; autoDeepRetry: boolean }> {
-  const clean = imageBase64.replace(/^data:[^;]+;base64,/, "");
+  const clean = await resolveImage(imageBase64);
   const systemPrompt = generateAnalyzePrompt("zh", null, null, {}, null);
 
   const run = async (mode: "fast" | "deep") => {

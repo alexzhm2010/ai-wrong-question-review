@@ -14,7 +14,8 @@ import { ArrowRight, AlertTriangle, Loader2, PauseCircle } from "lucide-react";
 export function BatchBanner() {
     const { t } = useLanguage();
     const b = t.batch;
-    const jobs = useActiveBatches();
+    // 草稿只是「图传上去了还没开始解析」，不该出现在「正在跑」的汇总里
+    const jobs = useActiveBatches().filter((j) => j.status !== "draft");
 
     if (!jobs.length) return null;
 

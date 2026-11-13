@@ -25,13 +25,33 @@ import { ThinkingModeToggle, useThinkingMode } from "@/components/thinking-mode-
 import { BatchBanner } from "@/components/batch-banner";
 import { useActiveBatches } from "@/lib/batch-store";
 import { BatchQuickConfirm } from "@/components/batch-quick-confirm";
+import { openBatch } from "@/lib/batch-nav";
 import { BatchJobList } from "@/components/batch-job-list";
 import { streamAnalyze } from "@/lib/stream-analyze";
+import { putImage } from "@/lib/storage";
 import { inferSubjectFromName } from "@/lib/knowledge-tags";
 import { SettingsDialog } from "@/components/settings-dialog";
-import { CorrectionEditor } from "@/components/correction-editor";
-import { ImageCropper } from "@/components/image-cropper";
+
 import { StreamingReview } from "@/components/streaming-review";
+import dynamic from "next/dynamic";
+
+/*
+ * 首屏只需要「上传 + 列表」。编辑器、校对弹窗、检查队列都是点开才用，
+ * 静态引入会让首页冷启动多拉近十个分片（实测 24 → 更少），
+ * 弱网下这就是「点开要等好几秒」的主因。
+ */
+const BatchDraftEditor = dynamic(
+    () => import("@/components/batch-draft-editor").then((m) => m.BatchDraftEditor),
+    { ssr: false },
+);
+const ImageEditor = dynamic(
+    () => import("@/components/image-editor").then((m) => m.ImageEditor),
+    { ssr: false },
+);
+const CorrectionEditor = dynamic(
+    () => import("@/components/correction-editor").then((m) => m.CorrectionEditor),
+    { ssr: false },
+);
 
 /**
  * 这几个组件一律静态导入。
@@ -77,11 +97,13 @@ function HomeContent() {
     const [inputMode, setInputMode] = useState<"image" | "batch">("image");
 
     // Cropper state
-    const [croppingImage, setCroppingImage] = useState<string | null>(null);
-    const [isCropperOpen, setIsCropperOpen] = useState(false);
+    // 选中单张后先进编辑器，完成才送去解析
+    const [editingImage, setEditingImage] = useState<string | null>(null);
 
     // 批量导入：上传区一次选到多张时，底部弹出轻确认条，确认后才建批次
     const [batchFiles, setBatchFiles] = useState<File[]>([]);
+    /** 选了「先逐张检查」：草稿已建好，打开检查队列 */
+    const [draftJob, setDraftJob] = useState<{ id: string; files: File[] } | null>(null);
     // 批量 tab 上的琥珀色提示：有排队/解析/待确认/暂停的批次
     const activeBatches = useActiveBatches();
     const hasActiveBatchHint = activeBatches.length > 0;
@@ -89,15 +111,6 @@ function HomeContent() {
     // Timeout Config
     const aiTimeout = config?.timeouts?.analyze || 180000;
     const safetyTimeout = aiTimeout + 10000;
-
-    // Cleanup Blob URL to prevent memory leak
-    useEffect(() => {
-        return () => {
-            if (croppingImage) {
-                URL.revokeObjectURL(croppingImage);
-            }
-        };
-    }, [croppingImage]);
 
     useEffect(() => {
         // Fetch notebooks for auto-selection
@@ -181,20 +194,20 @@ function HomeContent() {
         toast.info(language === 'zh' ? '已取消本次 AI 分析' : 'AI analysis cancelled');
     };
 
+    /** 读原图进编辑器；编辑器内部缩到 2400px，导出时才编码一次 */
     const onImageSelect = (file: File) => {
-        const imageUrl = URL.createObjectURL(file);
-        setCroppingImage(imageUrl);
-        setIsCropperOpen(true);
+        const reader = new FileReader();
+        reader.onload = () => setEditingImage(String(reader.result || ""));
+        reader.onerror = () => toast.error("图片读取失败，请重试");
+        reader.readAsDataURL(file);
     };
 
-    const handleCropComplete = async (croppedBlob: Blob) => {
-        setIsCropperOpen(false);
-        // Convert Blob to File
-        const file = new File([croppedBlob], "cropped-image.jpg", { type: "image/jpeg" });
-        handleAnalyze(file);
+    const handleEditorDone = async (dataUrl: string) => {
+        setEditingImage(null);
+        void handleAnalyze(dataUrl);
     };
 
-    const handleAnalyze = async (file: File) => {
+    const handleAnalyze = async (file: File | string) => {
         const startTime = Date.now();
         frontendLogger.info('[HomeAnalyze]', 'Starting analysis flow', {
             timeoutSettings: {
@@ -208,7 +221,7 @@ function HomeContent() {
         try {
             frontendLogger.info('[HomeAnalyze]', 'Step 1/5: Compressing image');
             setAnalysisStep('compressing');
-            const base64Image = await processImageFile(file);
+            const base64Image = typeof file === "string" ? file : await processImageFile(file);
             if (controller.signal.aborted) return;
             setCurrentImage(base64Image);
             frontendLogger.info('[HomeAnalyze]', 'Image compressed successfully', {
@@ -473,9 +486,13 @@ function HomeContent() {
         });
 
         try {
+            // 存图统一走存储层：现在返回的仍是 data URL，将来换成对象存储只改那一层
+            const imageRef = currentImage
+                ? await putImage(currentImage, { role: "question" })
+                : "";
             const result = await apiClient.post<{ id: string; duplicate?: boolean }>("/api/error-items", {
                 ...finalData,
-                originalImageUrl: currentImage || "",
+                originalImageUrl: imageRef,
             });
 
             // 检查是否是重复提交（后端去重返回）
@@ -717,12 +734,15 @@ function HomeContent() {
                                     status: j.status,
                                     reasoningMode: j.reasoningMode,
                                     totalCount: j.counts.total || j.totalCount,
-                                    doneCount: (j.counts.done || 0) + (j.counts.saved || 0),
+                                    // 草稿只看「已检查几张」，别拿解析完成数糊弄
+                                    doneCount: j.status === "draft"
+                                        ? (j.counts.edited || 0)
+                                        : (j.counts.done || 0) + (j.counts.saved || 0),
                                     failedCount: j.counts.failed || j.failedCount || 0,
                                     savedCount: j.counts.saved || 0,
                                     createdAt: j.createdAt,
                                 }))}
-                                onOpen={(id) => router.push(`/batch?id=${id}`)}
+                                onOpen={(id) => openBatch(id)}
                             />
                             <Link
                                 href="/batch"
@@ -735,14 +755,14 @@ function HomeContent() {
                     </div>
                 )}
 
-                {croppingImage && (
-                    <ImageCropper
-                        imageSrc={croppingImage}
-                        open={isCropperOpen}
-                        onClose={() => setIsCropperOpen(false)}
-                        onCropComplete={handleCropComplete}
-                    />
-                )}
+                <ImageEditor
+                    open={!!editingImage}
+                    imageSrc={editingImage || ""}
+                    title="编辑题目图片"
+                    subtitle="裁掉多余部分、抹掉批改痕迹，再送去解析"
+                    onCancel={() => setEditingImage(null)}
+                    onDone={handleEditorDone}
+                />
 
                 {step === "review" && (
                     isStreaming ? (
@@ -762,7 +782,24 @@ function HomeContent() {
             </div>
 
             {/* 多选后的轻确认条：确认才建批次，避免手滑直接花钱 */}
-            <BatchQuickConfirm files={batchFiles} onCancel={() => setBatchFiles([])} />
+            <BatchQuickConfirm
+                files={batchFiles}
+                onCancel={() => setBatchFiles([])}
+                onEditFirst={(id) => {
+                    const files = batchFiles;
+                    setBatchFiles([]);
+                    setDraftJob({ id, files });
+                }}
+            />
+
+            {draftJob && (
+                <BatchDraftEditor
+                    jobId={draftJob.id}
+                    files={draftJob.files}
+                    onClose={() => setDraftJob(null)}
+                    onStarted={(id) => openBatch(id)}
+                />
+            )}
         </main>
     );
 }

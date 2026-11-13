@@ -28,6 +28,8 @@ import { GeogebraEntry } from "@/components/geogebra-entry";
 import { shouldShowGeogebra } from "@/lib/geogebra-subject";
 import { toast } from "@/lib/toast";
 import { ImageReplaceDialog } from "@/components/image-replace-dialog";
+import { ImageEditor } from "@/components/image-editor";
+import { dropImages, imageSrc, putImage } from "@/lib/storage";
 
 interface KnowledgeTag {
     id: string;
@@ -72,6 +74,8 @@ export default function ErrorDetailPage() {
     const [notesInput, setNotesInput] = useState("");
     const [isImageViewerOpen, setIsImageViewerOpen] = useState(false);
     const [replacingImage, setReplacingImage] = useState(false);
+    /** 选完图后进入编辑器，导出结果再落库 */
+    const [editingImage, setEditingImage] = useState<string | null>(null);
     const [isEditingTags, setIsEditingTags] = useState(false);
     const [tagsInput, setTagsInput] = useState<string[]>([]);
     const [isEditingMetadata, setIsEditingMetadata] = useState(false);
@@ -327,8 +331,12 @@ export default function ErrorDetailPage() {
     /** 换原图：只写 originalImageUrl，题干/答案/解析一律不动 */
     const saveOriginalImage = async (dataUrl: string) => {
         if (!item) return;
-        await apiClient.put(`/api/error-items/${item.id}`, { originalImageUrl: dataUrl });
-        setItem({ ...item, originalImageUrl: dataUrl });
+        const previous = item.originalImageUrl;
+        const ref = await putImage(dataUrl, { role: "question", ownerId: item.id });
+        await apiClient.put(`/api/error-items/${item.id}`, { originalImageUrl: ref });
+        // 旧图换下来就没用了；inline 下是空实现，换对象存储后才真的删
+        if (previous && previous !== ref) void dropImages([previous]);
+        setItem({ ...item, originalImageUrl: ref });
         // 卡片背面的缩略图缓存必须一起作废，否则列表里还显示旧照片
         void dropThumb(item.id);
         setShowQuestionImage(true);
@@ -624,7 +632,7 @@ export default function ErrorDetailPage() {
                                     <Button variant="outline" size="sm" onClick={() => setShowQuestionImage(!showQuestionImage)} className="flex items-center gap-2">
                                         {showQuestionImage ? <><EyeOff className="h-4 w-4" />隐藏原题图片</> : <><ImageIcon className="h-4 w-4" />查看原题图片</>}
                                     </Button>
-                                    {showQuestionImage && <div className="mt-4"><img src={item.originalImageUrl} alt={t.detail.originalProblem || "Original Problem"} className="w-full rounded-lg border cursor-pointer hover:opacity-90 transition-opacity" onClick={() => setIsImageViewerOpen(true)} /><p className="text-xs text-muted-foreground mt-1 text-center">{t.detail?.clickToEnlarge || "Click to enlarge"}</p></div>}
+                                    {showQuestionImage && <div className="mt-4"><img src={imageSrc(item.originalImageUrl)} alt={t.detail.originalProblem || "Original Problem"} className="w-full rounded-lg border cursor-pointer hover:opacity-90 transition-opacity" onClick={() => setIsImageViewerOpen(true)} /><p className="text-xs text-muted-foreground mt-1 text-center">{t.detail?.clickToEnlarge || "Click to enlarge"}</p></div>}
                                     <p className="text-[11px] text-muted-foreground">
                                         拍模糊了可以直接重拍替换，题干和解析不受影响
                                     </p>
@@ -711,7 +719,7 @@ export default function ErrorDetailPage() {
                                 {t.detail?.close || '✕ Close'}
                             </button>
                             <img
-                                src={item.originalImageUrl}
+                                src={imageSrc(item.originalImageUrl)}
                                 alt="Full size"
                                 className="max-w-full max-h-[90vh] object-contain rounded-lg"
                                 onClick={(e) => e.stopPropagation()}
@@ -724,12 +732,29 @@ export default function ErrorDetailPage() {
                 )
             }
 
+            {/* 换图分两步：先拍/选，再进编辑器；保存仍走原来的 update 接口 */}
             <ImageReplaceDialog
                 open={replacingImage}
                 current={item?.originalImageUrl}
                 title="更换题目原图"
+                actionLabel="继续编辑"
                 onClose={() => setReplacingImage(false)}
-                onSave={saveOriginalImage}
+                onSave={async (dataUrl) => {
+                    setReplacingImage(false);
+                    setEditingImage(dataUrl);
+                }}
+            />
+
+            <ImageEditor
+                open={!!editingImage}
+                imageSrc={editingImage || ""}
+                title="编辑题目原图"
+                subtitle="裁边、抹掉批改痕迹，保存后替换原图"
+                onCancel={() => setEditingImage(null)}
+                onDone={async (dataUrl) => {
+                    await saveOriginalImage(dataUrl);
+                    setEditingImage(null);
+                }}
             />
         </main >
     );

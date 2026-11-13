@@ -32,11 +32,15 @@ describe('PWA 可安装配置', () => {
         }
     });
 
-    it('service worker 有 fetch handler，页面与 API 全部网络直通', () => {
+    it('service worker 只接管图标，其余请求不代理', () => {
         const sw = readSource('public/sw.js');
         expect(sw).toContain("addEventListener('fetch'");
-        expect(sw).toContain('event.respondWith(fetch(request))');
+        expect(sw).toContain('ICON_PREFIX');
         expect(sw).toContain('caches.keys()');
+        // 整体代理（respondWith(fetch(request))）会吞掉 AbortSignal：
+        // Next 的分片预取靠 abort 取消旧请求，经 SW 转一手后中断传不进去，
+        // v1.18.47 线上表现为「偶发卡加载中」。锁住这个回归。
+        expect(sw).not.toContain('event.respondWith(fetch(request))');
     });
 
     it('静态站点无 middleware 拦截：manifest 与 sw.js 作为普通静态文件直出', () => {
