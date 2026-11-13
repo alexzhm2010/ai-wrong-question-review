@@ -11,12 +11,30 @@
  * 判定阈值偏保守：宁可少裁一点，也不能把题干、图形、手写批注裁掉。
  */
 
-const ANALYSIS_WIDTH = 560;
+/**
+ * 分析宽度。720 而不是 560：分数「2/3」的分母、页码、小题分值这类小字，
+ * 在 560 宽下只剩 1px 笔画，逐行统计时会被误判成空白而行整行裁掉。
+ * 只在选中打印时才跑，多这点像素换「不切字」值得。
+ */
+const ANALYSIS_WIDTH = 720;
 /** 纸面白：三通道都高于它且接近中性色，才算背景 */
 const BG_LUMA = 228;
 const BG_CHROMA = 26;
 /** 一行里非背景像素占比低于它 → 认为这一行是空白 */
-const INK_ROW_MIN = 0.015;
+const ROW_INK_MIN = 0.01;
+/** 列比行严一点：宽松会把本来该裁掉的窄白边留下 */
+const COL_INK_MIN = 0.015;
+/**
+ * 「稀疏墨」阈值。
+ *
+ * v1.18.41 修复：图片最下方常有「2/3」这类得分标记，分母缩到分析宽度后
+ * 单行只有一两像素笔画，按 ROW_INK_MIN(1%) 会被判成空白行，于是底边一路
+ * 往上跳过分母，只留分子——看起来就是「2/—」，分不清 2 还是 3。
+ *
+ * 0.25% ≈ 720 宽下 1.8px：足够接住细笔画，又不会把 JPEG 噪点当成内容。
+ * 裁边遇到它立即停手，宁可多留一条白边。
+ */
+const SPARSE_INK = 0.0025;
 /** 深色状态栏：平均亮度低于它、且非背景占比高于 STATUS_INK_MIN */
 const STATUS_LUMA_MAX = 96;
 const STATUS_INK_MIN = 0.5;
@@ -76,9 +94,56 @@ function isBackground(r: number, g: number, b: number): boolean {
     return max - min <= BG_CHROMA;
 }
 
-interface RowStat {
-    ink: number;
-    luma: number;
+/**
+ * 从边界 edge 朝 inner 方向跳过空白行，返回最后一个**仍需保留**的行号。
+ *
+ * 和「低于阈值就当空白」的旧写法有三点不同：
+ *   1. 「有墨」的门槛降到 SPARSE_INK，分数分母、页码这类小字也算内容；
+ *   2. 连续两行有稀疏墨 → 认定是小字，立即停手（单行孤立墨点当噪点跳过）；
+ *   3. 遇到实墨行必定停。
+ * 纯函数，便于单测；坐标越界由调用方保证。
+ */
+export function trimBlankEdge(
+    rowInk: ArrayLike<number>,
+    edge: number,
+    inner: number,
+    maxRows: number,
+    sparseInk: number = SPARSE_INK,
+    solidInk: number = ROW_INK_MIN,
+): number {
+    const step = edge >= inner ? -1 : 1;
+    let y = edge;
+    let moved = 0;
+    let runStart = -1; // 当前「连续有墨块」从哪一行开始（离 edge 最近的一行）
+    while (y !== inner && moved < maxRows) {
+        const ink = Number(rowInk[y] || 0);
+        if (ink >= sparseInk) {
+            if (runStart < 0) runStart = y;
+            if (ink >= solidInk) return runStart;
+            // 已经连着两行有墨：不是噪点，是小字，停（返回更靠内的那一行，连边上的笔画一起留住）
+            if (Math.abs(y - runStart) >= 1) return y;
+        } else {
+            runStart = -1;
+        }
+        y += step;
+        moved++;
+    }
+    return runStart >= 0 ? runStart : y;
+}
+
+/** [from, to] 区间内是否存在墨迹（含稀疏小字）；用于「裁掉的区域里到底有没有内容」这道保险 */
+export function hasInkTrace(
+    rowInk: ArrayLike<number>,
+    from: number,
+    to: number,
+    sparseInk: number = SPARSE_INK,
+): boolean {
+    const start = Math.max(0, Math.min(from, to));
+    const end = Math.min(rowInk.length - 1, Math.max(from, to));
+    for (let y = start; y <= end; y++) {
+        if (Number(rowInk[y] || 0) >= sparseInk) return true;
+    }
+    return false;
 }
 
 /**
@@ -136,18 +201,16 @@ function detectContentBox(img: HTMLImageElement): { x: number; y: number; w: num
     const topLimit = Math.floor(h * 0.2);
     let top = 0;
     while (top < topLimit) {
-        const blank = rowInk[top] < INK_ROW_MIN;
-        const statusBar = rowLuma[top] < STATUS_LUMA_MAX && rowInk[top] > STATUS_INK_MIN;
-        if (!blank && !statusBar) break;
+        const ink = rowInk[top];
+        const statusBar = rowLuma[top] < STATUS_LUMA_MAX && ink > STATUS_INK_MIN;
+        // 小字（页眉页码之类）也算内容，遇到就停
+        if (ink >= SPARSE_INK && !statusBar) break;
         top++;
     }
 
     // ── 下边界：只跳空白（底部深色块可能就是题目配图，不能误杀）
     const bottomLimit = Math.floor(h * 0.12);
-    let bottom = h - 1;
-    while (h - 1 - bottom < bottomLimit && bottom > top && rowInk[bottom] < INK_ROW_MIN) {
-        bottom--;
-    }
+    let bottom = trimBlankEdge(rowInk, h - 1, top, bottomLimit);
 
     /**
      * 截屏型错题（很多来自解题 App）是这样的：
@@ -188,8 +251,10 @@ function detectContentBox(img: HTMLImageElement): { x: number; y: number; w: num
              */
             const topIsShell = bestStart <= h * 0.24 && avgWhite(0, bestStart - 1) < 0.35;
             const bottomIsShell = bestEnd >= h * 0.86 && avgWhite(bestEnd + 1, h - 1) < 0.45;
+            // 白段边界正好压在「底部得分标记」上时不要用它——那是内容，不是外壳
+            const cutsContent = hasInkTrace(rowInk, bestEnd + 1, h - 1);
             if (topIsShell && bestStart > top) top = bestStart;
-            if (bottomIsShell && bestEnd < bottom) bottom = bestEnd;
+            if (bottomIsShell && bestEnd < bottom && !cutsContent) bottom = bestEnd;
         }
     }
 
@@ -207,25 +272,25 @@ function detectContentBox(img: HTMLImageElement): { x: number; y: number; w: num
     }
     const sideLimit = Math.floor(w * 0.08);
     let left = 0;
-    while (left < sideLimit && colInk[left] < INK_ROW_MIN) left++;
+    while (left < sideLimit && colInk[left] < COL_INK_MIN) left++;
     let right = w - 1;
-    while (w - 1 - right < sideLimit && right > left && colInk[right] < INK_ROW_MIN) right--;
+    while (w - 1 - right < sideLimit && right > left && colInk[right] < COL_INK_MIN) right--;
 
-    // 行方向上再收紧一次：顶部/底部的少量空白也去掉
-    let t2 = top;
-    let b2 = bottom;
-    while (t2 < bottom && rowInk[t2] < INK_ROW_MIN) t2++;
-    while (b2 > t2 && rowInk[b2] < INK_ROW_MIN) b2--;
+    // 行方向上再收紧一次：顶部/底部的少量空白也去掉（遇小字即停）
+    let t2 = trimBlankEdge(rowInk, top, bottom, bottom - top);
+    let b2 = trimBlankEdge(rowInk, bottom, t2, bottom - t2);
 
     if (right - left < w * 0.1 || b2 - t2 < h * 0.05) return null;
 
-    // 留 1.2% 的呼吸边，避免把字形边缘切掉
+    // 留呼吸边，避免把字形边缘切掉。底边再多给一点：
+    // 分数、下划线、根号尾巴这些元素贴着内容框底沿时，1.2% 不够用。
     const padX = Math.round(w * 0.012);
     const padY = Math.round(h * 0.012);
+    const padBottom = Math.round(h * 0.022);
     left = Math.max(0, left - padX);
     right = Math.min(w - 1, right + padX);
     t2 = Math.max(0, t2 - padY);
-    b2 = Math.min(h - 1, b2 + padY);
+    b2 = Math.min(h - 1, b2 + padBottom);
 
     const inv = 1 / scale;
     return {

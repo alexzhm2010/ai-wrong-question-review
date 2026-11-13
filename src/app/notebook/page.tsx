@@ -16,6 +16,13 @@ import { toast } from "@/lib/toast";
 
 import { useLanguage } from "@/contexts/LanguageContext";
 
+/**
+ * 错题本元信息（名称、题数）的内存缓存。
+ * 从详情页返回时列表页会重新挂载，没有缓存就要再等一次「加载中」，
+ * 整页闪一下白——那正是用户说的「像刷新了一遍」。
+ */
+const notebookMem = new Map<string, Notebook>();
+
 // ... imports
 
 export default function NotebookDetailPage() {
@@ -27,14 +34,19 @@ export default function NotebookDetailPage() {
     const [renameDialogOpen, setRenameDialogOpen] = useState(false);
 
     useEffect(() => {
-        if (params.id) {
-            fetchNotebook(params.id as string);
+        if (!params.id) return;
+        const hit = notebookMem.get(params.id);
+        if (hit) {
+            setNotebook(hit);
+            setLoading(false);
         }
+        fetchNotebook(params.id as string);
     }, [params.id]);
 
     const fetchNotebook = async (id: string) => {
         try {
             const data = await apiClient.get<Notebook>(`/api/notebooks/${id}`);
+            notebookMem.set(id, data);
             setNotebook(data);
         } catch (error) {
             console.error("Failed to fetch notebook:", error);
@@ -48,6 +60,7 @@ export default function NotebookDetailPage() {
     const handleRename = async (name: string) => {
         if (!notebook) return;
         const updated = await apiClient.put<Notebook>(`/api/notebooks/${notebook.id}`, { name });
+        notebookMem.set(updated.id, updated);
         setNotebook(updated);
     };
 

@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { invalidateListSnapshots, patchListSnapshots, readListOrigin } from "@/lib/list-cache";
+import { dropThumb } from "@/lib/image-cache";
 import { useQueryId } from "@/lib/use-query-id";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -54,6 +56,10 @@ interface ErrorItemDetail {
     } | null;
     gradeSemester?: string | null;
     geogebraCommands?: string | null;
+    /** 作答统计：列表卡片与掌握度判断要用，详情接口也会带回来 */
+    wrongCount?: number;
+    correctCount?: number;
+    correctStreak?: number;
 }
 
 export default function ErrorDetailPage() {
@@ -101,6 +107,16 @@ export default function ErrorDetailPage() {
         try {
             const data = await apiClient.get<ErrorItemDetail>(`/api/error-items/${id}`);
             setItem(data);
+            // 列表可能是缓存的：把改过的字段同步回去，返回时既秒开又不显示旧内容
+            patchListSnapshots(id, {
+                questionText: data.questionText,
+                knowledgePoints: data.knowledgePoints,
+                tags: data.tags,
+                masteryLevel: data.masteryLevel,
+                wrongCount: data.wrongCount,
+                correctCount: data.correctCount,
+                correctStreak: data.correctStreak,
+            });
         } catch (error) {
             console.error(error);
             toast.error(t.common?.messages?.loadFailed || 'Failed to load item');
@@ -163,6 +179,7 @@ export default function ErrorDetailPage() {
         try {
             await apiClient.patch(`/api/error-items/${item.id}/mastery`, { masteryLevel: newLevel });
             setItem({ ...item, masteryLevel: newLevel });
+            patchListSnapshots(item.id, { masteryLevel: newLevel });
             toast.info(newLevel > 0 ? (t.common?.messages?.markMastered || 'Marked as mastered') : (t.common?.messages?.unmarkMastered || 'Unmarked'));
         } catch (error) {
             console.error(error);
@@ -178,6 +195,8 @@ export default function ErrorDetailPage() {
 
         try {
             await apiClient.delete(`/api/error-items/${item.id}/delete`);
+            // 列表缓存里还留着这道题，不清掉返回时会看到「幽灵卡片」
+            invalidateListSnapshots();
             toast.success(t.common?.messages?.deleteSuccess || 'Deleted successfully');
             if (item.subjectId) {
                 router.push(`/notebook?id=${item.subjectId}`);
@@ -190,8 +209,28 @@ export default function ErrorDetailPage() {
         }
     };
 
-    const startEditingNotes = () => {
-        setNotesInput(item?.userNotes || "");
+    /**
+     * 返回错题本。
+     *
+     * 从列表点进来的，浏览器 history 的上一条正是那个列表，所以用 back()：
+     * 配合列表页的会话缓存，回去时不会重新拉数据、滚动条也停在原处。
+     * 直接打开链接或刷新进来的（没有来源标记）才 push 一个列表地址。
+     */
+    const goBackToList = () => {
+        const fallback = item?.subjectId ? `/notebook?id=${item.subjectId}` : "/notebooks";
+        const origin = readListOrigin();
+        const fromThisList =
+            !!origin &&
+            origin.startsWith("/notebook") &&
+            (!item?.subjectId || origin.includes(`id=${item.subjectId}`));
+        if (fromThisList && typeof window !== "undefined" && window.history.length > 1) {
+            router.back();
+            return;
+        }
+        router.push(fallback);
+    };
+
+    const startEditingNotes = () => {        setNotesInput(item?.userNotes || "");
         setIsEditingNotes(true);
     };
 
@@ -290,6 +329,8 @@ export default function ErrorDetailPage() {
         if (!item) return;
         await apiClient.put(`/api/error-items/${item.id}`, { originalImageUrl: dataUrl });
         setItem({ ...item, originalImageUrl: dataUrl });
+        // 卡片背面的缩略图缓存必须一起作废，否则列表里还显示旧照片
+        void dropThumb(item.id);
         setShowQuestionImage(true);
         toast.success("原图已替换");
     };
@@ -306,7 +347,10 @@ export default function ErrorDetailPage() {
         try {
             await apiClient.put(`/api/error-items/${item?.id}`, { questionText: questionInput });
             setIsEditingQuestion(false);
-            if (item) setItem({ ...item, questionText: questionInput });
+            if (item) {
+                setItem({ ...item, questionText: questionInput });
+                patchListSnapshots(item.id, { questionText: questionInput });
+            }
             toast.success(t.common?.messages?.saveSuccess || 'Saved successfully');
         } catch (error) {
             console.error(error);
@@ -487,11 +531,9 @@ export default function ErrorDetailPage() {
             <div className="container mx-auto p-4 space-y-6 pb-20">
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                     <div className="flex items-center gap-4">
-                        <Link href={item.subjectId ? `/notebook?id=${item.subjectId}` : "/notebooks"}>
-                            <Button variant="ghost" size="icon">
-                                <ArrowLeft className="w-4 h-4" />
-                            </Button>
-                        </Link>
+                        <Button variant="ghost" size="icon" onClick={goBackToList} title="返回错题本">
+                            <ArrowLeft className="w-4 h-4" />
+                        </Button>
                         <h1 className="text-2xl font-bold">{t.detail.title}</h1>
                     </div>
 
