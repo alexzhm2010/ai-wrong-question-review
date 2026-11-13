@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { Printer, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
@@ -10,17 +10,11 @@ import { apiClient } from "@/lib/api-client";
 import { ErrorItem, PaginatedResponse } from "@/types/api";
 import { PRINT_PREVIEW_PAGE_SIZE } from "@/lib/constants/pagination";
 import { autoCrop } from "@/lib/image-autocrop";
+import { PRINT_PAYLOAD_KEY } from "@/lib/print-preview";
 
 type SpaceKey = "none" | "sm" | "md" | "lg";
 
 const SPACE_CM: Record<SpaceKey, number> = { none: 0, sm: 4, md: 6, lg: 9 };
-
-/**
- * 错题本多选后把题目 id 放这里再跳过来。
- * 用 sessionStorage 而不是 URL：80 个 id 拼进 query 就是 2 KB 以上，
- * 几百道直接超浏览器上限；而且这批选择本来就只活这一次会话。
- */
-export const PRINT_PAYLOAD_KEY = "wq:print-payload";
 
 /** 排版设置沿用上次，否则每次进来都要重调图宽和作答区 */
 const SETTINGS_KEY = "wq:print-settings";
@@ -92,8 +86,19 @@ function chunk<T>(list: T[], size: number): T[][] {
 }
 
 function PrintPreviewContent() {
-    const searchParams = useSearchParams();
     const router = useRouter();
+    /**
+     * 刻意不用 next/navigation 的 useSearchParams。
+     *
+     * 静态导出（output: export）下它会让整个页面在客户端重新取一次 RSC 数据，
+     * 而 GitHub Pages 上 `.../print-preview/index.txt?_rsc=` 是 404，
+     * 结果是只要 URL 带 query 页面就永远停在「加载中…」（不带参数反而正常）。
+     * 直接读 location.search，不经过 router，这个坑就不存在了。
+     */
+    const [searchParams, setSearchParams] = useState<URLSearchParams | null>(null);
+    useEffect(() => {
+        setSearchParams(new URLSearchParams(window.location.search));
+    }, []);
     const [items, setItems] = useState<ErrorItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [settings, setSettings] = useState<PrintSettings>(DEFAULT_SETTINGS);
@@ -130,7 +135,7 @@ function PrintPreviewContent() {
 
     /** 题目 id 来源之一：URL 上的（批改页 / 今日卷） */
     const urlIds = useMemo(() => {
-        return (searchParams.get("ids") || "")
+        return (searchParams?.get("ids") || "")
             .split(",")
             .map((s) => s.trim())
             .filter(Boolean);
@@ -165,6 +170,7 @@ function PrintPreviewContent() {
      * 没有选择也没有条件时给空态，不再默默打印整库。
      */
     const fetchItems = useCallback(async () => {
+        if (!searchParams) return;
         // 带条件进来的（知识点 / 错题本筛选）就用条件，不要被上次残留的选题顶掉
         const ids = urlIds.length ? urlIds : hasUrlScope(searchParams) ? [] : readPayloadIds();
         try {

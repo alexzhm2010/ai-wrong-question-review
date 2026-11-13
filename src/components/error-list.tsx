@@ -24,6 +24,7 @@ import { Pagination } from "@/components/ui/pagination";
 import { DEFAULT_PAGE_SIZE } from "@/lib/constants/pagination";
 import { QuestionCard } from "@/components/question-card";
 import { peekThumb } from "@/lib/image-cache";
+import { PRINT_PAYLOAD_KEY } from "@/lib/print-preview";
 import {
     consumeReturnFocus,
     invalidateListSnapshots,
@@ -53,8 +54,6 @@ const VIEW_MODE_KEY = "wq:list-view-mode";
  * 这样「多选」就不再只服务批量删除，而是整个错题本范围内的一批待打印题目。
  */
 const selectionKey = (scope: string) => `wq:print-sel:${scope}`;
-/** 交给打印设置页的交接单 */
-const PRINT_PAYLOAD_KEY = "wq:print-payload";
 
 function readSelection(scope: string): string[] {
     try {
