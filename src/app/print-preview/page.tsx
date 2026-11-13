@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Printer, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -95,10 +95,9 @@ function PrintPreviewContent() {
      * 结果是只要 URL 带 query 页面就永远停在「加载中…」（不带参数反而正常）。
      * 直接读 location.search，不经过 router，这个坑就不存在了。
      */
-    const [searchParams, setSearchParams] = useState<URLSearchParams | null>(null);
-    useEffect(() => {
-        setSearchParams(new URLSearchParams(window.location.search));
-    }, []);
+    const [searchParams] = useState<URLSearchParams | null>(() =>
+        typeof window === "undefined" ? null : new URLSearchParams(window.location.search),
+    );
     const [items, setItems] = useState<ErrorItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [settings, setSettings] = useState<PrintSettings>(DEFAULT_SETTINGS);
@@ -620,11 +619,5 @@ function PrintPreviewContent() {
 }
 
 export default function PrintPreviewPage() {
-    return (
-        <Suspense
-            fallback={<div className="min-h-screen flex items-center justify-center">加载中…</div>}
-        >
-            <PrintPreviewContent />
-        </Suspense>
-    );
+    return <PrintPreviewContent />;
 }
