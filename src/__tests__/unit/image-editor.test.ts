@@ -1,7 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
+    CROP_HANDLES,
+    FULL_CROP,
     MAX_HISTORY,
     clampRect,
+    hitCropHandle,
+    isFullCrop,
+    resizeCropRect,
     eraseWidthRatio,
     hitHandle,
     hitRect,
@@ -207,5 +212,89 @@ describe("历史栈", () => {
             color: "#fff",
         };
         expect(summarize([erase, erase, move])).toEqual({ erase: 2, move: 1 });
+    });
+});
+
+describe("裁剪框：命中把位与自由缩放", () => {
+    const box: Rect = { x: 0.2, y: 0.2, w: 0.6, h: 0.6 };
+
+    it("全图判定", () => {
+        expect(isFullCrop(FULL_CROP)).toBe(true);
+        // 0.1% 以内的误差视为全图（1600px 图上不到 2px），避免浮点拖尾误判成「裁过」
+        expect(isFullCrop({ x: 0, y: 0, w: 0.999, h: 1 })).toBe(true);
+        expect(isFullCrop({ x: 0, y: 0, w: 0.99, h: 1 })).toBe(false);
+        expect(isFullCrop(box)).toBe(false);
+    });
+
+    it("四角命中", () => {
+        expect(hitCropHandle(box, { x: 0.2, y: 0.2 })).toBe("nw");
+        expect(hitCropHandle(box, { x: 0.8, y: 0.2 })).toBe("ne");
+        expect(hitCropHandle(box, { x: 0.2, y: 0.8 })).toBe("sw");
+        expect(hitCropHandle(box, { x: 0.8, y: 0.8 })).toBe("se");
+    });
+
+    it("四边命中；框中心与框外都不命中", () => {
+        expect(hitCropHandle(box, { x: 0.5, y: 0.2 })).toBe("n");
+        expect(hitCropHandle(box, { x: 0.5, y: 0.8 })).toBe("s");
+        expect(hitCropHandle(box, { x: 0.2, y: 0.5 })).toBe("w");
+        expect(hitCropHandle(box, { x: 0.8, y: 0.5 })).toBe("e");
+        expect(hitCropHandle(box, { x: 0.5, y: 0.5 })).toBeNull();
+        expect(hitCropHandle(box, { x: 0.05, y: 0.05 })).toBeNull();
+    });
+
+    it("四角优先于边（手指点偏一点也不会变成拖边）", () => {
+        expect(hitCropHandle(box, { x: 0.215, y: 0.21 })).toBe("nw");
+    });
+
+    it("拖右边：只改宽度，左/上/下都不动", () => {
+        const r = resizeCropRect(box, "e", { x: 0.6, y: 0.5 });
+        expect(r.x).toBeCloseTo(0.2, 6);
+        expect(r.y).toBeCloseTo(0.2, 6);
+        expect(r.w).toBeCloseTo(0.4, 6);
+        expect(r.h).toBeCloseTo(0.6, 6);
+    });
+
+    it("拖下边：只改高度", () => {
+        const r = resizeCropRect(box, "s", { x: 0.5, y: 0.5 });
+        expect(r.x).toBeCloseTo(0.2, 6);
+        expect(r.y).toBeCloseTo(0.2, 6);
+        expect(r.w).toBeCloseTo(0.6, 6);
+        expect(r.h).toBeCloseTo(0.3, 6);
+    });
+
+    it("拖左上角：以右下角为锚，两条边一起动", () => {
+        const r = resizeCropRect(box, "nw", { x: 0.3, y: 0.35 });
+        expect(r.x).toBeCloseTo(0.3, 6);
+        expect(r.y).toBeCloseTo(0.35, 6);
+        expect(r.x + r.w).toBeCloseTo(0.8, 6);
+        expect(r.y + r.h).toBeCloseTo(0.8, 6);
+    });
+
+    it("反向拖不产生负宽高", () => {
+        const r = resizeCropRect(box, "e", { x: 0.1, y: 0.5 });
+        expect(r.w).toBeGreaterThanOrEqual(0.02);
+        expect(r.x).toBeGreaterThanOrEqual(0);
+        expect(r.x + r.w).toBeLessThanOrEqual(1);
+    });
+
+    it("指针拖出画布会被夹回来", () => {
+        const r = resizeCropRect(box, "se", { x: 2, y: 2 });
+        expect(r.x + r.w).toBeCloseTo(1, 6);
+        expect(r.y + r.h).toBeCloseTo(1, 6);
+    });
+
+    it("框选矩形 → 像素矩形：保存落点就是屏幕上那个框", () => {
+        // 锁住「框选 A、保存却裁到 B」这条链路的最后一步
+        const r: Rect = { x: 0.25, y: 0.5, w: 0.5, h: 0.25 };
+        expect(rectToPixels(r, 1600, 1200)).toEqual({ x: 400, y: 600, w: 800, h: 300 });
+    });
+
+    it("8 个把位都能安全缩放", () => {
+        expect(CROP_HANDLES).toHaveLength(8);
+        for (const h of CROP_HANDLES) {
+            const r = resizeCropRect(box, h, { x: 0.5, y: 0.5 });
+            expect(r.w).toBeGreaterThan(0);
+            expect(r.h).toBeGreaterThan(0);
+        }
     });
 });

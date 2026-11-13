@@ -213,3 +213,63 @@ export function summarize(ops: EditOp[]): { erase: number; move: number } {
     }
     return { erase, move };
 }
+
+/* ------------------------------- 裁剪框 ------------------------------- */
+
+/** 全图（还没裁） */
+export const FULL_CROP: Rect = { x: 0, y: 0, w: 1, h: 1 };
+
+export function isFullCrop(r: Rect): boolean {
+    return r.x <= 0.001 && r.y <= 0.001 && r.w >= 0.999 && r.h >= 0.999;
+}
+
+/** 裁剪框的 8 个把位：四角 + 四边中点 */
+export type CropHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
+export const CROP_HANDLES: CropHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+
+/**
+ * 命中裁剪框的哪个把位。
+ * 容差按归一化坐标给（约 3% 图宽），手指点不准也能抓住；
+ * 四角优先于边，否则在角上会误判成拖边。
+ */
+export function hitCropHandle(r: Rect, p: Pt, tolerance = 0.03): CropHandle | null {
+    const nearX = (v: number) => Math.abs(p.x - v) <= tolerance;
+    const nearY = (v: number) => Math.abs(p.y - v) <= tolerance;
+    const inX = p.x >= r.x - tolerance && p.x <= r.x + r.w + tolerance;
+    const inY = p.y >= r.y - tolerance && p.y <= r.y + r.h + tolerance;
+    const left = nearX(r.x), right = nearX(r.x + r.w);
+    const top = nearY(r.y), bottom = nearY(r.y + r.h);
+
+    if (left && top) return "nw";
+    if (right && top) return "ne";
+    if (left && bottom) return "sw";
+    if (right && bottom) return "se";
+    if (top && inX) return "n";
+    if (bottom && inX) return "s";
+    if (left && inY) return "w";
+    if (right && inY) return "e";
+    return null;
+}
+
+/**
+ * 拖把位缩放裁剪框：**自由比例**（不等比），以对边/对角为锚。
+ *
+ * 和搬移选区的 resizeFromHandle 不同：裁剪本来就是要改取景范围，
+ * 强行等比会让用户永远裁不掉一条多余的边。支持反向拖 —— 把下边拖到
+ * 上边之上时自动翻转，不会产出负宽高。
+ */
+export function resizeCropRect(r: Rect, handle: CropHandle, pointer: Pt): Rect {
+    const px = clamp01(pointer.x);
+    const py = clamp01(pointer.y);
+    const left0 = r.x, top0 = r.y;
+    const right0 = r.x + r.w, bottom0 = r.y + r.h;
+
+    const left = handle.includes("w") ? px : left0;
+    const right = handle.includes("e") ? px : right0;
+    const top = handle.includes("n") ? py : top0;
+    const bottom = handle.includes("s") ? py : bottom0;
+
+    const x1 = Math.min(left, right), x2 = Math.max(left, right);
+    const y1 = Math.min(top, bottom), y2 = Math.max(top, bottom);
+    return clampRect({ x: x1, y: y1, w: x2 - x1, h: y2 - y1 });
+}

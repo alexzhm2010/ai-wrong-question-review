@@ -13,9 +13,7 @@
  *   2. 历史只存指令，不存 ImageData。一屏 30MB 的位图存 20 步会直接把
  *      手机内存打爆。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ReactCrop, { type Crop } from "react-image-crop";
-import "react-image-crop/dist/ReactCrop.css";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
     Eraser, Loader2, Maximize2, Move, RotateCcw, Scissors, Undo2, X, Check,
 } from "lucide-react";
@@ -25,16 +23,22 @@ import {
     type Handle,
     type Pt,
     type Rect,
+    CROP_HANDLES,
+    type CropHandle,
+    FULL_CROP,
     clamp01,
     clampRect,
     eraseWidthRatio,
+    hitCropHandle,
     hitHandle,
     hitRect,
+    isFullCrop,
     isRectUsable,
     moveRect,
     normalizeRect,
     popOp,
     pushOp,
+    resizeCropRect,
     resizeFromHandle,
     summarize,
 } from "@/lib/image-editor";
@@ -82,7 +86,13 @@ export function ImageEditor({
     const [ops, setOps] = useState<EditOp[]>([]);
     const [mode, setMode] = useState<Mode>(initialMode);
     const [eraseSize, setEraseSize] = useState<EraseSize>(1);
-    const [crop, setCrop] = useState<Crop>({ unit: "%", x: 0, y: 0, width: 100, height: 100 });
+    /**
+     * 裁剪框用归一化 Rect，和抹除 / 搬移 / 导出完全同一套坐标。
+     * 旧版用 react-image-crop 的百分比，靠「CSS 容器尺寸 == 图片渲染尺寸」
+     * 这个隐式前提才对得上；手机上字体缩放、地址栏收起、触屏手势一打断，
+     * 框看着在这、保存却裁到别处。现在屏幕上这个框就是保存用的那个框。
+     */
+    const [cropSel, setCropSel] = useState<Rect>(FULL_CROP);
     /** 搬移选区（归一化）；松开后保留，方便连续微调 */
     const [sel, setSel] = useState<Rect | null>(null);
     const [saving, setSaving] = useState(false);
@@ -96,6 +106,9 @@ export function ImageEditor({
         | { kind: "move"; start: Pt; rect: Rect }
         | { kind: "handle"; handle: Handle; rect: Rect }
         | { kind: "erase"; points: Pt[]; color: string }
+        | { kind: "crop-new"; start: Pt }
+        | { kind: "crop-move"; start: Pt; rect: Rect }
+        | { kind: "crop-resize"; handle: CropHandle; rect: Rect }
         | null
     >(null);
     const livePreviewRef = useRef<{ src: Rect; dst: Rect; color: string } | null>(null);
@@ -110,7 +123,7 @@ export function ImageEditor({
         setOps([]);
         setSel(null);
         setMode(initialMode);
-        setCrop({ unit: "%", x: 0, y: 0, width: 100, height: 100 });
+        setCropSel(FULL_CROP);
 
         loadImage(imageSrc)
             .then((img) => {
@@ -195,11 +208,26 @@ export function ImageEditor({
 
     /* -------------------------------- 手势 -------------------------------- */
     const onPointerDown = (e: React.PointerEvent) => {
-        if (!base || mode === "crop" || saving || busy) return;
+        if (!base || saving || busy) return;
         const canvas = canvasRef.current;
         if (!canvas) return;
         canvas.setPointerCapture(e.pointerId);
         const p = toNorm(e);
+
+        if (mode === "crop") {
+            // 四边/四角随时可抓（初始全图时把位就在画布边缘），框内平移、框外重画。
+            // 手势落在 canvas 上（它带 touch-none），不会被浏览器当滚动打断。
+            const handle = hitCropHandle(cropSel, p);
+            if (handle) {
+                dragRef.current = { kind: "crop-resize", handle, rect: cropSel };
+            } else if (!isFullCrop(cropSel) && hitRect(cropSel, p)) {
+                dragRef.current = { kind: "crop-move", start: p, rect: cropSel };
+            } else {
+                // 全图时点中间 = 重新框选；不立刻改框，只点一下不该留下一个小方框
+                dragRef.current = { kind: "crop-new", start: p };
+            }
+            return;
+        }
 
         if (mode === "erase") {
             const color = samplePaperColor(base, p.x, p.y, 0.012);
@@ -233,6 +261,20 @@ export function ImageEditor({
         const p = toNorm(e);
         const canvas = canvasRef.current;
         if (!canvas) return;
+
+        if (drag.kind === "crop-new") {
+            const r = normalizeRect(drag.start, p);
+            setCropSel(isRectUsable(r) ? clampRect(r) : FULL_CROP);
+            return;
+        }
+        if (drag.kind === "crop-move") {
+            setCropSel(moveRect(drag.rect, p.x - drag.start.x, p.y - drag.start.y));
+            return;
+        }
+        if (drag.kind === "crop-resize") {
+            setCropSel(resizeCropRect(drag.rect, drag.handle, p));
+            return;
+        }
 
         if (drag.kind === "erase") {
             const prev = drag.points[drag.points.length - 1];
@@ -269,6 +311,8 @@ export function ImageEditor({
         const drag = dragRef.current;
         dragRef.current = null;
         if (!drag) return;
+
+        if (drag.kind === "crop-new" || drag.kind === "crop-move" || drag.kind === "crop-resize") return;
 
         if (drag.kind === "erase") {
             if (drag.points.length) {
@@ -312,15 +356,9 @@ export function ImageEditor({
     };
 
     /* ------------------------------- 工具动作 ------------------------------- */
-    /** 当前裁剪框（归一化）；全选时返回 null，表示没裁 */
+    /** 当前裁剪框；全选时返回 null，表示没裁。屏幕上那个框直接就是这个值 */
     const cropRect = (): Rect | null => {
-        const r: Rect = {
-            x: crop.x / 100,
-            y: crop.y / 100,
-            w: crop.width / 100,
-            h: crop.height / 100,
-        };
-        return r.w >= 0.999 && r.h >= 0.999 ? null : clampRect(r);
+        return isFullCrop(cropSel) ? null : clampRect(cropSel);
     };
 
     /**
@@ -344,7 +382,7 @@ export function ImageEditor({
         setBase(next);
         setOps([]); // 已经烘焙进新基准，旧指令坐标失效
         setSel(null);
-        setCrop({ unit: "%", x: 0, y: 0, width: 100, height: 100 });
+        setCropSel(FULL_CROP);
         setMode("erase");
     };
 
@@ -352,8 +390,22 @@ export function ImageEditor({
         if (original) setBase(original);
         setOps([]);
         setSel(null);
-        setCrop({ unit: "%", x: 0, y: 0, width: 100, height: 100 });
+        setCropSel(FULL_CROP);
         livePreviewRef.current = null;
+    };
+
+    /**
+     * 切换工具。离开裁剪模式时若有框，先把它固化成新的基准图再切。
+     *
+     * 旧版直接 setMode，而 finish() 只在 mode==="crop" 时才应用裁剪框，
+     * 于是「拉好框 → 切去抹除 → 完成」会导出整张未裁的图 —— 用户看到的就是
+     * 「明明框好了，保存后却是另一块区域」。
+     */
+    const switchTool = (next: Mode) => {
+        if (mode === "crop" && next !== "crop" && cropRect()) applyCrop();
+        setMode(next);
+        if (next === "erase") setSel(null);
+        if (next === "move") paperRef.current = base ? samplePaperColor(base, 0.5, 0.5, 0.03) : "#ffffff";
     };
 
     const finish = async () => {
@@ -373,7 +425,10 @@ export function ImageEditor({
                     }
                 }
             }
-            const changed = pending.length > 0 || target !== base;
+            // 「按框裁剪」会把 base 换成裁剪后的新画布（original 仍是最初那张）。
+            // 只看本次 pending 会误判成「没改动」，被详情页的 changed=false 跳过保存，
+            // 结果裁完白干。基准图本身变过就算改过。
+            const changed = pending.length > 0 || target !== base || (!!original && base !== original);
             const url = exportEdited(target, pending, 2400, 0.88);
             await onDone(url, changed);
         } finally {
@@ -382,15 +437,6 @@ export function ImageEditor({
     };
 
     /* -------------------------------- 渲染 -------------------------------- */
-    const baseUrl = useMemo(() => {
-        if (!base) return "";
-        try {
-            return base.toDataURL("image/jpeg", 0.9);
-        } catch {
-            return "";
-        }
-    }, [base]);
-
     const summary = summarize(ops);
     const dirty = ops.length > 0 || (base && original && base !== original);
 
@@ -457,26 +503,8 @@ export function ImageEditor({
                     </div>
                 )}
 
-                {!loading && !error && base && mode === "crop" && (
-                    <div className="flex h-full w-full items-center justify-center">
-                        <ReactCrop
-                            crop={crop}
-                            onChange={(_, percent) => setCrop(percent)}
-                            className="max-h-full max-w-full"
-                            style={{ maxHeight: "100%", maxWidth: "100%" }}
-                        >
-                            <img
-                                src={baseUrl}
-                                alt="待裁剪"
-                                style={{ maxWidth: "100%", maxHeight: "100%", display: "block" }}
-                            />
-                        </ReactCrop>
-                    </div>
-                )}
-
-                <div
-                    className={`flex h-full w-full items-center justify-center ${mode === "crop" ? "hidden" : ""}`}
-                >
+                {/* 三个工具共用同一张 canvas：显示尺寸、坐标换算、导出落点完全一致 */}
+                <div className="flex h-full w-full items-center justify-center">
                     <div className="relative" style={{ lineHeight: 0 }}>
                         <canvas
                             ref={canvasRef}
@@ -487,9 +515,9 @@ export function ImageEditor({
                             className="touch-none rounded-sm bg-white"
                         />
                         {/* 搬移选区：框线用手柄画在 DOM 层，比画进 canvas 清晰 */}
-                        {mode === "move" && sel && (
-                            <MoveOverlay sel={sel} />
-                        )}
+                        {mode === "move" && sel && <MoveOverlay sel={sel} />}
+                        {/* 裁剪框：纯展示，手势全在下层 canvas，避免 DOM 层抢走 touch 事件 */}
+                        {mode === "crop" && !loading && !error && base && <CropOverlay rect={cropSel} />}
                     </div>
                 </div>
             </div>
@@ -498,7 +526,7 @@ export function ImageEditor({
             <div className="shrink-0 border-t border-white/10 bg-slate-900/95 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
                 {/* 当前工具的参数 */}
                 <div className="flex h-10 items-center justify-center gap-3 px-3 text-[11px] text-white/60">
-                    {mode === "crop" && <span>拖动四角裁掉多余部分，确认后进入下一步</span>}
+                    {mode === "crop" && <span>拖四边或四角调整取景，框内可整体拖动；框外按下重新框选</span>}
                     {mode === "erase" && (
                         <div className="flex items-center gap-2">
                             <span>笔宽</span>
@@ -534,37 +562,42 @@ export function ImageEditor({
                         active={mode === "crop"}
                         icon={<Scissors className="h-5 w-5" />}
                         label="裁剪"
-                        onClick={() => setMode("crop")}
+                        onClick={() => switchTool("crop")}
                     />
                     <ToolButton
                         active={mode === "erase"}
                         icon={<Eraser className="h-5 w-5" />}
                         label="抹除"
-                        onClick={() => {
-                            setMode("erase");
-                            setSel(null);
-                        }}
+                        onClick={() => switchTool("erase")}
                     />
                     <ToolButton
                         active={mode === "move"}
                         icon={<Move className="h-5 w-5" />}
                         label="搬移"
-                        onClick={() => {
-                            setMode("move");
-                            paperRef.current = base ? samplePaperColor(base, 0.5, 0.5, 0.03) : "#ffffff";
-                        }}
+                        onClick={() => switchTool("move")}
                     />
 
                     {mode === "crop" ? (
-                        <button
-                            type="button"
-                            onClick={applyCrop}
-                            disabled={!base}
-                            className="flex flex-1 flex-col items-center justify-center gap-0.5 rounded-lg bg-blue-600 py-1.5 text-[10px] font-semibold text-white disabled:opacity-40"
-                        >
-                            <Maximize2 className="h-5 w-5" />
-                            按框裁剪
-                        </button>
+                        <>
+                            <button
+                                type="button"
+                                onClick={() => setCropSel(FULL_CROP)}
+                                disabled={isFullCrop(cropSel)}
+                                className="flex flex-1 flex-col items-center justify-center gap-0.5 rounded-lg py-1.5 text-[10px] text-white/70 disabled:opacity-30"
+                            >
+                                <RotateCcw className="h-5 w-5" />
+                                全图
+                            </button>
+                            <button
+                                type="button"
+                                onClick={applyCrop}
+                                disabled={!base || isFullCrop(cropSel)}
+                                className="flex flex-[2] flex-col items-center justify-center gap-0.5 rounded-lg bg-blue-600 py-1.5 text-[10px] font-semibold text-white disabled:opacity-40"
+                            >
+                                <Maximize2 className="h-5 w-5" />
+                                按框裁剪
+                            </button>
+                        </>
                     ) : (
                         <>
                             <ToolButton
@@ -612,6 +645,41 @@ function ToolButton({
             {icon}
             {label}
         </button>
+    );
+}
+
+/** 裁剪框 + 8 个把位（纯展示，事件交给下层 canvas） */
+function CropOverlay({ rect }: { rect: Rect }) {
+    const pos: Record<CropHandle, React.CSSProperties> = {
+        nw: { left: 0, top: 0, transform: "translate(-50%,-50%)" },
+        n: { left: "50%", top: 0, transform: "translate(-50%,-50%)" },
+        ne: { left: "100%", top: 0, transform: "translate(-50%,-50%)" },
+        e: { left: "100%", top: "50%", transform: "translate(-50%,-50%)" },
+        se: { left: "100%", top: "100%", transform: "translate(-50%,-50%)" },
+        s: { left: "50%", top: "100%", transform: "translate(-50%,-50%)" },
+        sw: { left: 0, top: "100%", transform: "translate(-50%,-50%)" },
+        w: { left: 0, top: "50%", transform: "translate(-50%,-50%)" },
+    };
+    return (
+        <div
+            className="pointer-events-none absolute border-2 border-blue-400"
+            style={{
+                left: `${rect.x * 100}%`,
+                top: `${rect.y * 100}%`,
+                width: `${rect.w * 100}%`,
+                height: `${rect.h * 100}%`,
+                // 框外压暗，一眼看清取景范围；溢出部分由外层 overflow-hidden 裁掉
+                boxShadow: "0 0 0 9999px rgba(0,0,0,0.45)",
+            }}
+        >
+            {CROP_HANDLES.map((h) => (
+                <span
+                    key={h}
+                    className="absolute h-3.5 w-3.5 rounded-sm border-2 border-white bg-blue-500"
+                    style={pos[h]}
+                />
+            ))}
+        </div>
     );
 }
 
