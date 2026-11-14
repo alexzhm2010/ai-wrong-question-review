@@ -2,6 +2,7 @@
 import { aiEdge, byId, cuid, nowIso, requireUser, restJson, restJsonPage } from "../core";
 import { apiError, json, type RouteContext, type RouteHandler } from "../http";
 import { attachRelations, getTagIndex, getTagsByIds } from "./shared";
+import { withInheritedGrade } from "./grade";
 
 /**
  * 列表页字段：刻意不含 originalImageUrl。
@@ -403,7 +404,10 @@ export async function handleErrorItems(ctx: RouteContext): Promise<Response | nu
         ).catch(() => []);
         if (recent?.[0]?.id) return json({ id: recent[0].id, duplicate: true });
       }
-      const row = buildItem(ctx.body || {}, user.id);
+      // v1.13.0 既定规则：新题年级沿用最近一次手选值。放在写库前兜底，
+      // 单张上传、直接录入等入口都不会因为跳过编辑器而漏掉年级。
+      const body = await withInheritedGrade(ctx.body || {}, user.id);
+      const row = buildItem(body, user.id);
       const created = await restJson<any[]>("/ErrorItem", {
         method: "POST",
         body: JSON.stringify(row),

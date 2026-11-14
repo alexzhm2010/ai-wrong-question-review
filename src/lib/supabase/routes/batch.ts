@@ -8,6 +8,7 @@ import { accessToken, cuid, nowIso, requireUser, restJson } from "../core";
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from "../config";
 import { apiError, json, type RouteHandler } from "../http";
 import { buildItem } from "./error-items";
+import { recentGradeFromRows, resolveGradeForNewItem } from "./grade";
 import { hasImageRef, refToSrc } from "../../storage/ref";
 
 const WORKER_URL = `${SUPABASE_URL}/functions/v1/batch-worker`;
@@ -436,13 +437,18 @@ export const BATCH_HANDLERS: RouteHandler[] = [
         + `gradeSemester,knowledgePoints,userGuidance,thumbBase64`
         + `&jobId=eq.${encodeURIComponent(jobId)}&id=in.(${quoted})`,
       ).catch(() => []);
-      // 题干池只取 questionText，不再把整行拉回来
+      // 题干池：既用于同题干去重，也顺带取「最近一次保存的年级」。
+      // v1.13.0 定下的规则（沿用最近一次手选年级）原本只做在前端编辑器里，
+      // 批量「一键全部入库」不经过编辑器 → 整批年级落空。这里在写库前兜底，
+      // 复用同一次查询，不增加任何往返。
       const existing = await restJson<any[]>(
-        `/ErrorItem?select=questionText&userId=eq.${encodeURIComponent(user.id)}&order=createdAt.desc&limit=2000`,
+        `/ErrorItem?select=questionText,gradeSemester&userId=eq.${encodeURIComponent(user.id)}&order=createdAt.desc&limit=2000`,
       ).catch(() => []);
       const existingTexts = new Set(
         (existing || []).map((e) => String(e.questionText || "").replace(/\s+/g, "").slice(0, 80)),
       );
+      /** 整批共用同一个沿用值，保证同一批题目年级一致 */
+      const inheritedGrade = recentGradeFromRows(existing);
       // 标签名 → id 映射整片只查一次（旧版每个知识点都重查一遍全表）
       const allTags = await restJson<any[]>("/KnowledgeTag?select=id,name").catch(() => []);
 
@@ -456,6 +462,8 @@ export const BATCH_HANDLERS: RouteHandler[] = [
         errorItemId: string;
         row: Record<string, any>;
         points: any[];
+        /** 最终写入的年级，入库成功后同步回 BatchItem，保证批次页与详情页一致 */
+        finalGrade: string | null;
       };
       const candidates: Candidate[] = [];
       const imageMissing: string[] = [];
@@ -469,6 +477,8 @@ export const BATCH_HANDLERS: RouteHandler[] = [
           try { return JSON.parse(item.knowledgePoints || "[]"); } catch { return []; }
         })();
         const fullImage = item.thumbBase64 ? refToSrc(String(item.thumbBase64)) : "";
+        // 条目自带有效年级（校对页手选）优先，否则整批沿用最近一次年级。
+        const finalGrade = resolveGradeForNewItem(item.gradeSemester, inheritedGrade);
         const row = buildItem({
           originalImageUrl: fullImage,
           questionText: item.questionText,
@@ -476,10 +486,10 @@ export const BATCH_HANDLERS: RouteHandler[] = [
           analysis: item.analysis,
           subjectId: item.subjectId || null,
           knowledgePoints: points,
-          gradeSemester: item.gradeSemester || null,
+          gradeSemester: finalGrade,
           source: "batch",
         }, user.id);
-        candidates.push({ item, errorItemId: row.id, row, points });
+        candidates.push({ item, errorItemId: row.id, row, points, finalGrade });
       }
 
       /**
@@ -632,6 +642,8 @@ export const BATCH_HANDLERS: RouteHandler[] = [
             status: "saved",
             errorItemId: c.errorItemId,
             failureReason: null,
+            // 把沿用后的年级写回留档：批量跟踪页的年级标签与详情页才不会一边有、一边空
+            gradeSemester: c.finalGrade,
             // 入库后原图已经在 ErrorItem 里了，批次这张是同一份副本。
             // 不清就会一直双份占数据库（30 张约 36MB），而免费额度只有 500MB。
             imageBase64: "",

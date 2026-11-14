@@ -124,6 +124,8 @@ async function handleImport(ctx: RouteContext): Promise<Response | null> {
   const user = await requireUser();
   const items: any[] = ctx.body?.errorItems || ctx.body?.items || [];
   if (!items.length) return json({ success: true, imported: 0, total: 0 });
+  // 刻意不套用「沿用最近年级」：这里是还原用户导出的备份，每条题目自带当时的
+  // 年级（含明确「未设置」），强行沿用会把历史状态改掉。该规则只约束「新题入库」。
 
   const rows = items.map((item) => ({
     id: cuid(),

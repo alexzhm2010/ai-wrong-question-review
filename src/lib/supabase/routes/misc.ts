@@ -13,6 +13,7 @@ import {
 } from "../core";
 import { apiError, json, type RouteContext, type RouteHandler } from "../http";
 import { loadPublicConfig, savePublicConfig } from "./shared";
+import { fetchLastUsedGrade } from "./grade";
 
 async function handleVersion(ctx: RouteContext): Promise<Response | null> {
   if (ctx.parts[0] !== "version") return null;
@@ -54,12 +55,11 @@ async function handleUser(ctx: RouteContext): Promise<Response | null> {
     return null;
   }
 
-  // /api/user/last-grade：沿用最近一道错题的年级学期
+  // /api/user/last-grade：沿用最近一道错题的年级学期。
+  // 与入库兜底共用 grade.ts 的判定，保证「编辑器预填」和「写库结果」是同一个值。
   if (ctx.method === "GET") {
-    const rows = await restJson<any[]>(
-      "/ErrorItem?select=gradeSemester,createdAt&order=createdAt.desc",
-    ).catch(() => []);
-    return json({ gradeSemester: rows.find((r) => r.gradeSemester)?.gradeSemester || null });
+    const user = await requireUser();
+    return json({ gradeSemester: await fetchLastUsedGrade(user.id) });
   }
   if (ctx.method === "POST" || ctx.method === "PUT") {
     return json({ gradeSemester: ctx.body?.gradeSemester || null });
