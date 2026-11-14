@@ -1,9 +1,9 @@
 1:"$Sreact.fragment"
 2:I[47257,["/ai-wrong-question-review/_next/static/chunks/ff1a16fafef87110.js","/ai-wrong-question-review/_next/static/chunks/894700145f5af490.js"],"ClientPageRoot"]
-3:I[21308,["/ai-wrong-question-review/_next/static/chunks/754d7494be678df9.js","/ai-wrong-question-review/_next/static/chunks/7cabcf0b24fa26b1.js","/ai-wrong-question-review/_next/static/chunks/195c216f52dae3f8.js","/ai-wrong-question-review/_next/static/chunks/4ee8093b37ec931d.js","/ai-wrong-question-review/_next/static/chunks/701bf91d5d16484d.js","/ai-wrong-question-review/_next/static/chunks/fc53d44fe1c8ac38.js"],"default"]
+3:I[21308,["/ai-wrong-question-review/_next/static/chunks/248c4758c78e6804.js","/ai-wrong-question-review/_next/static/chunks/7cabcf0b24fa26b1.js","/ai-wrong-question-review/_next/static/chunks/195c216f52dae3f8.js","/ai-wrong-question-review/_next/static/chunks/4ee8093b37ec931d.js","/ai-wrong-question-review/_next/static/chunks/701bf91d5d16484d.js","/ai-wrong-question-review/_next/static/chunks/e5fd16f0bc8e45df.js"],"default"]
 6:I[97367,["/ai-wrong-question-review/_next/static/chunks/ff1a16fafef87110.js","/ai-wrong-question-review/_next/static/chunks/894700145f5af490.js"],"OutletBoundary"]
 7:"$Sreact.suspense"
-0:{"buildId":"WlZEXHIRARW2g8RAFxJW6","rsc":["$","$1","c",{"children":[["$","$L2",null,{"Component":"$3","serverProvidedParams":{"searchParams":{},"params":{},"promises":["$@4","$@5"]}}],[["$","script","script-0",{"src":"/ai-wrong-question-review/_next/static/chunks/701bf91d5d16484d.js","async":true}],["$","script","script-1",{"src":"/ai-wrong-question-review/_next/static/chunks/fc53d44fe1c8ac38.js","async":true}]],["$","$L6",null,{"children":["$","$7",null,{"name":"Next.MetadataOutlet","children":"$@8"}]}]]}],"loading":null,"isPartial":false}
+0:{"buildId":"g2Msiv8JcXuZHOTAk88AW","rsc":["$","$1","c",{"children":[["$","$L2",null,{"Component":"$3","serverProvidedParams":{"searchParams":{},"params":{},"promises":["$@4","$@5"]}}],[["$","script","script-0",{"src":"/ai-wrong-question-review/_next/static/chunks/701bf91d5d16484d.js","async":true}],["$","script","script-1",{"src":"/ai-wrong-question-review/_next/static/chunks/e5fd16f0bc8e45df.js","async":true}]],["$","$L6",null,{"children":["$","$7",null,{"name":"Next.MetadataOutlet","children":"$@8"}]}]]}],"loading":null,"isPartial":false}
 4:{}
 5:{}
 8:null
