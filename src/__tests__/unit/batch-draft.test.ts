@@ -1,5 +1,16 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { DRAFT_TTL_DAYS, draftDaysLeft } from "@/lib/batch-draft";
+import { DRAFT_IMAGE_LIMITS } from "@/lib/image-utils";
+
+const { ingestSpy, postSpy } = vi.hoisted(() => ({
+    ingestSpy: vi.fn(async () => ({ ref: "data:image/jpeg;base64,AA", thumb: "data:image/jpeg;base64,BB" })),
+    postSpy: vi.fn(async () => ({})),
+}));
+vi.mock("@/lib/storage", () => ({ ingestImage: (...args: unknown[]) => ingestSpy(...args) }));
+vi.mock("@/lib/api-client", () => ({
+    ApiError: class ApiError extends Error {},
+    apiClient: { post: (...args: unknown[]) => postSpy(...args) },
+}));
 
 describe("草稿过期", () => {
     afterEach(() => {
@@ -30,5 +41,24 @@ describe("草稿过期", () => {
     it("时间字段缺失时按满额处理，不误报已过期", () => {
         expect(draftDaysLeft(null)).toBe(DRAFT_TTL_DAYS);
         expect(draftDaysLeft("不是时间")).toBe(DRAFT_TTL_DAYS);
+    });
+});
+
+describe("批量草稿上传使用收紧后的压缩规格", () => {
+    it("把 1600 / 150 万像素 / q82 真正传给存储层", async () => {
+        const { uploadDraftImages } = await import("@/lib/batch-draft");
+        ingestSpy.mockClear();
+        postSpy.mockClear();
+        // ingestImage 被 mock，不会真的读文件；只需保证参数链路没断
+        await uploadDraftImages("job-1", [{} as File]);
+        expect(ingestSpy).toHaveBeenCalledTimes(1);
+        expect(ingestSpy.mock.calls[0][1]).toMatchObject({
+            role: "draft",
+            ownerId: "job-1",
+            maxWidth: DRAFT_IMAGE_LIMITS.maxWidth,
+            maxPixels: DRAFT_IMAGE_LIMITS.maxPixels,
+            quality: DRAFT_IMAGE_LIMITS.quality,
+        });
+        expect(postSpy).toHaveBeenCalledTimes(1);
     });
 });

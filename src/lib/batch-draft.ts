@@ -8,6 +8,7 @@
  * 也不会再出现「一次 POST 30 张、请求体 40MB」那种在手机上必炸的写法。
  */
 import { ApiError, apiClient } from "./api-client";
+import { DRAFT_IMAGE_LIMITS } from "./image-utils";
 import { ingestImage } from "./storage";
 
 /** 并发数：一张解码后约 30MB，3 张已经接近手机单标签页的舒适上限 */
@@ -78,12 +79,13 @@ export async function uploadDraftImages(
             if (!job) break;
             try {
                 // 压缩 + 缩略图 + 落引用，一步到位；切远程存储时这里不用改。
-                // 批量草稿图要直接送模型，额外降一档像素：整页拍题图动辄 6M 像素，
-                // 会把单次 AI 请求拖到超时。300 万像素≈A4 @175dpi，打印仍清晰。
+                // 批量草稿图要直接送模型，走更严的 DRAFT_IMAGE_LIMITS：
+                // 整页拍题图动辄 6M 像素，会把单次 AI 请求拖到超时。
+                // 单题上传仍用默认 2400 / 400 万，打印与放大清晰度不受影响。
                 const { ref, thumb } = await ingestImage(job.file, {
                     role: "draft",
                     ownerId: jobId,
-                    maxPixels: 3_000_000,
+                    ...DRAFT_IMAGE_LIMITS,
                 });
                 await apiClient.post(
                     "/api/batch/image",

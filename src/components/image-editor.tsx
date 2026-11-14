@@ -75,6 +75,10 @@ interface Props {
     skipLabel?: string;
     /** 打开时停在哪个工具；批量队列直接进抹除，少点一次 */
     initialMode?: Mode;
+    /** 导出图最长边（默认 2400）；批量草稿传 1600，避免编辑保存绕过压缩 */
+    exportMaxWidth?: number;
+    /** 导出 JPEG 质量（默认 0.88）；批量草稿传 0.82 */
+    exportQuality?: number;
     /** changed=false 表示用户什么都没改，调用方可以跳过上传 */
     onCancel: () => void;
     onDone: (dataUrl: string, changed: boolean) => void | Promise<void>;
@@ -85,6 +89,7 @@ const ERASE_LABELS = ["细", "中", "粗"];
 export function ImageEditor({
     open, imageSrc, title, subtitle, busy, progressLabel, onSkip, onPrev,
     doneLabel, skipLabel, initialMode = "crop", onCancel, onDone,
+    exportMaxWidth = 2400, exportQuality = 0.88,
 }: Props) {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
@@ -464,7 +469,7 @@ export function ImageEditor({
             // 只看本次 pending 会误判成「没改动」，被详情页的 changed=false 跳过保存，
             // 结果裁完白干。基准图本身变过就算改过。
             const changed = pending.length > 0 || target !== base || (!!original && base !== original);
-            const url = exportEdited(target, pending, 2400, 0.88);
+            const url = exportEdited(target, pending, exportMaxWidth, exportQuality);
             await onDone(url, changed);
         } finally {
             setSaving(false);

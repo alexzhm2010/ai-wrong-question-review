@@ -105,6 +105,22 @@ export async function compressImage(
 }
 
 /**
+ * 批量草稿图的压缩规格（只作用于批量导入，不作用于单题上传）。
+ *
+ * 隔离跑批结论：同一批 4 张超时图，保持原图 0/4；压到 1600 长边 /
+ * 150 万像素 / q82 后 2/4 成功，且成功的两张约 9s 返回。单题仍走默认
+ * 2400 / 400 万，保证详情页放大与打印清晰度。
+ *
+ * 放在这里而不是 batch-draft.ts：批量编辑保存导出的图也要用同一套规格，
+ * 而 batch-draft-editor 的单元测试 mock 掉了 batch-draft 模块。
+ */
+export const DRAFT_IMAGE_LIMITS = {
+    maxWidth: 1600,
+    maxPixels: 1_500_000,
+    quality: 0.82,
+} as const;
+
+/**
  * 检查并压缩图片（如果需要）
  * @param file 图片文件
  * @returns Base64 字符串

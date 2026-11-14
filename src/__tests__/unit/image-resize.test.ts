@@ -6,7 +6,7 @@
  * 从第 4 张开始把批量解析拖到超时。这里锁住「最长边 + 总像素」双限制。
  */
 import { describe, it, expect } from "vitest";
-import { fitImageSize } from "@/lib/image-utils";
+import { fitImageSize, DRAFT_IMAGE_LIMITS } from "@/lib/image-utils";
 
 const EDGE = 2400;
 const PIXELS = 4_000_000;
@@ -51,10 +51,14 @@ describe("fitImageSize：最长边 + 总像素双限制", () => {
         expect(r.width * r.height).toBeLessThanOrEqual(PIXELS * 1.01);
     });
 
-    it("批量草稿额外降一档到 300 万像素", () => {
-        const r = fitImageSize(2136, 3034, EDGE, 3_000_000);
-        expect(r.width * r.height).toBeLessThanOrEqual(3_000_000 * 1.01);
-        expect(r.height).toBeLessThan(2200);
+    it("v1.19.9：批量草稿收紧到 1600 长边 / 150 万像素 / q82", () => {
+        expect(DRAFT_IMAGE_LIMITS).toMatchObject({ maxWidth: 1600, maxPixels: 1_500_000, quality: 0.82 });
+        const r = fitImageSize(
+            2136, 3034, DRAFT_IMAGE_LIMITS.maxWidth, DRAFT_IMAGE_LIMITS.maxPixels,
+        );
+        expect(r.width * r.height).toBeLessThanOrEqual(DRAFT_IMAGE_LIMITS.maxPixels * 1.01);
+        expect(Math.max(r.width, r.height)).toBeLessThanOrEqual(DRAFT_IMAGE_LIMITS.maxWidth);
+        expect(r.height).toBeLessThan(1500);
     });
 
     it("像素上限为 0 或负数时不产生非法尺寸", () => {

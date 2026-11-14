@@ -26,24 +26,31 @@ describe("itemBudgetMs：单张预算绝不超过硬截止余量", () => {
         expect(itemBudgetMs(200_000, 0)).toBe(PER_ITEM_TIMEOUT_MS);
     });
 
-    it("剩余不足时按剩余给，不再开满 75s", () => {
+    it("剩余不足时按剩余给，不再开满 105s", () => {
         expect(itemBudgetMs(30_000, 0)).toBe(30_000);
         expect(itemBudgetMs(0, 100_000)).toBe(0);
     });
 
-    it("任何情况下都不会超过平台上限的一半", () => {
-        // 旧版 fast 120s + deep 120s = 240s > 150s；新版单张最多 75s
+    it("任何情况下都不会超过平台上限", () => {
+        // 旧版 fast 120s + deep 120s = 240s > 150s；新版单张最多 105s
         expect(itemBudgetMs(1_000_000_000, 0)).toBeLessThan(150_000);
     });
 });
 
 describe("canStartItem：软预算 / 硬截止双重把关", () => {
     it("预算充足可以开新条目", () => {
-        expect(canStartItem(105_000, 0, 55_000)).toBe(true);
+        expect(canStartItem(125_000, 0, 55_000)).toBe(true);
+    });
+
+    it("v1.19.9：单张 105s 后硬截止必须同步抬到 125s，否则一张都开不了", () => {
+        expect(PER_ITEM_TIMEOUT_MS).toBe(105_000);
+        expect(MIN_ITEM_BUDGET_MS).toBe(113_000);
+        expect(canStartItem(125_000, 0, 55_000)).toBe(true);
+        expect(canStartItem(105_000, 0, 55_000)).toBe(false);
     });
 
     it("软预算到点即使硬截止还有余量也交棒下一轮", () => {
-        expect(canStartItem(105_000, 55_001, 55_000)).toBe(false);
+        expect(canStartItem(125_000, 55_001, 55_000)).toBe(false);
     });
 
     it("硬截止余量不足以跑完一张并写库时不再开新条目", () => {
@@ -80,10 +87,13 @@ describe("shouldRetryDeep：只在漏标签时降级，超时绝不重跑", () =
         expect(shouldRetryDeep("fast", "Missing critical XML tags", false, MIN_DEEP_RETRY_MS + 1)).toBe(true);
     });
 
-    it("两段重试（就算发生）共享预算，累计不会超过平台上限", () => {
-        const budget = itemBudgetMs(105_000, 0);
+    it("两段重试共享同一个 deadline，累计不会超过平台上限", () => {
+        const budget = itemBudgetMs(125_000, 0);
         expect(budget).toBe(PER_ITEM_TIMEOUT_MS);
-        expect(budget * 2).toBeLessThanOrEqual(150_000);
+        // fast + deep 共用一个 AbortController 与 deadline，不是各跑一遍：
+        // 单张最多 105s + 单轮收尾余量 25s，仍留在平台 150s 内
+        expect(budget).toBeLessThan(150_000);
+        expect(budget + 25_000).toBeLessThanOrEqual(150_000);
     });
 });
 

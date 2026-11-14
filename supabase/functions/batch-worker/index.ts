@@ -46,10 +46,11 @@ const MODEL = Deno.env.get("OPENAI_MODEL") || "doubao-seed-2-1-lite-260915";
 /** 每轮处理的软预算：到点交棒给下一轮，避免单轮过长 */
 const ROUND_BUDGET_MS = 55_000;
 /**
- * 单轮硬截止：平台 150s 会直接杀进程，留 45s 给自调用、收尾和网络抖动。
- * 超过这个时间点本轮必须停止开新条目并返回，否则 processing 永远写不回结果。
+ * 单轮硬截止：平台 150s 会直接杀进程，留 25s 给自调用、收尾和网络抖动。
+ * 单张预算放宽到 105s 后硬截止必须同步抬到 125s，否则 canStartItem 的
+ * 113s 门槛会让整轮一张都开不了；超过这个点本轮必须停止开新条目并返回。
  */
-const ROUND_HARD_DEADLINE_MS = 105_000;
+const ROUND_HARD_DEADLINE_MS = 125_000;
 /** processing 存活心跳间隔；活实例的条目永远不会显得「僵死」 */
 const ITEM_HEARTBEAT_MS = 15_000;
 /** 僵死回收窗口：大于心跳间隔，小于单张超时，被杀的条目最多 45s 就能被下一轮接管 */
@@ -377,7 +378,7 @@ async function runRound(jobId: string): Promise<{ processed: number; remaining: 
   const softDeadline = startedAt + ROUND_BUDGET_MS;
   const hardDeadline = startedAt + ROUND_HARD_DEADLINE_MS;
   let processed = 0;
-  console.log(`[batch-worker] v1.19.8 round start job=${jobId} mode=${mode}`);
+  console.log(`[batch-worker] v1.19.9 round start job=${jobId} mode=${mode}`);
 
   // 上一轮被平台杀掉时留下的 processing 条目，先拨回 pending / failed，否则永远轮不到它
   await reclaimStale(jobId).catch(() => 0);
@@ -590,7 +591,7 @@ Deno.serve(async (req: Request) => {
   if (!API_KEY) return json({ error: "AI_NOT_CONFIGURED" }, 503);
 
   // 调用级版本标记：不依赖 job 是否存在，运维用日志就能确认线上跑的是哪一版
-  console.log(`[batch-worker] v1.19.8 invoke job=${jobId}`);
+  console.log(`[batch-worker] v1.19.9 invoke job=${jobId}`);
 
   try {
     const result = await runRound(jobId);

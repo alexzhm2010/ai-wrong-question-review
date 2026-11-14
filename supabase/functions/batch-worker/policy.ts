@@ -6,8 +6,12 @@
  * 没有 pending 时还无限自调用。以后改这里先跑测试。
  */
 
-/** 单张解析硬超时：深度模式实测 70–85s；超时就明确标 failed，不再二次重试 */
-export const PER_ITEM_TIMEOUT_MS = 75_000;
+/**
+ * 单张解析硬超时：同一批真实失败图的响应实测落在 61–100s，旧版 75s 正好切在
+ * 分布中间，把「再等几秒就能返回」的图也判成了超时。放宽到 105s 覆盖长尾，
+ * 单轮硬截止同步抬到 125s（见 index.ts），仍给平台 150s 上限留 25s 收尾。
+ */
+export const PER_ITEM_TIMEOUT_MS = 105_000;
 /** 开新一张至少需要的剩余预算（单张上限 + 写库时间） */
 export const MIN_ITEM_BUDGET_MS = PER_ITEM_TIMEOUT_MS + 8_000;
 /** 一张最多尝试次数：抢占阶段判定，不依赖 updatedAt */
@@ -24,7 +28,7 @@ export function itemBudgetMs(hardDeadlineAt: number, now: number): number {
  * 软预算到点、或硬截止余量不足时，本轮不再开新条目（交给下一轮）。
  *
  * 注意比较的是「硬截止原始余量」而不是 itemBudgetMs：后者被单张上限封顶在
- * 75_000，若拿它跟 83_000 的门槛比会永远为 false，worker 一张都不会跑。
+ * 105_000，若拿它跟 113_000 的门槛比会永远为 false，worker 一张都不会跑。
  */
 export function canStartItem(
     hardDeadlineAt: number,

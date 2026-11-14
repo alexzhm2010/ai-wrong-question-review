@@ -29,6 +29,7 @@ import { toast } from "@/lib/toast";
 import { refreshActiveBatch } from "@/lib/batch-store";
 import { startDraft, uploadDraftImages } from "@/lib/batch-draft";
 import { imageSrc, ingestImage } from "@/lib/storage";
+import { DRAFT_IMAGE_LIMITS } from "@/lib/image-utils";
 import { ImageEditor } from "@/components/image-editor";
 
 interface DraftItem {
@@ -241,6 +242,8 @@ export function BatchDraftEditor({ jobId, files, onClose, onStarted }: Props) {
                 title="批量检查"
                 subtitle="有问题改完点「保存并下一张」，没问题点「不处理」"
                 initialMode="erase"
+                exportMaxWidth={DRAFT_IMAGE_LIMITS.maxWidth}
+                exportQuality={DRAFT_IMAGE_LIMITS.quality}
                 progressLabel={`${index + 1}/${items.length}`}
                 onPrev={index > 0 ? prev : undefined}
                 skipLabel="不处理"
