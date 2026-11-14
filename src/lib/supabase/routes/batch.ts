@@ -710,7 +710,7 @@ export const BATCH_HANDLERS: RouteHandler[] = [
         ).catch(() => []);
         if (!rows?.length) return apiError(404, "条目不存在");
         // 单张重试是用户明确「这一张重来」，attempts 必须归零：
-        // worker 在抢占阶段会判 attempts>=3 直接标 failed，
+        // worker 在抢占阶段会判 attempts>=4 直接标 failed，
         // 不清零的话用户无论点多少次重试都会被立刻打回失败。
         await restJson(`/BatchItem?id=eq.${encodeURIComponent(itemId)}`, {
           method: "PATCH",
@@ -723,7 +723,7 @@ export const BATCH_HANDLERS: RouteHandler[] = [
         // 而 worker 只挑 pending，于是整批看起来卡住不动。这里把超时未更新的拨回 pending。
         const cutoff = new Date(Date.now() - 3 * 60_000).toISOString();
         await restJson(
-          `/BatchItem?jobId=eq.${encodeURIComponent(jobId)}&status=eq.processing&updatedAt=lt.${encodeURIComponent(cutoff)}&attempts=lt.3`,
+          `/BatchItem?jobId=eq.${encodeURIComponent(jobId)}&status=eq.processing&updatedAt=lt.${encodeURIComponent(cutoff)}&attempts=lt.4`,
           {
             method: "PATCH",
             headers: { Prefer: "return=minimal" },
@@ -731,7 +731,7 @@ export const BATCH_HANDLERS: RouteHandler[] = [
           },
         ).catch(() => {});
         await restJson(
-          `/BatchItem?jobId=eq.${encodeURIComponent(jobId)}&status=eq.processing&updatedAt=lt.${encodeURIComponent(cutoff)}&attempts=gte.3`,
+          `/BatchItem?jobId=eq.${encodeURIComponent(jobId)}&status=eq.processing&updatedAt=lt.${encodeURIComponent(cutoff)}&attempts=gte.4`,
           {
             method: "PATCH",
             headers: { Prefer: "return=minimal" },

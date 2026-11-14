@@ -8,8 +8,10 @@
  *    因此执行不依赖浏览器——关页、换设备、重新登录都不影响任务。
  * 2. 每张图处理前用条件 PATCH 抢占（status=pending → processing），
  *    防止两个 worker 同时处理同一条；处理期间定时刷新 updatedAt 作为「存活心跳」。
- * 3. 快速模式只有「模型返回了内容但漏标签」才自动降级深度重试，且两段共享同一个
- *    AbortSignal 与总预算；超时/网络错误绝不重跑（两段累计必然撞函数上限）。
+ * 3. 同轮内只有「模型返回了内容但漏标签」才自动降级深度重试，且两段共享同一个
+ *    AbortSignal 与总预算；超时/网络错误绝不在本轮重跑（两段累计必然撞函数上限）。
+ *    这些瞬时故障改为把条目拨回 pending、由下一轮（新的调用）重试，最多 MAX_ATTEMPTS
+ *    次——既拿回 v1.19.8 之前「超时再试一次」的成功率，又不会撞平台上限。
  *    降级后置 autoDeepRetry=true，确认列表里明确标注（费用与时长会上浮）。
  * 4. 批量不做「反向代入验算」：验算在深度模式下本身可长达 120s，
  *    一旦触发必然撞上函数上限。改为把答案冲突信息落库，由确认列表提示人工核对。
@@ -27,7 +29,7 @@ import { deriveAnswerFromAnalysis } from "../ai-proxy/lib/answer-consistency.ts"
 import { resolveSubject } from "../ai-proxy/lib/subject-resolve.ts";
 import {
   PER_ITEM_TIMEOUT_MS, MAX_ATTEMPTS,
-  attemptsExhausted, canStartItem, itemBudgetMs, shouldRetryDeep,
+  attemptsExhausted, canStartItem, itemBudgetMs, shouldRetryDeep, shouldRetryItem,
 } from "./policy.ts";
 
 const CORS = {
@@ -46,11 +48,12 @@ const MODEL = Deno.env.get("OPENAI_MODEL") || "doubao-seed-2-1-lite-260915";
 /** 每轮处理的软预算：到点交棒给下一轮，避免单轮过长 */
 const ROUND_BUDGET_MS = 55_000;
 /**
- * 单轮硬截止：平台 150s 会直接杀进程，留 25s 给自调用、收尾和网络抖动。
- * 单张预算放宽到 105s 后硬截止必须同步抬到 125s，否则 canStartItem 的
- * 113s 门槛会让整轮一张都开不了；超过这个点本轮必须停止开新条目并返回。
+ * 单轮硬截止：平台 150s 会直接杀进程，留 10s 给自调用、收尾和网络抖动。
+ * 单张预算恢复到 120s 后硬截止必须同步抬到 140s，否则 canStartItem 的
+ * 128s 门槛会让整轮一张都开不了；超过这个点本轮必须停止开新条目并返回。
+ * 软预算 55s 保证一轮最多跑一张慢图，最坏约 120s + 收尾，不会撞上限。
  */
-const ROUND_HARD_DEADLINE_MS = 125_000;
+const ROUND_HARD_DEADLINE_MS = 140_000;
 /** processing 存活心跳间隔；活实例的条目永远不会显得「僵死」 */
 const ITEM_HEARTBEAT_MS = 15_000;
 /** 僵死回收窗口：大于心跳间隔，小于单张超时，被杀的条目最多 45s 就能被下一轮接管 */
@@ -315,12 +318,12 @@ async function reclaimStale(jobId: string, staleMs = STALE_MS): Promise<number> 
   const cutoff = new Date(Date.now() - staleMs).toISOString();
   const base = `/BatchItem?jobId=eq.${enc(jobId)}&status=eq.processing&updatedAt=lt.${enc(cutoff)}`;
   const now = new Date().toISOString();
-  const back = await rest<any[]>(`${base}&attempts=lt.3`, {
+  const back = await rest<any[]>(`${base}&attempts=lt.${MAX_ATTEMPTS}`, {
     method: "PATCH",
     headers: { Prefer: "return=representation" },
     body: JSON.stringify({ status: "pending", failureReason: null, updatedAt: now }),
   }).catch(() => []);
-  await rest(`${base}&attempts=gte.3`, {
+  await rest(`${base}&attempts=gte.${MAX_ATTEMPTS}`, {
     method: "PATCH",
     headers: { Prefer: "return=minimal" },
     body: JSON.stringify({ status: "failed", failureReason: "处理中断（多次超时），可单独重试", updatedAt: now }),
@@ -378,7 +381,9 @@ async function runRound(jobId: string): Promise<{ processed: number; remaining: 
   const softDeadline = startedAt + ROUND_BUDGET_MS;
   const hardDeadline = startedAt + ROUND_HARD_DEADLINE_MS;
   let processed = 0;
-  console.log(`[batch-worker] v1.19.9 round start job=${jobId} mode=${mode}`);
+  // 本轮已拨回 pending 的条目不允许在本轮立刻重跑：两次 120s 累计会撞 150s 上限
+  const requeued = new Set<string>();
+  console.log(`[batch-worker] v1.19.10 round start job=${jobId} mode=${mode}`);
 
   // 上一轮被平台杀掉时留下的 processing 条目，先拨回 pending / failed，否则永远轮不到它
   await reclaimStale(jobId).catch(() => 0);
@@ -394,10 +399,11 @@ async function runRound(jobId: string): Promise<{ processed: number; remaining: 
 
   while (canStartItem(hardDeadline, Date.now(), softDeadline)) {
     const pending = await rest<any[]>(
-      `/BatchItem?select=*&jobId=eq.${enc(jobId)}&status=eq.pending&order=idx.asc&limit=1`,
+      `/BatchItem?select=*&jobId=eq.${enc(jobId)}&status=eq.pending&order=idx.asc&limit=8`,
     );
-    if (!pending?.length) break;
-    const item = pending[0];
+    // 跳过本轮刚拨回 pending 的条目，让它们的重试落到下一轮（新的一次 150s 调用）
+    const item = pending?.find((p) => !requeued.has(p.id));
+    if (!item) break;
 
     // 尝试次数在抢占阶段判定，不依赖会被并发不断刷新的 updatedAt
     if (attemptsExhausted(item.attempts || 0, MAX_ATTEMPTS)) {
@@ -452,10 +458,24 @@ async function runRound(jobId: string): Promise<{ processed: number; remaining: 
       const msg = e instanceof Error ? e.message : String(e);
       console.error(`[batch-worker] item ${item.id} failed:`, msg);
       const quota = /AI_HTTP_402|AI_HTTP_403|AccountOverdue|quota|额度/i.test(msg);
-      await patchItem(item.id, {
-        status: "failed",
-        failureReason: quota ? "AI 额度不足，充值后可在确认列表中重试" : msg.slice(0, 300),
-      });
+      const aborted = /signal has been aborted/i.test(msg);
+      // v1.19.8 之前（11-14 凌晨 15/15 全成功）超时会自动再跑一次；v1.19.8/1.19.9
+      // 改成超时直接 failed，结果 16 张失败图 attempts 全是 1。这里把重试机会拿回来，
+      // 但用「拨回 pending + 下一轮再跑」实现——同轮连跑两次 120s 会撞平台 150s 上限，
+      // 进程被杀、条目永远停在 processing，正是「永远解析中」的根因。
+      if (!quota && shouldRetryItem(msg, aborted, item.attempts || 0, MAX_ATTEMPTS)) {
+        await patchItem(item.id, { status: "pending", failureReason: null });
+        requeued.add(item.id);
+        console.log(
+          `[batch-worker] item ${item.id} transient failure, requeued for next round ` +
+          `(attempt ${(item.attempts || 0) + 1}/${MAX_ATTEMPTS}): ${msg.slice(0, 120)}`,
+        );
+      } else {
+        await patchItem(item.id, {
+          status: "failed",
+          failureReason: quota ? "AI 额度不足，充值后可在确认列表中重试" : msg.slice(0, 300),
+        });
+      }
       if (quota) {
         // 整批暂停：继续跑只会把剩下的全打成 failed
         await patchJob(jobId, { status: "paused", errorMessage: "AI 额度不足，已暂停", heartbeatAt: new Date().toISOString() });
@@ -591,7 +611,7 @@ Deno.serve(async (req: Request) => {
   if (!API_KEY) return json({ error: "AI_NOT_CONFIGURED" }, 503);
 
   // 调用级版本标记：不依赖 job 是否存在，运维用日志就能确认线上跑的是哪一版
-  console.log(`[batch-worker] v1.19.9 invoke job=${jobId}`);
+  console.log(`[batch-worker] v1.19.10 invoke job=${jobId}`);
 
   try {
     const result = await runRound(jobId);
