@@ -15,7 +15,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-    Eraser, Loader2, Maximize2, Move, RotateCcw, Scissors, Undo2, X, Check,
+    Eraser, Loader2, Maximize2, Move, RotateCcw, Scissors, Undo2, X, Check, ChevronLeft,
 } from "lucide-react";
 import {
     type EditOp,
@@ -67,6 +67,12 @@ interface Props {
     progressLabel?: string;
     /** 队列模式：本轮不保存直接看下一张 */
     onSkip?: () => void;
+    /** 队列模式：回到上一张（不保存当前改动） */
+    onPrev?: () => void;
+    /** 队列模式：覆盖「完成」文案，例如「保存并下一张」 */
+    doneLabel?: string;
+    /** 队列模式：覆盖「不处理」文案 */
+    skipLabel?: string;
     /** 打开时停在哪个工具；批量队列直接进抹除，少点一次 */
     initialMode?: Mode;
     /** changed=false 表示用户什么都没改，调用方可以跳过上传 */
@@ -77,7 +83,8 @@ interface Props {
 const ERASE_LABELS = ["细", "中", "粗"];
 
 export function ImageEditor({
-    open, imageSrc, title, subtitle, busy, progressLabel, onSkip, initialMode = "crop", onCancel, onDone,
+    open, imageSrc, title, subtitle, busy, progressLabel, onSkip, onPrev,
+    doneLabel, skipLabel, initialMode = "crop", onCancel, onDone,
 }: Props) {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
@@ -96,6 +103,12 @@ export function ImageEditor({
     /** 搬移选区（归一化）；松开后保留，方便连续微调 */
     const [sel, setSel] = useState<Rect | null>(null);
     const [saving, setSaving] = useState(false);
+    /** 已应用的裁剪次数：顶栏要给出可见反馈，否则用户以为「一点裁剪就重置了」 */
+    const [cropCount, setCropCount] = useState(0);
+    /** 队列模式：有未保存改动却点了「不处理」，先拦一下 */
+    const [confirmSkip, setConfirmSkip] = useState(false);
+    /** 裁剪前的完整快照，供「撤销裁剪」还原（ops 已被烘焙，只存 base 不够） */
+    const cropStackRef = useRef<{ base: HTMLCanvasElement; ops: EditOp[]; cropSel: Rect }[]>([]);
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const boxRef = useRef<HTMLDivElement>(null);
@@ -124,6 +137,9 @@ export function ImageEditor({
         setSel(null);
         setMode(initialMode);
         setCropSel(FULL_CROP);
+        setCropCount(0);
+        setConfirmSkip(false);
+        cropStackRef.current = [];
 
         loadImage(imageSrc)
             .then((img) => {
@@ -379,11 +395,28 @@ export function ImageEditor({
         if (!rect) return; // 没裁，别浪费一次重编码
         const next = bakeThenCrop(rect);
         if (!next) return;
+        // 先留快照：撤销裁剪要连 ops 一起还原，光存旧 base 会把之前的抹除丢掉
+        cropStackRef.current.push({ base, ops, cropSel: FULL_CROP });
         setBase(next);
         setOps([]); // 已经烘焙进新基准，旧指令坐标失效
         setSel(null);
         setCropSel(FULL_CROP);
-        setMode("erase");
+        setCropCount((n) => n + 1);
+        // 刻意不 setMode("erase")：以前一刀切跳回抹除，用户看到工具变了、
+        // 框没了，就以为「点裁剪把图片重置了」。现在留在裁剪模式，
+        // 画布立刻显示裁完的结果，顶栏同步出现「已裁剪 1 次」。
+    };
+
+    /** 撤销最近一次「按框裁剪」，连同裁剪前的抹除/搬移一起还原 */
+    const undoCrop = () => {
+        const snapshot = cropStackRef.current.pop();
+        if (!snapshot) return;
+        setBase(snapshot.base);
+        setOps(snapshot.ops);
+        setSel(null);
+        setCropSel(snapshot.cropSel);
+        setCropCount((n) => Math.max(0, n - 1));
+        livePreviewRef.current = null;
     };
 
     const resetAll = () => {
@@ -391,6 +424,8 @@ export function ImageEditor({
         setOps([]);
         setSel(null);
         setCropSel(FULL_CROP);
+        setCropCount(0);
+        cropStackRef.current = [];
         livePreviewRef.current = null;
     };
 
@@ -438,11 +473,31 @@ export function ImageEditor({
 
     /* -------------------------------- 渲染 -------------------------------- */
     const summary = summarize(ops);
-    const dirty = ops.length > 0 || (base && original && base !== original);
+    const dirty = ops.length > 0 || cropCount > 0 || (!!base && !!original && base !== original);
+    const statusBits: string[] = [];
+    if (cropCount) statusBits.push(`已裁剪 ${cropCount} 次`);
+    if (summary.erase) statusBits.push(`已抹 ${summary.erase} 笔`);
+    if (summary.move) statusBits.push(`已搬 ${summary.move} 块`);
+    const statusText = statusBits.join(" · ");
+    const hintText = progressLabel
+        ? (statusText
+            ? `${statusText} · 改完点右上「${doneLabel || "完成"}」`
+            : (subtitle || "有问题就改，没问题点「不处理」"))
+        : (statusText || subtitle || "裁边、抹掉批改痕迹、把图形搬到空白处");
+
+    const handleSkip = () => {
+        // 已经改过却点「不处理」会把改动丢掉，先问一句
+        if (dirty) {
+            setConfirmSkip(true);
+            return;
+        }
+        onSkip?.();
+    };
 
     if (!open) return null;
 
     return (
+        <>
         <div className="fixed inset-0 z-[70] flex flex-col bg-slate-950 text-white">
             {/* 顶栏 */}
             <div className="flex shrink-0 items-center gap-2 px-3 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
@@ -454,6 +509,17 @@ export function ImageEditor({
                 >
                     <X className="h-5 w-5" />
                 </button>
+                {onPrev && (
+                    <button
+                        type="button"
+                        onClick={onPrev}
+                        className="flex h-9 w-8 shrink-0 items-center justify-center rounded-full text-white/60 hover:bg-white/10 hover:text-white"
+                        aria-label="上一张"
+                        title="上一张"
+                    >
+                        <ChevronLeft className="h-5 w-5" />
+                    </button>
+                )}
                 <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">
                         {progressLabel && (
@@ -463,19 +529,15 @@ export function ImageEditor({
                         )}
                         {title || "编辑图片"}
                     </p>
-                    <p className="truncate text-[11px] text-white/50">
-                        {summary.erase || summary.move
-                            ? `已抹 ${summary.erase} 笔 · 已搬 ${summary.move} 块`
-                            : (subtitle || "裁边、抹掉批改痕迹、把图形搬到空白处")}
-                    </p>
+                    <p className="truncate text-[11px] text-white/50">{hintText}</p>
                 </div>
                 {onSkip && (
                     <button
                         type="button"
-                        onClick={onSkip}
+                        onClick={handleSkip}
                         className="mr-1 shrink-0 rounded-full border border-white/20 px-3 py-1.5 text-xs text-white/80"
                     >
-                        不处理
+                        {skipLabel || "不处理"}
                     </button>
                 )}
                 <button
@@ -485,7 +547,7 @@ export function ImageEditor({
                     className="flex h-9 items-center gap-1 rounded-full bg-blue-600 px-4 text-sm font-semibold text-white disabled:opacity-50"
                 >
                     {(saving || busy) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                    完成
+                    {doneLabel || "完成"}
                 </button>
             </div>
 
@@ -524,9 +586,33 @@ export function ImageEditor({
 
             {/* 工具条 */}
             <div className="shrink-0 border-t border-white/10 bg-slate-900/95 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+                {/* 队列模式：把「怎么切到下一题」写死在屏幕上，不用靠猜 */}
+                {progressLabel && (
+                    <div className="flex items-center justify-center gap-1.5 border-b border-white/5 px-3 py-1.5 text-center text-[11px] leading-snug text-white/55">
+                        <span className="shrink-0 rounded bg-white/10 px-1.5 py-0.5 font-semibold tabular-nums text-white/80">
+                            第 {progressLabel} 张
+                        </span>
+                        <span className="min-w-0">
+                            改完点右上「{doneLabel || "完成"}」；这张没问题点「{skipLabel || "不处理"}」
+                        </span>
+                    </div>
+                )}
                 {/* 当前工具的参数 */}
                 <div className="flex h-10 items-center justify-center gap-3 px-3 text-[11px] text-white/60">
-                    {mode === "crop" && <span>拖四边或四角调整取景，框内可整体拖动；框外按下重新框选</span>}
+                    {mode === "crop" && (
+                        <>
+                            <span className="min-w-0 truncate">拖四边或四角调整取景，框内可整体拖动；框外按下重新框选</span>
+                            {cropCount > 0 && (
+                                <button
+                                    type="button"
+                                    onClick={undoCrop}
+                                    className="shrink-0 rounded-full border border-white/25 px-2 py-1 text-white/80"
+                                >
+                                    撤销裁剪
+                                </button>
+                            )}
+                        </>
+                    )}
                     {mode === "erase" && (
                         <div className="flex items-center gap-2">
                             <span>笔宽</span>
@@ -602,9 +688,14 @@ export function ImageEditor({
                         <>
                             <ToolButton
                                 icon={<Undo2 className="h-5 w-5" />}
-                                label="撤销"
-                                disabled={!ops.length}
+                                label={!ops.length && cropCount ? "撤销裁剪" : "撤销"}
+                                disabled={!ops.length && !cropCount}
                                 onClick={() => {
+                                    // 裁剪之后才可能有新的涂抹，所以先撤指令、再撤裁剪
+                                    if (!ops.length && cropStackRef.current.length) {
+                                        undoCrop();
+                                        return;
+                                    }
                                     setOps((prev) => popOp(prev));
                                     setSel(null);
                                     livePreviewRef.current = null;
@@ -621,6 +712,39 @@ export function ImageEditor({
                 </div>
             </div>
         </div>
+
+        {/* 队列模式：有未保存改动却点了「不处理」，别让它悄悄丢掉 */}
+        {confirmSkip && (
+            <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 px-8">
+                <div className="w-full max-w-xs rounded-2xl bg-slate-900 p-5 text-white shadow-xl">
+                    <p className="text-sm font-semibold">这张有未保存的修改</p>
+                    <p className="mt-2 text-xs leading-relaxed text-white/60">
+                        点「{skipLabel || "不处理"}」会直接看下一张，刚才裁的、抹的都不会保存。
+                        想保留请返回后点右上「{doneLabel || "完成"}」。
+                    </p>
+                    <div className="mt-4 flex gap-2">
+                        <button
+                            type="button"
+                            onClick={() => setConfirmSkip(false)}
+                            className="flex-1 rounded-full border border-white/20 py-2 text-xs text-white/80"
+                        >
+                            继续编辑
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setConfirmSkip(false);
+                                onSkip?.();
+                            }}
+                            className="flex-1 rounded-full bg-white/15 py-2 text-xs font-semibold text-white"
+                        >
+                            丢弃并下一张
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )}
+        </>
     );
 }
 
