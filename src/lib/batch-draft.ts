@@ -77,10 +77,13 @@ export async function uploadDraftImages(
             const job = queue.shift();
             if (!job) break;
             try {
-                // 压缩 + 缩略图 + 落引用，一步到位；切远程存储时这里不用改
+                // 压缩 + 缩略图 + 落引用，一步到位；切远程存储时这里不用改。
+                // 批量草稿图要直接送模型，额外降一档像素：整页拍题图动辄 6M 像素，
+                // 会把单次 AI 请求拖到超时。300 万像素≈A4 @175dpi，打印仍清晰。
                 const { ref, thumb } = await ingestImage(job.file, {
                     role: "draft",
                     ownerId: jobId,
+                    maxPixels: 3_000_000,
                 });
                 await apiClient.post(
                     "/api/batch/image",

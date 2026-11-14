@@ -2,15 +2,20 @@
  * 批量导入后台执行器（自链式 worker）。
  *
  * 关键约束与设计：
- * 1. Edge Function 单次调用约 150s 上限，所以每轮只处理到「约 60s 预算」，
- *    写完库、刷新 heartbeatAt 后立刻再调用自己，响应先返回。
+ * 1. Edge Function 单次调用约 150s 硬上限。每轮既有「软预算」也有「硬截止」：
+ *    软预算到点交棒给下一轮；硬截止保证哪怕一张图卡住，本轮也一定在函数被杀之前
+ *    收尾返回，绝不把条目留在 processing。写完库、刷新 heartbeatAt 后再自调用，
  *    因此执行不依赖浏览器——关页、换设备、重新登录都不影响任务。
  * 2. 每张图处理前用条件 PATCH 抢占（status=pending → processing），
- *    防止两个 worker 同时处理同一条。
- * 3. 快速模式下若模型漏了关键标签，自动用深度模式重跑这一张，
- *    并置 autoDeepRetry=true，确认列表里明确标注（费用与时长会上浮）。
+ *    防止两个 worker 同时处理同一条；处理期间定时刷新 updatedAt 作为「存活心跳」。
+ * 3. 快速模式只有「模型返回了内容但漏标签」才自动降级深度重试，且两段共享同一个
+ *    AbortSignal 与总预算；超时/网络错误绝不重跑（两段累计必然撞函数上限）。
+ *    降级后置 autoDeepRetry=true，确认列表里明确标注（费用与时长会上浮）。
  * 4. 批量不做「反向代入验算」：验算在深度模式下本身可长达 120s，
  *    一旦触发必然撞上函数上限。改为把答案冲突信息落库，由确认列表提示人工核对。
+ * 5. 并发闸门：用户反复点「重试/继续」会拉起多条 worker 链。每轮开头先回收僵死条目，
+ *    若仍有「心跳还新鲜」的 processing，说明别人正在干活，本实例立刻退出且不自调用，
+ *    多条链自然收敛成一条。attempts 上限在抢占时判定，不再依赖会被并发刷新的 updatedAt。
  */
 
 import { generateAnalyzePrompt } from "../ai-proxy/lib/prompts.ts";
@@ -20,6 +25,10 @@ import {
 } from "../ai-proxy/lib/response-guard.ts";
 import { deriveAnswerFromAnalysis } from "../ai-proxy/lib/answer-consistency.ts";
 import { resolveSubject } from "../ai-proxy/lib/subject-resolve.ts";
+import {
+  PER_ITEM_TIMEOUT_MS, MAX_ATTEMPTS,
+  attemptsExhausted, canStartItem, itemBudgetMs, shouldRetryDeep,
+} from "./policy.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -34,10 +43,19 @@ const API_KEY = Deno.env.get("OPENAI_API_KEY") || "";
 const BASE_URL = Deno.env.get("OPENAI_BASE_URL") || "https://ark.cn-beijing.volces.com/api/v3";
 const MODEL = Deno.env.get("OPENAI_MODEL") || "doubao-seed-2-1-lite-260915";
 
-/** 每轮处理的软预算：留足余量给「快速失败→深度重试」的单张回退 */
-const ROUND_BUDGET_MS = 60_000;
-/** 单张解析硬超时：深度模式实测 70–85s，给到 120s */
-const PER_ITEM_TIMEOUT_MS = 120_000;
+/** 每轮处理的软预算：到点交棒给下一轮，避免单轮过长 */
+const ROUND_BUDGET_MS = 55_000;
+/**
+ * 单轮硬截止：平台 150s 会直接杀进程，留 45s 给自调用、收尾和网络抖动。
+ * 超过这个时间点本轮必须停止开新条目并返回，否则 processing 永远写不回结果。
+ */
+const ROUND_HARD_DEADLINE_MS = 105_000;
+/** processing 存活心跳间隔；活实例的条目永远不会显得「僵死」 */
+const ITEM_HEARTBEAT_MS = 15_000;
+/** 僵死回收窗口：大于心跳间隔，小于单张超时，被杀的条目最多 45s 就能被下一轮接管 */
+const STALE_MS = 45_000;
+/** 超过这个时间没心跳就算「别人不在了」，可以接管 */
+const FRESH_HEARTBEAT_MS = 40_000;
 
 /* --------------------------------- REST --------------------------------- */
 
@@ -191,31 +209,35 @@ async function resolveImage(ref: string): Promise<string> {
 async function analyzeOne(
   imageBase64: string,
   reasoningMode: "fast" | "deep",
+  budgetMs: number,
 ): Promise<{ parsed: ReturnType<typeof parseAnalyzeResponse>; autoDeepRetry: boolean }> {
   const clean = await resolveImage(imageBase64);
   const systemPrompt = generateAnalyzePrompt("zh", null, null, {}, null);
 
+  // fast 与 deep（如果触发）共用同一个 AbortController 和同一个 deadline，
+  // 两段加起来绝不会超过 budget，也就不会把单次调用拖过平台上限。
+  const budget = Math.max(1_000, Math.min(PER_ITEM_TIMEOUT_MS, budgetMs));
+  const deadline = Date.now() + budget;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), budget);
+
   const run = async (mode: "fast" | "deep") => {
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), PER_ITEM_TIMEOUT_MS);
-    try {
-      const text = await chatAnalyze(systemPrompt, clean, mode, ac.signal);
-      return parseAnalyzeResponse(text);
-    } finally {
-      clearTimeout(timer);
-    }
+    const text = await chatAnalyze(systemPrompt, clean, mode, ac.signal);
+    return parseAnalyzeResponse(text);
   };
 
   try {
     return { parsed: await run(reasoningMode), autoDeepRetry: false };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    // 快速模式漏标签是最常见的失败，自动用深度重跑一次（用户已在方案里确认）
-    if (reasoningMode === "fast" && /Missing critical XML tags|aborted/i.test(msg)) {
-      console.log("[batch-worker] fast mode failed, retrying with deep:", msg);
+    // 只有「模型返回了内容但漏标签」才降级；超时 / 网络 / 额度错误一律直接失败。
+    if (shouldRetryDeep(reasoningMode, msg, ac.signal.aborted, deadline - Date.now())) {
+      console.log("[batch-worker] fast missing tags, deep retry within same budget:", msg);
       return { parsed: await run("deep"), autoDeepRetry: true };
     }
     throw e;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -261,11 +283,34 @@ async function recount(jobId: string) {
 }
 
 /**
+ * 并发闸门：统计「心跳还新鲜」的 processing 条目数。
+ *
+ * 单个 worker 是串行的，一轮内最多只会有 1 条 processing；出现 ≥2 条就说明
+ * 用户反复点「重试/继续」拉起了多条 worker 链，它们正互相抢模型并发——
+ * 越抢越慢、越慢越超时、越超时越重启。此时本实例必须退出且不自我续链。
+ *
+ * 只看 1 条不退出：那可能是本链上一轮被杀留下的残留（心跳还没过期），
+ * 交给下面的 reclaimStale / 下一轮接管，避免自己把自己锁死。
+ */
+async function countActiveProcessing(jobId: string): Promise<number> {
+  const cutoff = new Date(Date.now() - FRESH_HEARTBEAT_MS).toISOString();
+  const rows = await rest<any[]>(
+    `/BatchItem?select=id&jobId=eq.${enc(jobId)}&status=eq.processing&updatedAt=gt.${enc(cutoff)}`,
+  ).catch(() => []);
+  return rows?.length || 0;
+}
+
+/**
  * 回收「僵死条目」：worker 抢占某条后若被平台杀掉（单次调用超时），
  * 该条会永远停在 processing，而 worker 只挑 pending，整批就永久卡死。
  * 这里把超过 staleMs 未更新的条目拨回 pending；重试次数用尽的直接标 failed。
+ *
+ * 旧版窗口 3 分钟且只看 updatedAt：用户反复点「重启」会拉起多条 worker，
+ * 它们轮流抢占同一批条目、不断刷新 updatedAt，条件永远不成立，于是整批
+ * 看起来永远「解析中」。现在窗口缩短 + 活实例每 15s 主动刷心跳，两者配合
+ * 才能区分「别人正在干活」和「上一轮被平台杀掉」。
  */
-async function reclaimStale(jobId: string, staleMs = 3 * 60_000): Promise<number> {
+async function reclaimStale(jobId: string, staleMs = STALE_MS): Promise<number> {
   const cutoff = new Date(Date.now() - staleMs).toISOString();
   const base = `/BatchItem?jobId=eq.${enc(jobId)}&status=eq.processing&updatedAt=lt.${enc(cutoff)}`;
   const now = new Date().toISOString();
@@ -283,7 +328,7 @@ async function reclaimStale(jobId: string, staleMs = 3 * 60_000): Promise<number
 }
 
 /** 无 pending 却仍有剩余时：把卡住的条目直接判失败，避免整批永久停在「解析中」 */
-async function failStuck(jobId: string, staleMs = 90_000): Promise<number> {
+async function failStuck(jobId: string, staleMs = STALE_MS): Promise<number> {
   const cutoff = new Date(Date.now() - staleMs).toISOString();
   const rows = await rest<any[]>(
     `/BatchItem?jobId=eq.${enc(jobId)}&status=eq.processing&updatedAt=lt.${enc(cutoff)}`,
@@ -329,17 +374,38 @@ async function runRound(jobId: string): Promise<{ processed: number; remaining: 
 
   const mode: "fast" | "deep" = job.reasoningMode === "deep" ? "deep" : "fast";
   const startedAt = Date.now();
+  const softDeadline = startedAt + ROUND_BUDGET_MS;
+  const hardDeadline = startedAt + ROUND_HARD_DEADLINE_MS;
   let processed = 0;
+  console.log(`[batch-worker] v1.19.8 round start job=${jobId} mode=${mode}`);
 
-  // 上一轮被平台杀掉时留下的 processing 条目，这里先拨回 pending，否则永远轮不到它
+  // 上一轮被平台杀掉时留下的 processing 条目，先拨回 pending / failed，否则永远轮不到它
   await reclaimStale(jobId).catch(() => 0);
 
-  while (Date.now() - startedAt < ROUND_BUDGET_MS) {
+  // 并发闸门：≥2 条活跃 processing ⇒ 多实例并发，本链退出且不续链，
+  // 用户反复点「重试/继续」拉起的多条链会这样自然收敛成一条。
+  const activeCount = await countActiveProcessing(jobId);
+  if (activeCount >= 2) {
+    console.log(`[batch-worker] ${activeCount} concurrent workers, yield job=${jobId}`);
+    await patchJob(jobId, { heartbeatAt: new Date().toISOString() });
+    return { processed: 0, remaining: 0, status: "busy" };
+  }
+
+  while (canStartItem(hardDeadline, Date.now(), softDeadline)) {
     const pending = await rest<any[]>(
       `/BatchItem?select=*&jobId=eq.${enc(jobId)}&status=eq.pending&order=idx.asc&limit=1`,
     );
     if (!pending?.length) break;
     const item = pending[0];
+
+    // 尝试次数在抢占阶段判定，不依赖会被并发不断刷新的 updatedAt
+    if (attemptsExhausted(item.attempts || 0, MAX_ATTEMPTS)) {
+      await patchItem(item.id, {
+        status: "failed",
+        failureReason: "多次解析超时，建议裁掉空白只留题目后单独重试",
+      });
+      continue;
+    }
 
     // 条件 PATCH 抢占：只有仍处于 pending 的那一条会被更新，返回空表示被别人抢走
     const claimed = await rest<any[]>(
@@ -356,8 +422,16 @@ async function runRound(jobId: string): Promise<{ processed: number; remaining: 
     );
     if (!claimed?.length) continue;
 
+    // 处理期间定时刷 updatedAt：让并发闸门能认出「这条是活的」，
+    // 同时保证被平台杀掉后最多 45s 就能被下一轮回收，不会永远停在解析中。
+    const heartbeat = setInterval(() => {
+      patchItem(item.id, {}).catch(() => {});
+    }, ITEM_HEARTBEAT_MS);
+
     try {
-      const { parsed, autoDeepRetry } = await analyzeOne(item.imageBase64, mode);
+      const { parsed, autoDeepRetry } = await analyzeOne(
+        item.imageBase64, mode, itemBudgetMs(hardDeadline, Date.now()),
+      );
       const subjectId = await resolveSubjectId(job.userId, parsed.subject);
       await patchItem(item.id, {
         status: "done",
@@ -387,6 +461,8 @@ async function runRound(jobId: string): Promise<{ processed: number; remaining: 
         const c = await recount(jobId);
         return { processed, remaining: c.total - c.done - c.failed, status: "paused" };
       }
+    } finally {
+      clearInterval(heartbeat);
     }
 
     const c = await recount(jobId);
@@ -417,6 +493,14 @@ async function runRound(jobId: string): Promise<{ processed: number; remaining: 
       if (dead > 0) {
         c = await recount(jobId);
         remaining = Math.max(0, c.total - c.done - c.failed);
+      }
+      // 走到这里说明还有心跳新鲜的 processing 在跑。旧版此处无条件 selfInvoke，
+      // 多实例并发时每轮都会抢占 → 刷新 updatedAt → 状态刷回 processing，
+      // 界面就永远「解析中」。现在：并发时不再续链（交给活着的链），
+      // 单链残留时保留续链，保证 45s 后僵死条目能被下一轮接管。
+      await patchJob(jobId, { heartbeatAt: new Date().toISOString() });
+      if ((await countActiveProcessing(jobId)) >= 2) {
+        return { processed, remaining, status: "waiting" };
       }
     }
   }
@@ -504,6 +588,9 @@ Deno.serve(async (req: Request) => {
   }
 
   if (!API_KEY) return json({ error: "AI_NOT_CONFIGURED" }, 503);
+
+  // 调用级版本标记：不依赖 job 是否存在，运维用日志就能确认线上跑的是哪一版
+  console.log(`[batch-worker] v1.19.8 invoke job=${jobId}`);
 
   try {
     const result = await runRound(jobId);

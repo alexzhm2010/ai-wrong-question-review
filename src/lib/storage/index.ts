@@ -81,6 +81,8 @@ export interface IngestOptions {
     ownerId?: string;
     /** 最长边，默认 2400（A4 打印约 200dpi） */
     maxWidth?: number;
+    /** 总像素上限，默认 400 万（≈A4 @200dpi 整页）；挡住竖版整页大图漏缩 */
+    maxPixels?: number;
     /** JPEG 质量，默认 0.88 */
     quality?: number;
     /** 单张体积上限（MB），默认 2 */
@@ -122,6 +124,7 @@ export async function ingestImage(
                   opts.maxMB ?? 2,
                   opts.maxWidth ?? 2400,
                   opts.quality ?? 0.88,
+                  opts.maxPixels ?? 4_000_000,
               );
 
     const ref = await putImage(dataUrl, { role: opts.role, ownerId: opts.ownerId });

@@ -709,10 +709,13 @@ export const BATCH_HANDLERS: RouteHandler[] = [
           `/BatchItem?select=id,status&id=eq.${encodeURIComponent(itemId)}&jobId=eq.${encodeURIComponent(jobId)}&limit=1`,
         ).catch(() => []);
         if (!rows?.length) return apiError(404, "条目不存在");
+        // 单张重试是用户明确「这一张重来」，attempts 必须归零：
+        // worker 在抢占阶段会判 attempts>=3 直接标 failed，
+        // 不清零的话用户无论点多少次重试都会被立刻打回失败。
         await restJson(`/BatchItem?id=eq.${encodeURIComponent(itemId)}`, {
           method: "PATCH",
           headers: { Prefer: "return=minimal" },
-          body: JSON.stringify({ status: "pending", failureReason: null, updatedAt: nowIso() }),
+          body: JSON.stringify({ status: "pending", failureReason: null, attempts: 0, updatedAt: nowIso() }),
         });
       } else {
         // 整批继续：先回收「僵死条目」。
