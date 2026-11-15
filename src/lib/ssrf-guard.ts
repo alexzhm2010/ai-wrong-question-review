@@ -128,7 +128,7 @@ export async function assertSafeOutboundUrl(raw: string): Promise<URL> {
     }
 
     // 保留 pathname（很多 OpenAI 兼容服务把版本前缀放在路径里，
-    // 例如 https://dashscope.aliyuncs.com/compatible-mode/v1），只丢弃查询串与片段。
+    // 例如 https://ark.cn-beijing.volces.com/api/v3），只丢弃查询串与片段。
     const sanitized = new URL(url.toString());
     sanitized.search = '';
     sanitized.hash = '';

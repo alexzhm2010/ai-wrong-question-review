@@ -165,27 +165,32 @@ export interface AppConfig {
 }
 
 /** GET /api/ai-quota 的响应（仅管理员可读，不含任何 AccessKey）。 */
+/** 火山方舟账户余额视图。推理用 ark- Key 无权查余额，数据来自服务端同步或手动录入。 */
 export interface AiQuotaResponse {
     configured: boolean;
     status: 'ok' | 'unconfigured' | 'error';
     balance?: {
         currency: string;
         availableAmount: number;
-        availableCashAmount: number;
+        /** 现金余额：仅服务端 QueryBalanceAcct 能提供，手动录入时为 null */
+        availableCashAmount: number | null;
         creditAmount: number;
     };
-    monthSpend?: {
-        billingCycle: string;
-        amount: number;
-        currency: string;
-        itemCount: number;
-    };
+    /** 余额来源：volc-api=服务端自动同步，manual=从控制台手动录入，none=尚未同步 */
+    source?: 'volc-api' | 'manual' | 'none';
+    /** 余额数据时间（ISO） */
     fetchedAt?: string;
+    /** 火山引擎费用中心（账户余额） */
+    consoleUrl?: string;
+    /** 服务端是否已配置火山 IAM 只读密钥；false 表示当前为手动同步模式 */
+    autoSyncConfigured?: boolean;
     message?: string;
     settings?: {
         warnThreshold: number;
         freeQuotaExpireAt: string;
         stopWhenFreeExpired: boolean;
+        /** 手动录入的余额（元） */
+        manualBalance?: number | null;
     };
     /** 防欠费拦截的实时可用性：前端据此展示「AI 已停用」等预警。不含任何密钥或精确余额。 */
     availability?: {
@@ -197,6 +202,7 @@ export interface AiQuotaResponse {
     provider?: {
         name: string;
         model: string;
+        baseUrl?: string;
     };
 }
 

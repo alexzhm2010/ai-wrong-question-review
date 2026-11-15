@@ -31,7 +31,7 @@ Vercel / Render 版是 Next.js 全栈应用：42 个 `src/app/api/**` 路由 + P
 | `/api/practice/record`、`/practice/generate` | `routes/practice.ts` | 表 + `ai-proxy` |
 | `/api/export`、`/api/import` | `routes/practice.ts` | `ErrorItem` / `Subject` 批量读写 |
 | `/api/analyze`、`/reanswer`、`/geogebra-analyze`、`/ai/test`、`/ai/models` | `routes/ai.ts` | `ai-proxy` Edge Function |
-| `/api/ai-quota` | `routes/ai.ts` | `quota_snapshot` 表 |
+| `/api/ai-quota`（GET 读 / POST 保存设置） | `routes/ai.ts` | `quota_snapshot` 快照 + `AppSetting.app_config_public.quota`（火山方舟口径） |
 | `/api/register`、`/register/status` | `routes/misc.ts` | `rpc/register_user` + 公开配置 |
 | `/api/admin/*`（dashboard / users / migrate-tags / system-reset） | `routes/admin.ts` | `User` 表 + RPC |
 | `/api/logs/frontend` | `routes/misc.ts` | `frontend_logs` 表 |
@@ -90,7 +90,7 @@ npx serve out            # 或任意静态服务器
 | AI 逐段打字动画 | ⚠️ 取决于线上 `ai-proxy`；参考实现只发一条 `done`（结果完整，无逐段 delta） |
 | GeoGebra 动态演示 | ⚠️ 静态版曾降级为占位；已改为转发 `geogebra_analyze`，Edge Function 未启用时返回空命令 |
 | `/api/admin/migrate-tags` | ⚠️ 静态版无需标签迁移，返回 `migrated: 0` |
-| 阿里云余额实时查询 | ⚠️ 改为读取 `quota_snapshot` 快照表（密钥不再落前端） |
+| 火山方舟账户余额 | ⚠️ 推理 `ark-` Key 无账单权限；优先读 `quota_snapshot` 快照（服务端 IAM 只读密钥同步），否则取管理员在设置页手动录入并保存在 `app_config_public.quota` 的余额 |
 
 ## 7. 安全提示
 

@@ -1112,17 +1112,12 @@ export function SettingsDialog() {
 
                     {/* AI Tab */}
                     <TabsContent value="ai" className="space-y-4 py-4">
-                        <div className="rounded-lg border border-blue-200 bg-blue-50/70 p-3 text-xs space-y-1.5 dark:border-blue-900 dark:bg-blue-950/40">
-                            <div className="flex items-center gap-2 font-medium text-blue-900 dark:text-blue-100">
-                                <Info className="h-4 w-4 shrink-0" />
-                                <span>当前实际生效的 AI 供应商</span>
-                            </div>
-                            <p className="text-blue-900/85 dark:text-blue-100/85">
-                                服务端模型：<span className="font-mono font-semibold">{runtimeModel || "读取中…"}</span>
-                                {runtimeConfigured === false && <span className="ml-2 text-amber-700">（服务端未配置密钥）</span>}
-                            </p>
-                            <p className="text-blue-900/75 dark:text-blue-100/75 leading-relaxed">
-                                静态版由 Supabase Edge Function 的环境变量（OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL）决定解析模型，密钥不落前端、也不写入数据库。下方「AI 供应商」的实例与预设仅作展示参考，在这里修改不会改变线上实际调用；如需更换线上模型，请更新服务端环境变量并重新部署。
+                        <div className="flex items-start gap-2 rounded-md bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+                            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                            <p className="leading-relaxed">
+                                服务端实际模型：<span className="font-mono font-medium text-foreground">{runtimeModel || "读取中…"}</span>
+                                {runtimeConfigured === false && <span className="ml-1 text-amber-700">（服务端未配置密钥）</span>}
+                                。模型由 Edge Function 环境变量决定，密钥不落前端；下方「AI 供应商」的实例与预设仅作展示参考，修改不会改变线上调用。
                             </p>
                         </div>
                         <AiQuotaCard />

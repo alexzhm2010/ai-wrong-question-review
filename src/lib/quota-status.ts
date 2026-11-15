@@ -1,9 +1,9 @@
-import type { QuotaSnapshot } from "./aliyun-bss";
+import type { AiQuotaResponse } from "@/types/api";
 
 export type QuotaStatus = "ok" | "warn" | "danger" | "unknown" | "unconfigured" | "error";
 
 /** 阈值语义：余额 <= threshold 为危险，<= 2 倍阈值为提醒，其余正常。 */
-export function getQuotaStatus(snapshot: QuotaSnapshot | null, threshold: number): QuotaStatus {
+export function getQuotaStatus(snapshot: AiQuotaResponse | null, threshold: number): QuotaStatus {
     if (!snapshot) return "unknown";
     if (snapshot.status === "unconfigured") return "unconfigured";
     if (snapshot.status === "error") return "error";
@@ -25,7 +25,8 @@ export function daysUntilExpiry(isoDate?: string): number | null {
     return Math.ceil((target.getTime() - today.getTime()) / 86_400_000);
 }
 
-export function formatMoney(amount: number, currency = "CNY"): string {
+export function formatMoney(amount: number | null | undefined, currency = "CNY"): string {
+    if (typeof amount !== "number" || !Number.isFinite(amount)) return "--";
     try {
         return new Intl.NumberFormat("zh-CN", {
             style: "currency",

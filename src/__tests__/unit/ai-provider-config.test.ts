@@ -41,8 +41,10 @@ describe("AI 供应商配置：默认端点与线上保持一致", () => {
 
   it("设置页明确告知用户密钥由服务端管理、本页配置不生效", () => {
     const src = readFileSync(resolve(root, "src/components/settings-dialog.tsx"), "utf8");
-    expect(src).toContain("当前实际生效的 AI 供应商");
+    // 该提示在 v1.21.3 精简为单行（避免与额度卡片的说明框重复），语义保持不变
+    expect(src).toContain("服务端实际模型");
     expect(src).toContain("密钥不落前端");
+    expect(src).toContain("修改不会改变线上调用");
     expect(src).toContain("/api/ai/test");
   });
 });

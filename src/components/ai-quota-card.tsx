@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, Wallet } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ExternalLink, Loader2, RefreshCw, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,7 +22,9 @@ const STATUS_STYLES: Record<string, string> = {
     unconfigured: "border-border bg-muted text-muted-foreground",
 };
 
-/** 仅管理员可见：AI 额度与账户余额。挂在设置页 AI 提供商 tab 顶部。 */
+const VOLC_CONSOLE_FALLBACK = "https://console.volcengine.com/finance/fund/account-balance";
+
+/** 火山方舟账户额度与余额。挂在设置页 AI 页与「我的」页。 */
 export function AiQuotaCard() {
     const { t } = useLanguage();
     const q = t.settings?.quota;
@@ -33,6 +35,7 @@ export function AiQuotaCard() {
     const [threshold, setThreshold] = useState("20");
     const [expireAt, setExpireAt] = useState("");
     const [stopEnabled, setStopEnabled] = useState(true);
+    const [manualBalance, setManualBalance] = useState("");
 
     const load = useCallback(async (force = false) => {
         try {
@@ -42,6 +45,11 @@ export function AiQuotaCard() {
                 setThreshold(String(res.settings.warnThreshold ?? 20));
                 setExpireAt(res.settings.freeQuotaExpireAt ?? "");
                 setStopEnabled(res.settings.stopWhenFreeExpired !== false);
+                setManualBalance(
+                    res.settings.manualBalance === null || res.settings.manualBalance === undefined
+                        ? ""
+                        : String(res.settings.manualBalance)
+                );
             }
         } catch {
             setData(null);
@@ -58,17 +66,22 @@ export function AiQuotaCard() {
     const handleSave = async () => {
         setSaving(true);
         try {
-            const parsed = Number(threshold);
-            await apiClient.post("/api/settings", {
-                quota: {
-                    warnThreshold: Number.isFinite(parsed) && parsed > 0 ? parsed : 20,
-                    freeQuotaExpireAt: expireAt,
-                    stopWhenFreeExpired: stopEnabled,
-                },
+            const parsedBalance = manualBalance.trim() === "" ? null : Number(manualBalance);
+            if (parsedBalance !== null && (!Number.isFinite(parsedBalance) || parsedBalance < 0)) {
+                toast.error(q?.invalidBalance || "余额必须是非负数字");
+                setSaving(false);
+                return;
+            }
+            await apiClient.post("/api/ai-quota", {
+                manualBalance: parsedBalance,
+                warnThreshold: Number(threshold),
+                freeQuotaExpireAt: expireAt,
+                stopWhenFreeExpired: stopEnabled,
             });
-            toast.success(q?.saved || "Quota settings saved");
+            toast.success(q?.saved || "额度设置已保存");
+            await load(true);
         } catch {
-            toast.error(q?.error || "Failed to save quota settings");
+            toast.error(q?.saveError || "保存失败：需要管理员权限");
         } finally {
             setSaving(false);
         }
@@ -77,26 +90,31 @@ export function AiQuotaCard() {
     const numericThreshold = Number(threshold) || 20;
     const status = getQuotaStatus(data, numericThreshold);
     const statusLabel = {
-        ok: q?.statusOk || "Healthy",
-        warn: q?.statusWarn || "Low",
-        danger: q?.statusDanger || "Critical",
-        error: q?.statusDanger || "Critical",
-        unconfigured: q?.unconfigured || "Not configured",
-        unknown: q?.statusUnknown || "Unknown",
+        ok: q?.statusOk || "正常",
+        warn: q?.statusWarn || "偏低",
+        danger: q?.statusDanger || "告警",
+        error: q?.statusDanger || "告警",
+        unconfigured: q?.unconfigured || "尚未同步",
+        unknown: q?.statusUnknown || "未知",
     }[status];
 
     const daysLeft = daysUntilExpiry(expireAt);
     const nearExpiry = daysLeft !== null && daysLeft >= 0 && daysLeft <= 7;
     const blocked = !!data?.availability && data.availability.allowed === false;
     const balance = data?.balance;
-    const spend = data?.monthSpend;
+    const consoleUrl = data?.consoleUrl || VOLC_CONSOLE_FALLBACK;
+    const sourceLabel = {
+        "volc-api": q?.sourceVolcApi || "服务端自动同步",
+        manual: q?.sourceManual || "控制台手动录入",
+        none: q?.sourceNone || "尚未同步",
+    }[data?.source || "none"];
 
     return (
         <div className="space-y-3 border rounded-lg p-4 bg-muted/30">
             <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                     <Wallet className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm font-medium">{q?.title || "AI quota & balance"}</span>
+                    <span className="text-sm font-medium">{q?.title || "火山方舟 · 额度与余额"}</span>
                     <span
                         className={cn(
                             "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs",
@@ -127,21 +145,36 @@ export function AiQuotaCard() {
                     ) : (
                         <RefreshCw className="mr-1 h-3 w-3" />
                     )}
-                    {q?.refresh || "Refresh"}
+                    {q?.refresh || "刷新"}
                 </Button>
             </div>
 
             <p className="text-xs text-muted-foreground">{q?.desc}</p>
-            <p className="text-xs text-amber-700 dark:text-amber-300">
-                当前线上使用火山方舟（豆包），本卡片读取的是阿里云百炼账单快照，余额数字不适用于火山；
-                下方「免费额度到期即停」开关仍按快照阻断 AI 调用，可继续使用。
-            </p>
+
+            {/* 余额来源说明：推理 Key 无账单权限，避免把设置页示例值误认成真实余额 */}
+            <div className="rounded-lg border border-blue-200 bg-blue-50/70 p-3 text-xs space-y-1.5 dark:border-blue-900 dark:bg-blue-950/40">
+                <div className="font-medium text-blue-900 dark:text-blue-100">
+                    {q?.balanceNotice || "余额说明"}
+                </div>
+                <p className="leading-relaxed text-blue-900/75 dark:text-blue-100/75">
+                    {q?.keyNotice || "火山方舟的推理 API Key 没有账单查询权限，无法自动读取账户余额。请在下方录入控制台显示的余额，或开启服务端自动同步。"}
+                </p>
+                <a
+                    href={consoleUrl}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="inline-flex items-center gap-1 font-medium text-blue-800 underline underline-offset-2 dark:text-blue-200"
+                >
+                    {q?.consoleLink || "打开火山引擎费用中心查看余额"}
+                    <ExternalLink className="h-3 w-3" />
+                </a>
+            </div>
 
             {blocked && !loading ? (
                 <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
                     <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                     <div className="space-y-1">
-                        <p className="font-medium">{q?.aiStopped || "AI paused"}</p>
+                        <p className="font-medium">{q?.aiStopped || "AI 已暂停"}</p>
                         <p className="text-red-700 dark:text-red-300">{q?.aiStoppedDesc}</p>
                     </div>
                 </div>
@@ -153,7 +186,7 @@ export function AiQuotaCard() {
                 </div>
             ) : !data || data.status === "unconfigured" ? (
                 <div className="rounded-md border bg-background p-3 text-xs space-y-1">
-                    <p className="font-medium">{q?.unconfigured || "Not configured"}</p>
+                    <p className="font-medium">{q?.unconfigured || "尚未同步余额"}</p>
                     <p className="text-muted-foreground">{q?.unconfiguredDesc}</p>
                 </div>
             ) : data.status === "error" ? (
@@ -163,20 +196,22 @@ export function AiQuotaCard() {
             ) : (
                 <div className="grid gap-3 sm:grid-cols-3">
                     <div className="rounded-md border bg-background p-3">
-                        <p className="text-xs text-muted-foreground">{q?.availableBalance || "Available balance"}</p>
+                        <p className="text-xs text-muted-foreground">{q?.availableBalance || "账户可用余额"}</p>
                         <p className="mt-1 text-xl font-semibold">
-                            {balance ? formatMoney(balance.availableAmount, balance.currency) : "--"}
+                            {formatMoney(balance?.availableAmount, balance?.currency)}
                         </p>
                         <p className="mt-1 text-xs text-muted-foreground">
-                            {q?.cashBalance || "Cash balance"}: {balance ? formatMoney(balance.availableCashAmount, balance.currency) : "--"}
+                            {q?.cashBalance || "现金余额"}: {formatMoney(balance?.availableCashAmount, balance?.currency)}
                         </p>
                     </div>
                     <div className="rounded-md border bg-background p-3">
-                        <p className="text-xs text-muted-foreground">{q?.monthSpend || "Model Studio spend (this month)"}</p>
-                        <p className="mt-1 text-xl font-semibold">
-                            {spend ? formatMoney(spend.amount, spend.currency) : q?.notBilled || "--"}
+                        <p className="text-xs text-muted-foreground">{q?.balanceSource || "余额来源"}</p>
+                        <p className="mt-1 text-base font-semibold">{sourceLabel}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                            {data.fetchedAt
+                                ? `${q?.syncedAt || "同步于"} ${new Date(data.fetchedAt).toLocaleString()}`
+                                : q?.autoSyncOff || "自动同步未开启"}
                         </p>
-                        <p className="mt-1 text-xs text-muted-foreground">{q?.billDelay}</p>
                     </div>
                     <div
                         className={cn(
@@ -188,8 +223,8 @@ export function AiQuotaCard() {
                                     : ""
                         )}
                     >
-                        <p className="text-xs text-muted-foreground">{q?.freeQuotaExpiry || "Free quota expiry"}</p>
-                        <p className="mt-1 text-xl font-semibold">{expireAt || q?.noExpiry || "--"}</p>
+                        <p className="text-xs text-muted-foreground">{q?.freeQuotaExpiry || "免费额度到期日"}</p>
+                        <p className="mt-1 text-xl font-semibold">{expireAt || q?.noExpiry || "未填写"}</p>
                         <p
                             className={cn(
                                 "mt-1 text-xs text-muted-foreground",
@@ -203,8 +238,8 @@ export function AiQuotaCard() {
                             {daysLeft === null
                                 ? ""
                                 : daysLeft < 0
-                                    ? q?.expired || "Expired"
-                                    : `${daysLeft} ${q?.daysLeft || "days left"}`}
+                                    ? q?.expired || "已过期"
+                                    : `${daysLeft} ${q?.daysLeft || "天后到期"}`}
                         </p>
                     </div>
                 </div>
@@ -212,13 +247,27 @@ export function AiQuotaCard() {
 
             {data?.provider && (
                 <p className="text-xs text-muted-foreground">
-                    {q?.provider || "Active provider"}: {data.provider.name} · {data.provider.model}
+                    {q?.provider || "当前供应商"}: {data.provider.name} · {data.provider.model}
                 </p>
             )}
 
             <div className="grid gap-3 border-t pt-3 sm:grid-cols-2">
                 <div className="space-y-1">
-                    <Label htmlFor="quota-threshold" className="text-xs">{q?.warnThreshold || "Low balance threshold (CNY)"}</Label>
+                    <Label htmlFor="quota-balance" className="text-xs">{q?.syncBalance || "同步账户余额（元）"}</Label>
+                    <Input
+                        id="quota-balance"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="例如 19.50"
+                        value={manualBalance}
+                        onChange={(e) => setManualBalance(e.target.value)}
+                        className="h-8"
+                    />
+                    <p className="text-xs text-muted-foreground">{q?.syncBalanceDesc}</p>
+                </div>
+                <div className="space-y-1">
+                    <Label htmlFor="quota-threshold" className="text-xs">{q?.warnThreshold || "低余额告警阈值（元）"}</Label>
                     <Input
                         id="quota-threshold"
                         type="number"
@@ -231,7 +280,7 @@ export function AiQuotaCard() {
                     <p className="text-xs text-muted-foreground">{q?.warnThresholdDesc}</p>
                 </div>
                 <div className="space-y-1">
-                    <Label htmlFor="quota-expiry" className="text-xs">{q?.freeQuotaExpiry || "Free quota expiry"}</Label>
+                    <Label htmlFor="quota-expiry" className="text-xs">{q?.freeQuotaExpiry || "免费额度到期日"}</Label>
                     <Input
                         id="quota-expiry"
                         type="date"
@@ -240,14 +289,14 @@ export function AiQuotaCard() {
                         className="h-8"
                     />
                     <p className="text-xs text-muted-foreground">
-                        {t.settings?.quota?.billDelay || ""}
+                        {q?.expiryDesc || "按火山方舟免费额度或资源包的实际到期日填写。"}
                     </p>
                 </div>
             </div>
 
             <div className="flex items-center justify-between gap-3 border-t pt-3">
                 <div className="space-y-0.5">
-                    <Label htmlFor="quota-stop" className="text-xs font-medium">{q?.stopWhenFreeExpired || "Stop AI when free quota expires"}</Label>
+                    <Label htmlFor="quota-stop" className="text-xs font-medium">{q?.stopWhenFreeExpired || "额度到期即停"}</Label>
                     <p className="text-xs text-muted-foreground">{q?.stopWhenFreeExpiredDesc}</p>
                 </div>
                 <Switch
@@ -260,11 +309,11 @@ export function AiQuotaCard() {
             <div className="flex flex-wrap items-center justify-between gap-2">
                 <Button type="button" size="sm" className="h-8" disabled={saving} onClick={handleSave}>
                     {saving && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
-                    {q?.save || "Save quota settings"}
+                    {q?.save || "保存额度设置"}
                 </Button>
                 {data?.fetchedAt && (
                     <span className="text-xs text-muted-foreground">
-                        {q?.updatedAt || "Updated"}: {new Date(data.fetchedAt).toLocaleString()}
+                        {q?.updatedAt || "更新于"}: {new Date(data.fetchedAt).toLocaleString()}
                     </span>
                 )}
             </div>
