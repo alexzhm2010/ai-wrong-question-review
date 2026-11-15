@@ -351,7 +351,7 @@ export function SettingsDialog() {
             // Get filename from Content-Disposition header or use default
             const disposition = res.headers.get('Content-Disposition');
             const filenameMatch = disposition?.match(/filename="(.+)"/);
-            a.download = filenameMatch ? filenameMatch[1] : 'wrong-notebook-export.json';
+            a.download = filenameMatch ? filenameMatch[1] : 'ai-review-export.json';
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -382,7 +382,7 @@ export function SettingsDialog() {
             a.href = url;
             const disposition = res.headers.get('Content-Disposition');
             const filenameMatch = disposition?.match(/filename="(.+)"/);
-            a.download = filenameMatch ? filenameMatch[1] : 'wrong-notebook-export-all.json';
+            a.download = filenameMatch ? filenameMatch[1] : 'ai-review-export-all.json';
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1756,7 +1756,7 @@ export function SettingsDialog() {
                             </div>
 
                             <p className="text-xs text-muted-foreground mt-8">
-                                {t.settings?.about?.copyright || "© 2025 Wttwins. All rights reserved."}
+                                {t.settings?.about?.copyright || "© 2026 AI 错题复习 · 独立开发"}
                             </p>
                         </div>
                     </TabsContent>

@@ -205,7 +205,7 @@ async function chatAnalyze(
  * 批次表里的 imageBase64 现在存的是图片引用（前端 storage 层写入）：
  *   - 现在是 data URL 或裸 base64 → 去掉前缀即可；
  *   - 以后换成对象存储会是 https 地址 → 这里拉一次二进制再转 base64。
- * 放在 worker 里而不是复用前端模块：Deno 运行时导不进 src/lib，逻辑只有这几行。
+ * 这段判定放在 worker 内部实现，避免跨运行时依赖，逻辑保持精简。
  */
 async function resolveImage(ref: string): Promise<string> {
   const s = String(ref || "").trim();

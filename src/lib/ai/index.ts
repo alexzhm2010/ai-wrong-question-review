@@ -1,30 +1,17 @@
-import { AIService } from "./types";
-import { GeminiProvider } from "./gemini-provider";
-import { OpenAIProvider } from "./openai-provider";
-import { AzureOpenAIProvider } from "./azure-provider";
-
-export * from "./types";
-
-import { getAppConfig, getActiveOpenAIConfig } from "../config";
-import { createLogger } from "../logger";
-
-const logger = createLogger('ai');
-
-export async function getAIService(): Promise<AIService> {
-    // Always get fresh config
-    const config = await getAppConfig();
-    const provider = config.aiProvider;
-
-    if (provider === "openai") {
-        const activeConfig = await getActiveOpenAIConfig();
-        logger.info({ activeInstance: activeConfig?.name }, 'Using OpenAI Provider');
-        return new OpenAIProvider(activeConfig);
-    } else if (provider === "azure") {
-        logger.info({ deployment: config.azure?.deploymentName }, 'Using Azure OpenAI Provider');
-        return new AzureOpenAIProvider(config.azure);
-    } else {
-        logger.info('Using Gemini Provider');
-        return new GeminiProvider(config.gemini);
-    }
-}
-
+/**
+ * 类型层统一出口。
+ * 静态导出版本不持有任何模型客户端；所有推理请求经 src/lib/supabase/routes/ai.ts
+ * 转发到 Edge Function ai-proxy，这里只向页面与组件提供类型。
+ */
+export type {
+    ParsedQuestion,
+    SubjectName,
+    DifficultyLevel,
+    LanguageCode,
+    GradeNumber,
+    ReanswerQuestionResult,
+    GeogebraAnalysisResult,
+    AIConfig,
+    AIService,
+} from "./types";
+export type { MistakeStatus } from "../mistake-status";

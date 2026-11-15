@@ -55,7 +55,6 @@ describe('PWA 可安装配置', () => {
 describe('所属卷等级已从界面移除', () => {
     const uiFiles = [
         'src/components/correction-editor.tsx',
-        'src/components/direct-text-editor.tsx',
         'src/components/error-list.tsx',
         'src/app/item/page.tsx',
         'src/app/print-preview/page.tsx',
@@ -73,7 +72,8 @@ describe('所属卷等级已从界面移除', () => {
         // 静态迁移后接口实现在桥接层路由里，不再是 src/app/api/**/route.ts
         expect(readSource('src/lib/supabase/routes/error-items.ts')).toMatch(/paperLevel/);
         expect(readSource('src/lib/supabase/routes/practice.ts')).toMatch(/paperLevel/);
-        expect(readSource('prisma/schema.prisma')).toMatch(/paperLevel/);
+        // 静态版表结构由 Supabase schema.sql 维护，不再有 Prisma schema
+        expect(readSource('supabase/schema.sql')).toMatch(/paperLevel/);
     });
 });
 

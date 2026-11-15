@@ -1,7 +1,7 @@
 /**
  * Supabase Edge Function：静态版 AI 代理。
  * 百炼 API Key 只存在 EF secrets，浏览器永远拿不到。
- * 提示词、逐句清洗、错因判定 100% 复用主仓库 src/lib/ai 的实现（lib/ 下为同源副本）。
+ * 提示词、输出清洗与错因判定由本函数的 lib/ 模块独立实现。
  */
 import { generateAnalyzePrompt, generateSimilarQuestionPrompt, generateGeogebraPrompt, generateReanswerPrompt, generateVerifyPrompt } from "./lib/prompts.ts";
 import {
@@ -42,7 +42,7 @@ function parseImagePayload(raw: unknown): { imageBase64?: string; mimeType?: str
   return { imageBase64: value.trim(), mimeType: "image/jpeg" };
 }
 
-/** 与 src/lib/ai/openai-provider.ts#parseResponse 同源 */
+/** 把模型输出解析为结构化题目：缺少关键标签时直接判为无效 */
 function parseResponse(text: string, fallbackQuestionText?: string) {
   // 文字解题时调用方已经持有题干，模型漏写 <question_text> 不该整单失败
   const rawQuestion = extractTag(text, "question_text") || (fallbackQuestionText || "").trim();

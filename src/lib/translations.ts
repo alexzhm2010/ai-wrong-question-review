@@ -425,7 +425,7 @@ export const translations = {
                 desc: "Smart Error Notebook - AI-powered learning assistant",
                 releaseNotes: "Release Notes",
                 feedback: "Feedback",
-                copyright: "© 2025 Wttwins · Port © 2026 alexzhm2010",
+                copyright: "© 2026 AI 错题复习",
             },
             account: {
                 changePassword: "Change Password (Leave empty to keep)",
@@ -1239,7 +1239,7 @@ export const translations = {
                 desc: "AI 错题复习平台 - AI 驱动的学习助手",
                 releaseNotes: "发行说明",
                 feedback: "问题反馈",
-                copyright: "© 2025 Wttwins · 移植 © 2026 alexzhm2010",
+                copyright: "© 2026 AI 错题复习",
             },
             account: {
                 changePassword: "修改密码 (留空不修改)",
