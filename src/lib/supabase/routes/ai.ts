@@ -46,7 +46,16 @@ async function quotaView(force = false): Promise<Record<string, any>> {
 
 /** 保存手动录入的余额与额度设置；只写 app_config_public.quota，不触碰全局阻断表。 */
 async function saveQuotaSettings(body: Record<string, any> | undefined): Promise<Response> {
-  await requireAdmin();
+  // 明确区分「前端判定不是管理员」与「数据库 RLS 拒绝写入」，
+  // 否则前端只能一律提示「需要管理员权限」，用户无从下手。
+  try {
+    await requireAdmin();
+  } catch {
+    return apiError(
+      403,
+      "当前账号不是管理员（User.role 不是 admin），无法修改全局额度设置。若账号已是 admin 仍失败，多半是 AppSetting 缺少表级 INSERT/UPDATE 授权或管理员写策略，而不只是 role；必要时在 Supabase SQL Editor 把该账号的 role 设为 admin。",
+    );
+  }
   const cfg = await readRawConfig();
   const prev = { ...DEFAULT_QUOTA_SETTINGS, ...(cfg.quota || {}) };
   const next: Record<string, any> = { ...prev };
@@ -80,7 +89,10 @@ async function saveQuotaSettings(body: Record<string, any> | undefined): Promise
       }),
     });
   } catch {
-    return apiError(403, "保存失败：需要管理员权限，或数据库拒绝写入");
+    return apiError(
+      403,
+      "数据库拒绝写入：AppSetting。请检查 authenticated 是否已 grant INSERT/UPDATE、是否配置了管理员写策略（is_admin()），不要只改 role 字段。",
+    );
   }
   return json({ success: true, quota: next });
 }

@@ -207,6 +207,12 @@ create policy setting_admin_write on public."AppSetting" for all to authenticate
   using (exists (select 1 from public."User" u where u.auth_uid = auth.uid() and u.role = 'admin'))
   with check (exists (select 1 from public."User" u where u.auth_uid = auth.uid() and u.role = 'admin'));
 
+-- 表级 GRANT 与 RLS 是两道独立关卡：即使策略放行，缺少 INSERT/UPDATE
+-- 表权限仍会报 42501 permission denied。线上项目曾因只授予 SELECT
+-- 导致「保存额度设置」必然失败，全新部署时务必一并授予。
+grant select on public."AppSetting" to anon, authenticated;
+grant insert, update on public."AppSetting" to authenticated;
+
 drop policy if exists log_insert on public.frontend_logs;
 create policy log_insert on public.frontend_logs for insert with check (true);
 drop policy if exists quota_read on public.quota_snapshot;

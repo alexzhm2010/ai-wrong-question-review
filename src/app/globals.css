@@ -217,6 +217,15 @@
   }
 }
 
+/* 打印预览页：除图片外所有文字统一粗体。
+   屏幕上更醒目，打印出来也更黑更清晰；题目用原图时图片本身不是字体，
+   img / svg 天然不受 font-weight 影响，正好对应「图片除外」。
+   用 !important 是为了压过子元素的 font-semibold / font-normal 等工具类。 */
+.wq-print-all-bold,
+.wq-print-all-bold * {
+  font-weight: 700 !important;
+}
+
 /* Print Styles for PDF Export —— 毛玻璃不吃打印，这里全部洗成白底 */
 @media print {
   @page {

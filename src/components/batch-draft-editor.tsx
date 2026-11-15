@@ -28,6 +28,7 @@ import { apiClient } from "@/lib/api-client";
 import { toast } from "@/lib/toast";
 import { refreshActiveBatch } from "@/lib/batch-store";
 import { startDraft, uploadDraftImages } from "@/lib/batch-draft";
+import { confirmQuotaBeforeImport } from "@/lib/quota-guard";
 import { imageSrc, ingestImage } from "@/lib/storage";
 import { DRAFT_IMAGE_LIMITS } from "@/lib/image-utils";
 import { ImageEditor } from "@/components/image-editor";
@@ -145,6 +146,8 @@ export function BatchDraftEditor({ jobId, files, onClose, onStarted }: Props) {
 
     const finish = async () => {
         if (busyRef.current) return;
+        // 逐张检查完、真正开始 AI 解析之前再查一次余额
+        if (!(await confirmQuotaBeforeImport())) return;
         busyRef.current = true;
         setConfirmStart(false);
         setPhase("starting");

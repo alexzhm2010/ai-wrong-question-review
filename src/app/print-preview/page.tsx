@@ -10,7 +10,12 @@ import { apiClient } from "@/lib/api-client";
 import { ErrorItem, PaginatedResponse } from "@/types/api";
 import { PRINT_PREVIEW_PAGE_SIZE } from "@/lib/constants/pagination";
 import { autoCrop } from "@/lib/image-autocrop";
-import { PRINT_PAYLOAD_KEY, printFileName } from "@/lib/print-preview";
+import {
+    PRINT_PAYLOAD_KEY,
+    printFileName,
+    printAnswerHeading,
+    shouldReserveAnswerSpace,
+} from "@/lib/print-preview";
 import { imageSrc } from "@/lib/storage";
 
 type SpaceKey = "none" | "sm" | "md" | "lg";
@@ -183,6 +188,8 @@ function PrintPreviewContent() {
                         q.set("ids", part.join(","));
                         q.set("page", "1");
                         q.set("pageSize", String(Math.max(part.length, 1)));
+                        // 卷末答案/解析正文随题目一次取回；原图仍走下面的分片补图
+                        q.set("includeText", "true");
                         const extra = searchParams.get("subjectId");
                         if (extra) q.set("subjectId", extra);
                         return apiClient
@@ -198,6 +205,7 @@ function PrintPreviewContent() {
                 q.delete("src");
                 q.set("page", "1");
                 q.set("pageSize", String(PRINT_PREVIEW_PAGE_SIZE));
+                q.set("includeText", "true");
                 const res = await apiClient.get<PaginatedResponse<ErrorItem>>(
                     `/api/error-items/list?${q.toString()}`,
                 );
@@ -279,7 +287,8 @@ function PrintPreviewContent() {
         };
     }, [loading, orderedItems.length]);
 
-    const reserveSpace = !showAnswers && !showAnalysis;
+    /** 作答区只由「作答区」下拉决定：答案在卷末，题目下面照常留白 */
+    const reserveSpace = shouldReserveAnswerSpace(SPACE_CM[space]);
 
     /**
      * 后台先把高清裁边图算好，进打印对话框前已经备好，
@@ -385,7 +394,7 @@ function PrintPreviewContent() {
     const gotImages = imageProgress.total > 0 && imageProgress.loaded < imageProgress.total;
 
     return (
-        <>
+        <div className="wq-print-all-bold">
             {/* 顶栏：只留「这是哪一批、怎么回去、开始打印」 */}
             <div
                 ref={topbarRef}
@@ -588,10 +597,24 @@ function PrintPreviewContent() {
                     </div>
                 )}
 
-                {/* 答案区：统一放卷末，避免做题时瞄到下一题答案 */}
-                {showAnswers && orderedItems.some((i) => i.answerText) && (
-                    <div className="mt-10 pt-6 border-t-2 border-dashed break-before-page print:break-before-page">
-                        <h2 className="text-base font-bold mb-3 print:text-[12pt]">参考答案</h2>
+                {/*
+                 * 答案区：统一放卷末，避免做题时瞄到下一题答案。
+                 * 屏幕上直接接着题目显示，方便勾选后立刻核对；只有打印时才另起一页。
+                 * 不能在屏幕上用 break-before-page：非分页媒体下部分手机浏览器会把
+                 * 整块推到「下一页」，预览里就完全看不到答案了。
+                 * 区块存在与否只由开关决定，绝不依赖某几道题恰好有没有答案文本，
+                 * 缺答案的题显示「（暂无答案）」，用户至少能确认这一功能生效。
+                 */}
+                {(showAnswers || showAnalysis) && total > 0 && (
+                    <section className="mt-10 pt-6 border-t-2 border-dashed print:break-before-page">
+                        <div className="mb-3 flex items-baseline gap-2">
+                            <h2 className="text-base font-bold print:text-[12pt]">
+                                {printAnswerHeading(showAnswers, showAnalysis)}
+                            </h2>
+                            <span className="text-[11px] text-muted-foreground print:hidden">
+                                打印时另起一页
+                            </span>
+                        </div>
                         <div className="space-y-2.5">
                             {orderedItems.map((item, index) => (
                                 <div
@@ -603,17 +626,25 @@ function PrintPreviewContent() {
                                     </span>
                                     <span className="font-semibold shrink-0">{index + 1}.</span>
                                     <div className="min-w-0 flex-1">
-                                        <ReferenceAnswer text={item.answerText || "（无）"} />
-                                        {showAnalysis && item.analysis && (
-                                            <div className="mt-1 text-xs text-muted-foreground">
-                                                <MarkdownRenderer content={item.analysis} />
-                                            </div>
+                                        {showAnswers && (
+                                            <ReferenceAnswer text={item.answerText || "（暂无答案）"} />
+                                        )}
+                                        {showAnalysis && (
+                                            item.analysis ? (
+                                                <div className="mt-1 text-xs text-muted-foreground">
+                                                    <MarkdownRenderer content={item.analysis} />
+                                                </div>
+                                            ) : (
+                                                <div className="mt-1 text-xs text-muted-foreground">
+                                                    （暂无解析）
+                                                </div>
+                                            )
                                         )}
                                     </div>
                                 </div>
                             ))}
                         </div>
-                    </div>
+                    </section>
                 )}
             </div>
 
@@ -629,7 +660,7 @@ function PrintPreviewContent() {
                     {preparing ? "准备中…" : "打印"}
                 </button>
             )}
-        </>
+        </div>
     );
 }
 

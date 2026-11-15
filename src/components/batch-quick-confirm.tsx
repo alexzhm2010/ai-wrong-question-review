@@ -8,6 +8,7 @@ import { toast } from "@/lib/toast";
 import { refreshActiveBatch } from "@/lib/batch-store";
 import { DraftConflictError, createDraft, discardDraft, startDraft, uploadDraftImages } from "@/lib/batch-draft";
 import { openBatch } from "@/lib/batch-nav";
+import { confirmQuotaBeforeImport } from "@/lib/quota-guard";
 import { Images, Loader2 } from "lucide-react";
 
 interface Props {
@@ -52,6 +53,8 @@ export function BatchQuickConfirm({ files, onCancel, onEditFirst }: Props) {
      */
     const start = async () => {
         if (busy || creating) return;
+        // 批量直接解析：开始烧 AI 之前先查余额；用户取消则连草稿都不创建
+        if (!(await confirmQuotaBeforeImport())) return;
         setBusy(true);
         setStep(0);
         setPhase("upload");

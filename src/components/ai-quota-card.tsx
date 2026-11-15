@@ -24,6 +24,15 @@ const STATUS_STYLES: Record<string, string> = {
 
 const VOLC_CONSOLE_FALLBACK = "https://console.volcengine.com/finance/fund/account-balance";
 
+/** 取出服务端返回的真实原因；旧版把所有失败一律说成「需要管理员权限」，容易误导排查 */
+function serverMessage(e: unknown): string {
+    const data = (e as { data?: unknown })?.data;
+    if (data && typeof data === "object" && "message" in data) {
+        return String((data as { message?: unknown }).message || "");
+    }
+    return "";
+}
+
 /** 火山方舟账户额度与余额。挂在设置页 AI 页与「我的」页。 */
 export function AiQuotaCard() {
     const { t } = useLanguage();
@@ -80,8 +89,8 @@ export function AiQuotaCard() {
             });
             toast.success(q?.saved || "额度设置已保存");
             await load(true);
-        } catch {
-            toast.error(q?.saveError || "保存失败：需要管理员权限");
+        } catch (e) {
+            toast.error(serverMessage(e) || q?.saveError || "保存失败，请稍后重试。");
         } finally {
             setSaving(false);
         }

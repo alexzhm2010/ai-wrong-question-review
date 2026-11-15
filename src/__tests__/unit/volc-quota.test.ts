@@ -195,3 +195,18 @@ describe("护栏：额度卡片已彻底切到火山口径，阿里云死代码�
         expect(existsSync(resolve(root, "src/lib/quota-bill.ts"))).toBe(false);
     });
 });
+
+describe("额度设置保存：失败原因不再一律归咎于管理员权限", () => {
+    it("服务端区分「账号不是管理员」与「数据库 RLS 拒绝写入」", () => {
+        const routes = read("src/lib/supabase/routes/ai.ts");
+        expect(routes).toContain("当前账号不是管理员");
+        expect(routes).toContain("数据库拒绝写入：AppSetting");
+        expect(routes).toContain("role 设为 admin");
+    });
+
+    it("卡片优先展示服务端返回的真实原因", () => {
+        const card = read("src/components/ai-quota-card.tsx");
+        expect(card).toContain("function serverMessage");
+        expect(card).toContain("serverMessage(e) || q?.saveError");
+    });
+});

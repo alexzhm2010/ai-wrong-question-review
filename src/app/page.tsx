@@ -24,6 +24,7 @@ import { BatchQuickConfirm } from "@/components/batch-quick-confirm";
 import { openBatch } from "@/lib/batch-nav";
 import { BatchJobList } from "@/components/batch-job-list";
 import { streamAnalyze } from "@/lib/stream-analyze";
+import { confirmQuotaBeforeImport } from "@/lib/quota-guard";
 import { putImage } from "@/lib/storage";
 import { inferSubjectFromName } from "@/lib/knowledge-tags";
 
@@ -203,6 +204,8 @@ function HomeContent() {
     };
 
     const handleAnalyze = async (file: File | string) => {
+        // 导入前余额闸门：低于后台阈值时弹窗提醒，用户取消则放弃本次导入
+        if (!(await confirmQuotaBeforeImport())) return;
         const startTime = Date.now();
         frontendLogger.info('[HomeAnalyze]', 'Starting analysis flow', {
             timeoutSettings: {

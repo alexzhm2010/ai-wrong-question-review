@@ -18,8 +18,22 @@ export function getSelectedPrintItems<T extends PrintSelectableItem>(
     return items.filter((item) => selectedIds.has(item.id));
 }
 
-export function shouldReserveAnswerSpace(showAnswers: boolean, showAnalysis: boolean): boolean {
-    return !showAnswers && !showAnalysis;
+/**
+ * 是否预留手写作答区：只由「作答区」下拉决定（高度 > 0 就留）。
+ *
+ * 答案与解析统一放在卷末、打印时另起一页，题目下面仍然要留白给学生写，
+ * 所以不能因为勾了「附答案 / 附解析」就把作答框去掉。
+ * 旧实现 `!showAnswers && !showAnalysis` 会让勾上附答案后整张卷子没有作答区。
+ */
+export function shouldReserveAnswerSpace(spaceCm: number): boolean {
+    return spaceCm > 0;
+}
+
+/** 卷末区块标题：只勾解析时不该叫「参考答案」 */
+export function printAnswerHeading(showAnswers: boolean, showAnalysis: boolean): string {
+    if (showAnswers && showAnalysis) return "参考答案与解析";
+    if (showAnswers) return "参考答案";
+    return "题目解析";
 }
 
 export function getPrintPreviewCountLabel(totalCount: number, selectedCount: number): string {

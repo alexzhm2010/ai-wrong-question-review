@@ -4,6 +4,7 @@ import "./globals.css";
 import { Providers } from "@/components/providers";
 import { PwaInstaller } from "@/components/pwa-installer";
 import { AppShell } from "@/components/app-shell";
+import { QuotaGuardDialog } from "@/components/quota-guard-dialog";
 
 export const viewport: Viewport = {
   // 与 C 淡蓝玻璃主题一致（PWA 状态栏 / 浏览器工具栏配色）
@@ -112,6 +113,8 @@ export default function RootLayout({
         <Providers>
           <AppShell>{children}</AppShell>
           <PwaInstaller />
+          {/* 全局唯一：导入题目前的低余额提醒，所有入口共用 */}
+          <QuotaGuardDialog />
         </Providers>
       </body>
     </html>

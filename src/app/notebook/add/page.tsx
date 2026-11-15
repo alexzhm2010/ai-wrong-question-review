@@ -23,6 +23,7 @@ import { frontendLogger } from "@/lib/frontend-logger";
 import { toast } from "@/lib/toast";
 import { TextInputZone } from "@/components/text-input-zone";
 import { streamAnalyze } from "@/lib/stream-analyze";
+import { confirmQuotaBeforeImport } from "@/lib/quota-guard";
 
 export default function AddErrorPage() {
     const params = useQueryId();
@@ -175,6 +176,8 @@ export default function AddErrorPage() {
     };
 
     const handleAnalyze = async (file: File | string) => {
+        // 导入前余额闸门：低于后台阈值时弹窗提醒，用户取消则放弃本次导入
+        if (!(await confirmQuotaBeforeImport())) return;
         const startTime = Date.now();
         frontendLogger.info('[AddAnalyze]', 'Starting analysis flow', {
             timeoutSettings: {

@@ -17,8 +17,14 @@ const LIST_FIELDS = [
   // 题号与对错计数：选题区、打印页、批改页都要用
   "shortCode", "wrongCount", "correctCount", "correctStreak", "lastResult", "lastAttemptAt",
 ];
-/** 打印预览同接口复用：需要答案/解析正文，再加原图 */
-const PRINT_FIELDS = [...LIST_FIELDS, "answerText", "analysis", "wrongAnswerText", "mistakeAnalysis"];
+/**
+ * 打印预览的答案/解析正文：只要两个文本字段，不带 originalImageUrl。
+ * 原图是 base64（单张可达数百 KB），打印页走 /images 分片补图，
+ * 若在列表里一次性带回会让几十道题的卷子首屏卡死。
+ */
+const PRINT_TEXT_FIELDS = [...LIST_FIELDS, "answerText", "analysis"];
+/** 批改页 / 扫描页取整题用：答案正文 + 其余作答字段 + 原图 */
+const PRINT_FIELDS = [...PRINT_TEXT_FIELDS, "wrongAnswerText", "mistakeAnalysis"];
 const MAX_PAGE_SIZE = 1000;
 
 /** 去掉会破坏 PostgREST 逻辑树 / ilike 语法的字符，保留搜索词本身 */
@@ -150,8 +156,11 @@ async function handleFixed(ctx: RouteContext, sub: string): Promise<Response | n
     const page = Math.max(1, Number(q.get("page")) || 1);
     const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Number(q.get("pageSize")) || 10));
     const includeImage = qget(q, "includeImage") === "true";
-    // 打印预览要答案/解析/原图；列表卡片一样都不用，只取渲染所需的最小字段集
-    const fields = includeImage ? [...PRINT_FIELDS, "originalImageUrl"] : LIST_FIELDS;
+    // 打印预览只要答案/解析文本，原图另走 /images 分片；列表卡片一样都不用
+    const includeText = qget(q, "includeText") === "true";
+    const fields = includeImage
+      ? [...PRINT_FIELDS, "originalImageUrl"]
+      : includeText ? PRINT_TEXT_FIELDS : LIST_FIELDS;
 
     const params = new URLSearchParams();
     params.set("select", fields.join(","));
