@@ -7,7 +7,8 @@
  * 刻意不缓存页面、API、Next.js 构建产物和 /version.json：历史上多次出现发版后
  * PWA 仍展示旧页面、必须强刷的问题。这里只缓存图标，其余请求一律网络直通。
  */
-const CACHE_NAME = 'wrong-review-static-v1';
+// v2：1.21.8 更换全套图标。activate 阶段会删除旧版本缓存，避免桌面快捷方式一直显示旧图标。
+const CACHE_NAME = 'wrong-review-static-v2';
 const ICON_PREFIX = '/ai-wrong-question-review/icons/';
 
 self.addEventListener('install', () => {
