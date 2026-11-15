@@ -33,8 +33,17 @@ export const metadata: Metadata = {
     telephone: false,
   },
   icons: {
-    icon: `${BASE_PATH}/icons/icon.png`,
-    apple: `${BASE_PATH}/icons/icon.png`,
+    // 浏览器标签：多尺寸 ICO（16/32/48/64 用简化图形，小尺寸才清晰）
+    icon: [
+      { url: `${BASE_PATH}/favicon.ico`, sizes: '16x16', type: 'image/x-icon' },
+      { url: `${BASE_PATH}/icons/icon-32.png`, sizes: '32x32', type: 'image/png' },
+      { url: `${BASE_PATH}/icons/icon-48.png`, sizes: '48x48', type: 'image/png' },
+      { url: `${BASE_PATH}/icons/icon.png`, sizes: 'any', type: 'image/png' },
+    ],
+    // iOS「添加到主屏幕」专用，避免系统再把带透明圆角的图缩放后补白底
+    apple: [
+      { url: `${BASE_PATH}/icons/apple-touch-icon.png`, sizes: '180x180', type: 'image/png' },
+    ],
   },
 };
 

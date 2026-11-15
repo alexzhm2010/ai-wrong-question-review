@@ -21,10 +21,16 @@ describe('PWA 可安装配置', () => {
         expect(m.start_url).toBe(`${BASE_PATH}/`);
     });
 
-    it('提供 192 与 512 两档图标且文件真实存在', () => {
+    it('提供多档图标 + maskable 安全区版本，且文件真实存在', () => {
         const icons = manifest().icons || [];
-        expect(icons.map(i => i.sizes)).toContain('192x192');
-        expect(icons.map(i => i.sizes)).toContain('512x512');
+        const sizes = icons.map(i => i.sizes);
+        expect(sizes).toContain('192x192');
+        expect(sizes).toContain('512x512');
+        // Android 自适应图标需要 maskable 版本，否则圆形/水滴裁切会切掉主体
+        expect(icons.some(i => i.purpose === 'maskable')).toBe(true);
+        expect(icons.filter(i => i.purpose === 'maskable').map(i => i.sizes)).toEqual(
+            expect.arrayContaining(['192x192', '512x512'])
+        );
         for (const icon of icons) {
             // icon.src 带 basePath，校验磁盘路径时先剥掉
             const relative = icon.src!.replace(BASE_PATH, '').replace(/^\/+/, '');
@@ -32,11 +38,38 @@ describe('PWA 可安装配置', () => {
         }
     });
 
+    it('浏览器标签与 iOS 主屏幕图标都指向真实文件（多尺寸 favicon + 180 apple）', () => {
+        const layout = readSource('src/app/layout.tsx');
+        expect(layout).toContain('/favicon.ico');
+        expect(layout).toContain('apple-touch-icon.png');
+        expect(layout).toContain('/icons/icon-32.png');
+        expect(layout).toContain('/icons/icon-48.png');
+        expect(fs.existsSync(path.join(projectRoot, 'public/favicon.ico'))).toBe(true);
+        expect(fs.existsSync(path.join(projectRoot, 'public/icons/apple-touch-icon.png'))).toBe(true);
+        expect(fs.existsSync(path.join(projectRoot, 'src/app/favicon.ico'))).toBe(true);
+    });
+
+    it('favicon.ico 含 16/32/48 多尺寸，桌面快捷方式不再糊', () => {
+        // 直接解析 ICO 目录，确认内嵌多尺寸而非单一 16px
+        const buf = fs.readFileSync(path.join(projectRoot, 'public/favicon.ico'));
+        const count = buf.readUInt16LE(4);
+        expect(count).toBeGreaterThanOrEqual(3);
+        const dir = [];
+        for (let i = 0; i < count; i++) {
+            const off = 6 + i * 16;
+            const w = buf[off] || 256;
+            dir.push(w);
+        }
+        expect(dir).toEqual(expect.arrayContaining([16, 32, 48]));
+    });
+
     it('service worker 只接管图标，其余请求不代理', () => {
         const sw = readSource('public/sw.js');
         expect(sw).toContain("addEventListener('fetch'");
         expect(sw).toContain('ICON_PREFIX');
         expect(sw).toContain('caches.keys()');
+        // 图标缓存版本必须随换图标升级，否则老用户桌面快捷方式一直是旧图
+        expect(sw).toMatch(/wrong-review-static-v[2-9]/);
         // 整体代理（respondWith(fetch(request))）会吞掉 AbortSignal：
         // Next 的分片预取靠 abort 取消旧请求，经 SW 转一手后中断传不进去，
         // v1.18.47 线上表现为「偶发卡加载中」。锁住这个回归。

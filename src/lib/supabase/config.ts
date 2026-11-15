@@ -26,5 +26,5 @@ export const UPLOAD_EDGE = `${SUPABASE_URL}/functions/v1/openclaw-upload`;
 /** 火山账户余额同步：独立 Edge Function，不参与题目解析链路 */
 export const QUOTA_EDGE = `${SUPABASE_URL}/functions/v1/quota-sync`;
 
-export const APP_VERSION = "1.21.6";
+export const APP_VERSION = "1.21.8";
 export const APP_CHANNEL = "github-pages";

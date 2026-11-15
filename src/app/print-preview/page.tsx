@@ -36,6 +36,8 @@ type PrintSettings = {
     showTags: boolean;
     space: SpaceKey;
     imageScale: number;
+    /** 打印 / PDF 是否带上卷末答案区；关掉后答案只在屏幕上核对，学生卷不带答案 */
+    printWithAnswers: boolean;
 };
 
 const DEFAULT_SETTINGS: PrintSettings = {
@@ -46,6 +48,8 @@ const DEFAULT_SETTINGS: PrintSettings = {
     showTags: false,
     space: "sm",
     imageScale: 60,
+    // 与历史行为一致：勾了附答案，打印就带答案（另起一页）
+    printWithAnswers: true,
 };
 
 function loadSettings(): PrintSettings {
@@ -124,6 +128,7 @@ function PrintPreviewContent() {
         showTags,
         space,
         imageScale,
+        printWithAnswers,
     } = settings;
 
     const patchSettings = (patch: Partial<PrintSettings>) => {
@@ -493,6 +498,22 @@ function PrintPreviewContent() {
                             />
                             知识点
                         </label>
+                        {(showAnswers || showAnalysis) && (
+                            <label
+                                className="flex items-center gap-1.5 cursor-pointer"
+                                title="关掉后答案只在屏幕上核对，打印 / PDF 只出题目和作答区"
+                            >
+                                <input
+                                    type="checkbox"
+                                    checked={printWithAnswers}
+                                    onChange={(e) =>
+                                        patchSettings({ printWithAnswers: e.target.checked })
+                                    }
+                                    className="rounded border-gray-300 accent-blue-600"
+                                />
+                                打印含答案
+                            </label>
+                        )}
                         <span className="flex items-center gap-1.5">
                             作答区
                             <select
@@ -549,23 +570,32 @@ function PrintPreviewContent() {
                             }
                             return (
                                 <div key={item.id} className="break-inside-avoid">
-                                    {/* 题号：纸上唯一的身份标识，批改时靠它定位 */}
-                                    <div className="flex items-baseline gap-2 mb-1">
-                                        <span className="font-mono text-[11px] tracking-wider text-slate-500 print:text-[9pt]">
-                                            #{item.shortCode || item.id.slice(-8)}
-                                        </span>
-                                        <span className="text-base font-bold print:text-[12pt]">
-                                            第 {index + 1} 题
-                                        </span>
-                                        {item.subject && (
-                                            <span className="text-xs text-muted-foreground">
-                                                {item.subject.name}
+                                    {/*
+                                     * 题头分两层，短标签和长文本互不挤压：
+                                     *   主行 = 编号 + 题号 + 学科，每项 shrink-0 + whitespace-nowrap，
+                                     *          窄屏宁可整块换行，也绝不把「第 1 题」「数学」拆成单字；
+                                     *   知识点独占一行，长内容自然折行（这是长文本，换行本就合理）。
+                                     * 旧实现四段挤在一个 nowrap flex 里，手机上每段被压窄拆字，
+                                     * 正是截图里「第 1 / 题」「数 / 学」错落成两行的原因。
+                                     */}
+                                    <div className="mb-1.5">
+                                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                                            <span className="shrink-0 whitespace-nowrap font-mono text-base tracking-wider text-black print:text-[12pt] print:text-black">
+                                                #{item.shortCode || item.id.slice(-8)}
                                             </span>
-                                        )}
+                                            <span className="shrink-0 whitespace-nowrap text-base font-bold print:text-[12pt]">
+                                                第 {index + 1} 题
+                                            </span>
+                                            {item.subject && (
+                                                <span className="shrink-0 whitespace-nowrap rounded bg-sky-50 px-1.5 py-0.5 text-xs text-sky-700 print:bg-transparent print:px-0 print:text-slate-700 print:text-[9pt]">
+                                                    {item.subject.name}
+                                                </span>
+                                            )}
+                                        </div>
                                         {showTags && tags.length > 0 && (
-                                            <span className="text-xs text-muted-foreground">
+                                            <div className="mt-1 break-words text-xs leading-relaxed text-muted-foreground print:text-[9pt]">
                                                 {tags.join(" · ")}
-                                            </span>
+                                            </div>
                                         )}
                                     </div>
 
@@ -599,20 +629,28 @@ function PrintPreviewContent() {
 
                 {/*
                  * 答案区：统一放卷末，避免做题时瞄到下一题答案。
-                 * 屏幕上直接接着题目显示，方便勾选后立刻核对；只有打印时才另起一页。
+                 * 屏幕上直接接着题目显示，方便勾选后立刻核对；打印行为由「打印含答案」决定：
+                 *   开（默认）→ 打印另起一页附上答案，与历史行为一致；
+                 *   关       → 整块 print:hidden，学生卷只有题目和作答区，答案仅屏幕可见。
                  * 不能在屏幕上用 break-before-page：非分页媒体下部分手机浏览器会把
                  * 整块推到「下一页」，预览里就完全看不到答案了。
                  * 区块存在与否只由开关决定，绝不依赖某几道题恰好有没有答案文本，
                  * 缺答案的题显示「（暂无答案）」，用户至少能确认这一功能生效。
                  */}
                 {(showAnswers || showAnalysis) && total > 0 && (
-                    <section className="mt-10 pt-6 border-t-2 border-dashed print:break-before-page">
+                    <section
+                        className={`mt-10 pt-6 border-t-2 border-dashed ${
+                            printWithAnswers ? "print:break-before-page" : "print:hidden"
+                        }`}
+                    >
                         <div className="mb-3 flex items-baseline gap-2">
                             <h2 className="text-base font-bold print:text-[12pt]">
                                 {printAnswerHeading(showAnswers, showAnalysis)}
                             </h2>
                             <span className="text-[11px] text-muted-foreground print:hidden">
-                                打印时另起一页
+                                {printWithAnswers
+                                    ? "打印时另起一页"
+                                    : "打印时不带答案（仅屏幕核对）"}
                             </span>
                         </div>
                         <div className="space-y-2.5">

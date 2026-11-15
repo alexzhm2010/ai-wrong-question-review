@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+ <defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="0.35" y2="1">
+    <stop offset="0" stop-color="#AED7F5"/>
+    <stop offset="0.48" stop-color="#79AFE1"/>
+    <stop offset="1" stop-color="#4A7DB5"/>
+  </linearGradient>
+  <radialGradient id="glow" cx="0.26" cy="0.14" r="0.9">
+    <stop offset="0" stop-color="#ffffff" stop-opacity="0.45"/>
+    <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+  </radialGradient>
+  <linearGradient id="badge" x1="0" y1="0" x2="0.2" y2="1">
+    <stop offset="0" stop-color="#5FA9E8"/>
+    <stop offset="1" stop-color="#2C66A5"/>
+  </linearGradient>
+  <linearGradient id="star" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#FFECAE"/>
+    <stop offset="1" stop-color="#F3C255"/>
+  </linearGradient>
+ </defs>
+ <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+ <rect width="512" height="512" rx="112" fill="url(#glow)"/>
+ <!-- book shadow -->
+ <path d="M 256 214 C 202 186 142 188 108 210 L 108 380 C 142 358 202 356 256 384 Z" fill="#244C78" opacity="0.18"/>
+ <path d="M 256 214 C 310 186 370 188 404 210 L 404 380 C 370 358 310 356 256 384 Z" fill="#244C78" opacity="0.18"/>
+ <!-- right page -->
+ <path d="M 256 202 C 310 174 370 176 404 198 L 404 368 C 370 346 310 344 256 372 Z" fill="#EAF3FC"/>
+ <!-- left page -->
+ <path d="M 256 202 C 202 174 142 176 108 198 L 108 368 C 142 346 202 344 256 372 Z" fill="#FFFFFF"/>
+ <!-- spine -->
+ <path d="M 256 204 L 256 371" stroke="#BCD6EC" stroke-width="5"/>
+ <!-- left page text lines (2nd one is orange = wrong answer corrected) -->
+ <rect x="140" y="250" width="80" height="11" rx="5.5" fill="#CFE1F1"/>
+ <rect x="140" y="278" width="66" height="11" rx="5.5" fill="#EE9A6B"/>
+ <rect x="140" y="306" width="80" height="11" rx="5.5" fill="#CFE1F1"/>
+ <!-- right page text lines -->
+ <rect x="292" y="250" width="80" height="11" rx="5.5" fill="#C2D8ED"/>
+ <rect x="292" y="278" width="66" height="11" rx="5.5" fill="#C2D8ED"/>
+ <rect x="292" y="306" width="72" height="11" rx="5.5" fill="#C2D8ED"/>
+ <!-- AI sparkle -->
+ <path d="M 256 78 L 263 100 L 285 107 L 263 114 L 256 136 L 249 114 L 227 107 L 249 100 Z" fill="url(#star)"/>
+ <circle cx="320" cy="96" r="5.5" fill="#FFE9A8" opacity="0.9"/>
+ <circle cx="196" cy="102" r="4" fill="#FFE9A8" opacity="0.75"/>
+ <!-- check badge bottom-right -->
+ <circle cx="372" cy="368" r="52" fill="#FFFFFF" opacity="0.5"/>
+ <circle cx="372" cy="368" r="44" fill="url(#badge)"/>
+ <path d="M 352 368 L 366 382 L 393 352" fill="none" stroke="#FFFFFF" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
