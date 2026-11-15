@@ -94,7 +94,16 @@ for (const f of files) {
     const buf = readFileSync(f.abs);
     if (gitBlobSha(buf) !== old.get(f.path)) changed.push({ ...f, buf });
 }
-const removed = [...old.keys()].filter((p) => !files.some((f) => f.path === p));
+/*
+ * 只增不删：_next/static/ 下是带内容哈希的构建产物，旧版本的 HTML 仍可能引用它们。
+ * 之前这里是无差别镜像删除，发版后旧 chunk 被删，而客户端（尤其 iOS 从桌面图标启动的
+ * PWA、或 HTML 还在 max-age=600 缓存期内）仍加载旧 HTML，去请求这些已删文件得到 404，
+ * Next 直接抛 "Application error: a client-side exception"，整页白屏。
+ * 这些文件体积小、新版本文件名不同不会冲突，保留即可，代价只是静态目录缓慢增长。
+ */
+const removed = [...old.keys()].filter(
+    (p) => !p.startsWith("_next/static/") && !files.some((f) => f.path === p),
+);
 console.log(`本地 ${files.length} 个文件 · 线上 ${old.size} 个 · 需上传 ${changed.length} · 删除 ${removed.length}`);
 
 const entries = [];

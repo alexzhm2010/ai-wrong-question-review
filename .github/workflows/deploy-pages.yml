@@ -49,5 +49,10 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./out
           publish_branch: gh-pages
-          keep_files: false
+          # 只增不删：保留 _next/static 下带内容哈希的旧构建产物。
+          # 若清空重发，缓存了旧 HTML 的客户端（iOS PWA、HTML 的 max-age 缓存期内）
+          # 会去请求已删除的旧 chunk 得到 404，Next 直接抛
+          # "Application error: a client-side exception"，整页白屏。
+          # 旧文件体积小、文件名互不冲突，保留即可，代价只是静态目录缓慢增长。
+          keep_files: true
           commit_message: 'chore: publish static build (GitHub Pages + Supabase)'
