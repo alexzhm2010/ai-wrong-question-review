@@ -132,6 +132,10 @@ export function AiQuotaCard() {
             </div>
 
             <p className="text-xs text-muted-foreground">{q?.desc}</p>
+            <p className="text-xs text-amber-700 dark:text-amber-300">
+                当前线上使用火山方舟（豆包），本卡片读取的是阿里云百炼账单快照，余额数字不适用于火山；
+                下方「免费额度到期即停」开关仍按快照阻断 AI 调用，可继续使用。
+            </p>
 
             {blocked && !loading ? (
                 <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">

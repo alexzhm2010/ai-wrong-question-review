@@ -81,6 +81,18 @@ export function invalidateTagIndex(): void {
   tagById.clear();
 }
 
+/**
+ * 设置页的空配置回落值：与 Edge Function ai-proxy 的默认端点一致。
+ * 密钥由服务端环境变量管理，这里的掩码只是给界面一个「已由服务端配置」的占位。
+ */
+const DEFAULT_OPENAI_INSTANCE = {
+  id: "env-default",
+  name: "豆包（火山方舟）",
+  baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+  model: "doubao-seed-2-1-lite-260915",
+  apiKey: "********",
+};
+
 /** 读取公开配置并脱敏（AI 密钥只保存在 Edge Function 侧） */
 export async function loadPublicConfig(): Promise<Record<string, any>> {
   const rows = await restJson<any[]>(
@@ -92,12 +104,15 @@ export async function loadPublicConfig(): Promise<Record<string, any>> {
   } catch {
     cfg = {};
   }
+  const instances = (cfg.openai?.instances || []).map((i: any) => ({ ...i, apiKey: "********" }));
   return {
     ...cfg,
     timeouts: { analyze: 180_000, ...(cfg.timeouts || {}) },
+    aiProvider: cfg.aiProvider || "openai",
     openai: {
       ...(cfg.openai || {}),
-      instances: (cfg.openai?.instances || []).map((i: any) => ({ ...i, apiKey: "********" })),
+      instances: instances.length ? instances : [DEFAULT_OPENAI_INSTANCE],
+      activeInstanceId: cfg.openai?.activeInstanceId || DEFAULT_OPENAI_INSTANCE.id,
     },
     gemini: cfg.gemini ? { ...cfg.gemini, apiKey: "********" } : cfg.gemini,
     azure: cfg.azure ? { ...cfg.azure, apiKey: "********" } : cfg.azure,

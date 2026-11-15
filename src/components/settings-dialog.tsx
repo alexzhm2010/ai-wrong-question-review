@@ -70,9 +70,12 @@ export function SettingsDialog() {
     const [loading, setLoading] = useState(false);
     const [version, setVersion] = useState<string>("");
     const [showApiKey, setShowApiKey] = useState(false);
-    const [config, setConfig] = useState<AppConfig>({ aiProvider: 'gemini' });
+    const [config, setConfig] = useState<AppConfig>({ aiProvider: 'openai' });
     // OpenAI 多实例状态
     const [selectedInstanceId, setSelectedInstanceId] = useState<string | undefined>(undefined);
+    // 服务端实际生效的模型（由 Edge Function 环境变量决定，前端不可改）
+    const [runtimeModel, setRuntimeModel] = useState<string>("");
+    const [runtimeConfigured, setRuntimeConfigured] = useState<boolean | null>(null);
 
     // AI 连接测试状态
     const [testing, setTesting] = useState(false);
@@ -133,6 +136,14 @@ export function SettingsDialog() {
         fetch("/api/version")
             .then((res) => res.json())
             .then((data) => setVersion(data.version))
+            .catch(() => {});
+        // 直接问 Edge Function 实际生效的模型：静态版的供应商设置不生效，
+        // 避免把设置页里的示例值误认成线上真实配置。
+        apiClient.post<{ ok?: boolean; model?: string; configured?: boolean }>("/api/ai/test", {})
+            .then((r) => {
+                if (r?.model) setRuntimeModel(r.model);
+                if (typeof r?.configured === "boolean") setRuntimeConfigured(r.configured);
+            })
             .catch(() => {});
     }, [open]);
 
@@ -534,16 +545,20 @@ export function SettingsDialog() {
         }));
     };
 
-    // 应用供应商预设（自动填充 Base URL 与模型）
+    // 应用供应商预设：一次性合并更新，避免连续多次 setConfig 互相覆盖
     const applyProviderPreset = (presetId: string) => {
         const preset = PROVIDER_PRESETS.find(p => p.id === presetId);
         if (!preset) return;
-        updateOpenAIInstance('baseUrl', preset.baseUrl);
-        updateOpenAIInstance('model', preset.model);
-        const current = getSelectedInstance();
-        if (!current?.name || /^Instance \d+$/.test(current.name)) {
-            updateOpenAIInstance('name', preset.label);
-        }
+        setConfig(prev => {
+            const instances = prev.openai?.instances || [];
+            const activeId = selectedInstanceId || prev.openai?.activeInstanceId;
+            const updated = instances.map(instance => {
+                if (instance.id !== activeId) return instance;
+                const name = !instance.name || /^Instance \d+$/.test(instance.name) ? preset.label : instance.name;
+                return { ...instance, baseUrl: preset.baseUrl, model: preset.model, name };
+            });
+            return { ...prev, openai: { ...prev.openai, instances: updated } };
+        });
     };
 
     // 添加新的 OpenAI 实例
@@ -1097,6 +1112,19 @@ export function SettingsDialog() {
 
                     {/* AI Tab */}
                     <TabsContent value="ai" className="space-y-4 py-4">
+                        <div className="rounded-lg border border-blue-200 bg-blue-50/70 p-3 text-xs space-y-1.5 dark:border-blue-900 dark:bg-blue-950/40">
+                            <div className="flex items-center gap-2 font-medium text-blue-900 dark:text-blue-100">
+                                <Info className="h-4 w-4 shrink-0" />
+                                <span>当前实际生效的 AI 供应商</span>
+                            </div>
+                            <p className="text-blue-900/85 dark:text-blue-100/85">
+                                服务端模型：<span className="font-mono font-semibold">{runtimeModel || "读取中…"}</span>
+                                {runtimeConfigured === false && <span className="ml-2 text-amber-700">（服务端未配置密钥）</span>}
+                            </p>
+                            <p className="text-blue-900/75 dark:text-blue-100/75 leading-relaxed">
+                                静态版由 Supabase Edge Function 的环境变量（OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL）决定解析模型，密钥不落前端、也不写入数据库。下方「AI 供应商」的实例与预设仅作展示参考，在这里修改不会改变线上实际调用；如需更换线上模型，请更新服务端环境变量并重新部署。
+                            </p>
+                        </div>
                         <AiQuotaCard />
                         {loading ? (
                             <div className="flex justify-center py-4">
