@@ -88,6 +88,19 @@ async function rest<T = any>(path: string, init: RequestInit = {}): Promise<T> {
 
 const enc = (v: string) => encodeURIComponent(v);
 
+/**
+ * 用户点了「结束批次」后 Job 已是终态。正在跑的旧一轮收尾时必须复查一次：
+ * 否则它末尾那段无条件 patchJob(status:"confirming") 会把用户刚关掉的批次又打开，
+ * 还会继续续链烧 token。入口的检查只挡得住「新的一轮」。
+ */
+async function jobIsTerminal(jobId: string): Promise<boolean> {
+  const rows = await rest<any[]>(
+    `/BatchJob?select=status&id=eq.${enc(jobId)}&limit=1`,
+  ).catch(() => []);
+  const s = rows?.[0]?.status;
+  return s === "done" || s === "canceled";
+}
+
 async function patchJob(id: string, patch: Record<string, any>) {
   await rest(`/BatchJob?id=eq.${enc(id)}`, {
     method: "PATCH",
@@ -383,7 +396,7 @@ async function runRound(jobId: string): Promise<{ processed: number; remaining: 
   let processed = 0;
   // 本轮已拨回 pending 的条目不允许在本轮立刻重跑：两次 120s 累计会撞 150s 上限
   const requeued = new Set<string>();
-  console.log(`[batch-worker] v1.19.10 round start job=${jobId} mode=${mode}`);
+  console.log(`[batch-worker] v1.19.11 round start job=${jobId} mode=${mode}`);
 
   // 上一轮被平台杀掉时留下的 processing 条目，先拨回 pending / failed，否则永远轮不到它
   await reclaimStale(jobId).catch(() => 0);
@@ -398,6 +411,11 @@ async function runRound(jobId: string): Promise<{ processed: number; remaining: 
   }
 
   while (canStartItem(hardDeadline, Date.now(), softDeadline)) {
+    // 用户可能在处理中点了「结束批次」：立刻停手，不再开新条目烧 token
+    if (await jobIsTerminal(jobId)) {
+      console.log(`[batch-worker] v1.19.11 job finished by user, stop round job=${jobId}`);
+      return { processed, remaining: 0, status: "done" };
+    }
     const pending = await rest<any[]>(
       `/BatchItem?select=*&jobId=eq.${enc(jobId)}&status=eq.pending&order=idx.asc&limit=8`,
     );
@@ -477,6 +495,7 @@ async function runRound(jobId: string): Promise<{ processed: number; remaining: 
         });
       }
       if (quota) {
+        if (await jobIsTerminal(jobId)) return { processed, remaining: 0, status: "done" };
         // 整批暂停：继续跑只会把剩下的全打成 failed
         await patchJob(jobId, { status: "paused", errorMessage: "AI 额度不足，已暂停", heartbeatAt: new Date().toISOString() });
         const c = await recount(jobId);
@@ -500,6 +519,8 @@ async function runRound(jobId: string): Promise<{ processed: number; remaining: 
   let remaining = Math.max(0, c.total - c.done - c.failed);
 
   if (remaining > 0) {
+    // 用户已结束批次时不再回收/续链，直接退出（否则会拉起下一轮继续烧 token）
+    if (await jobIsTerminal(jobId)) return { processed, remaining: 0, status: "done" };
     // 还有剩余但没有待处理条目：剩下的都卡在 processing（多半是上一轮被杀留下的）。
     const pendingLeft = await rest<any[]>(
       `/BatchItem?select=id&jobId=eq.${enc(jobId)}&status=eq.pending&limit=1`,
@@ -527,6 +548,7 @@ async function runRound(jobId: string): Promise<{ processed: number; remaining: 
   }
 
   if (remaining <= 0) {
+    if (await jobIsTerminal(jobId)) return { processed, remaining: 0, status: "done" };
     await patchJob(jobId, {
       status: "confirming",
       finishedAt: new Date().toISOString(),
@@ -541,6 +563,7 @@ async function runRound(jobId: string): Promise<{ processed: number; remaining: 
     return { processed, remaining: 0, status: "confirming" };
   }
   // 先续上下一轮，再返回；waitUntil 保证响应结束后仍会发出请求
+  if (await jobIsTerminal(jobId)) return { processed, remaining, status: "done" };
   selfInvoke(jobId);
   return { processed, remaining, status: "processing" };
 }
@@ -611,7 +634,7 @@ Deno.serve(async (req: Request) => {
   if (!API_KEY) return json({ error: "AI_NOT_CONFIGURED" }, 503);
 
   // 调用级版本标记：不依赖 job 是否存在，运维用日志就能确认线上跑的是哪一版
-  console.log(`[batch-worker] v1.19.10 invoke job=${jobId}`);
+  console.log(`[batch-worker] v1.19.11 invoke job=${jobId}`);
 
   try {
     const result = await runRound(jobId);

@@ -6,7 +6,7 @@
  */
 import { accessToken, cuid, nowIso, requireUser, restJson } from "../core";
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from "../config";
-import { apiError, json, type RouteHandler } from "../http";
+import { apiError, json, type RouteHandler, type RouteContext } from "../http";
 import { buildItem } from "./error-items";
 import { recentGradeFromRows, resolveGradeForNewItem } from "./grade";
 import { hasImageRef, refToSrc } from "../../storage/ref";
@@ -16,6 +16,12 @@ const WORKER_URL = `${SUPABASE_URL}/functions/v1/batch-worker`;
 const MAX_BATCH = 30;
 /** 活跃态：用于首页横幅与并发约束 */
 const ACTIVE_STATUSES = ["draft", "queued", "processing", "confirming", "paused"];
+/**
+ * 条目终态：不再需要 worker 处理、也不再需要用户确认。
+ * failed 也算终态（历史上它就不阻塞收尾），但「结束批次」会把它一起转成 discarded
+ * 并清掉原图，避免失败图长期占库。
+ */
+const TERMINAL_ITEM_STATUSES = new Set(["saved", "discarded", "failed"]);
 
 /** 草稿存活期：超过这个天数没人动就清掉，否则 30 张原图会一直占库 */
 export const DRAFT_TTL_DAYS = 7;
@@ -87,8 +93,11 @@ function estimate(count: number, mode: "fast" | "deep") {
   };
 }
 
-export const BATCH_HANDLERS: RouteHandler[] = [
-  async (ctx) => {
+/**
+ * 具名 handler：finish 动作要复用同一套入库逻辑（去重 / 年级沿用 / 标签关联 / 补原图），
+ * 所以在同一个 handler 内以 save 的 ctx 再调自己一次，而不是把 280 行主体复制一遍。
+ */
+const batchHandler: RouteHandler = async (ctx) => {
     if (ctx.parts[0] !== "batch") return null;
     const action = ctx.parts[1] || "";
     const user = await requireUser();
@@ -467,11 +476,26 @@ export const BATCH_HANDLERS: RouteHandler[] = [
       };
       const candidates: Candidate[] = [];
       const imageMissing: string[] = [];
+      /**
+       * 旧版三种「静默跳过」不改条目状态，条目会一直停在 done，
+       * 于是哪怕用户点了「全部入库」，批次也永远停在 confirming 收不了尾。
+       * 这里把「本次明确要求入库、但入不了」的条目主动标 discarded + 清原图，
+       * 结果对用户可见，批次也能正常结束。
+       */
+      const skippedDiscards: { id: string; reason: string }[] = [];
       for (const item of rows || []) {
-        if (item.status === "saved") { skipped++; continue; }
-        if (!item.questionText) { skipped++; continue; }
+        if (item.status === "saved" || item.status === "discarded") { skipped++; continue; }
+        if (!item.questionText) {
+          skipped++;
+          skippedDiscards.push({ id: String(item.id), reason: "题干为空，未入库" });
+          continue;
+        }
         const key = String(item.questionText).replace(/\s+/g, "").slice(0, 80);
-        if (existingTexts.has(key)) { skipped++; continue; }
+        if (existingTexts.has(key)) {
+          skipped++;
+          skippedDiscards.push({ id: String(item.id), reason: "与已有错题重复，未入库" });
+          continue;
+        }
         existingTexts.add(key); // 同批内题干重复也只入一条
         const points = (() => {
           try { return JSON.parse(item.knowledgePoints || "[]"); } catch { return []; }
@@ -653,6 +677,20 @@ export const BATCH_HANDLERS: RouteHandler[] = [
       ));
       for (const c of succeeded) { createdIds.push(c.errorItemId); saved++; }
 
+      // 被跳过的条目也落终态：既清掉原图省库容，也让「全部入库」后批次能收尾
+      await Promise.allSettled(skippedDiscards.map((s) =>
+        restJson(`/BatchItem?id=eq.${encodeURIComponent(s.id)}`, {
+          method: "PATCH",
+          headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({
+            status: "discarded",
+            failureReason: s.reason,
+            imageBase64: "",
+            updatedAt: nowIso(),
+          }),
+        }),
+      ));
+
       await Promise.allSettled(
         candidates.filter((c) => !ok.has(c.errorItemId)).map((c) =>
           restJson(`/BatchItem?id=eq.${encodeURIComponent(c.item.id)}`, {
@@ -667,32 +705,7 @@ export const BATCH_HANDLERS: RouteHandler[] = [
       );
 
       let counts: Record<string, number> | null = null;
-      if (final) {
-        const all = await restJson<any[]>(
-          `/BatchItem?select=status&jobId=eq.${encodeURIComponent(jobId)}`,
-        ).catch(() => []);
-        counts = {
-          total: all.length,
-          done: all.filter((i) => i.status === "done").length,
-          saved: all.filter((i) => i.status === "saved").length,
-          failed: all.filter((i) => i.status === "failed").length,
-          pending: all.filter((i) => i.status === "pending" || i.status === "processing").length,
-        };
-        const finished = counts.pending === 0 && counts.done === 0;
-        await restJson(`/BatchJob?id=eq.${encodeURIComponent(jobId)}`, {
-          method: "PATCH",
-          headers: { Prefer: "return=minimal" },
-          body: JSON.stringify({
-            savedCount: counts.saved,
-            doneCount: counts.done + counts.saved,
-            failedCount: counts.failed,
-            totalCount: counts.total,
-            status: finished ? "done" : job.status,
-            updatedAt: nowIso(),
-          }),
-        });
-        if (finished) await startNextQueued(user.id, jobId);
-      }
+      if (final) counts = await finalizeJob(jobId, user.id, job.status);
 
       return json({ success: true, saved, skipped, failed, createdIds, counts, imageMissing });
     }
@@ -781,9 +794,147 @@ export const BATCH_HANDLERS: RouteHandler[] = [
       return json({ success: true });
     }
 
+    /* -------------------- 结束批次（预览 / 执行 / 单条舍弃） -------------------- */
+    /**
+     * 预览：给确认弹窗列清「自动入库 N 条 / 舍弃 M 条 / 已入库 X 条不受影响」。
+     * 列表卡片没有 items 明细，详情页也有，统一走后端算，避免两处口径漂移。
+     */
+    if (action === "finish-preview" && ctx.method === "GET") {
+      const jobId = ctx.query.get("id") || "";
+      const job = await loadJob(jobId, user.id);
+      if (!job) return apiError(404, "批次不存在");
+      const rows = await restJson<any[]>(
+        `/BatchItem?select=id,status,questionText&jobId=eq.${encodeURIComponent(jobId)}`,
+      ).catch(() => []);
+      const s = splitForFinish(rows || []);
+      return json({
+        status: job.status,
+        toSave: s.toSave.length,
+        toDiscard: s.toDiscard.length,
+        saved: s.saved,
+        total: s.total,
+      });
+    }
+
+    /**
+     * 结束批次：一键把「解析成功的自动入库、没解析成功的自动舍弃」，然后归档。
+     * 处理中也能点——先把 Job 置终态拦住 worker，后续条目不再被拉起，立即止损。
+     */
+    if (action === "finish" && ctx.method === "POST") {
+      const jobId = String(ctx.body?.jobId || "");
+      const job = await loadJob(jobId, user.id);
+      if (!job) return apiError(404, "批次不存在");
+      if (job.status === "done" || job.status === "canceled") {
+        return json({ success: true, already: true, saved: 0, discarded: 0 });
+      }
+
+      const now = nowIso();
+      // ① 先置终态：worker 入口与循环内都会检查，正在跑的那一轮结束后不会再续链，
+      //    也不会把状态刷回 confirming（worker 侧同步加了终态保护）。
+      await restJson(`/BatchJob?id=eq.${encodeURIComponent(jobId)}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ status: "done", finishedAt: now, updatedAt: now }),
+      });
+
+      const rows = await restJson<any[]>(
+        `/BatchItem?select=id,idx,status,questionText&jobId=eq.${encodeURIComponent(jobId)}&order=idx.asc`,
+      ).catch(() => []);
+      const { toSave } = splitForFinish(rows || []);
+
+      // ② 解析成功的自动入库：复用同一个 handler 的 save 分支，去重 / 年级沿用 /
+      //    标签关联 / 补原图全都不用重写。final=false，收尾由本动作统一做一次。
+      let saved = 0;
+      let skipped = 0;
+      let saveFailed = 0;
+      if (toSave.length) {
+        const saveCtx: RouteContext = {
+          method: "POST",
+          path: "/api/batch/save",
+          parts: ["batch", "save"],
+          query: ctx.query,
+          body: { jobId, itemIds: toSave, final: false },
+          signal: ctx.signal,
+        };
+        const saveRes = await batchHandler(saveCtx);
+        if (saveRes?.ok) {
+          const data: any = await saveRes.clone().json().catch(() => ({}));
+          saved = Number(data.saved) || 0;
+          skipped = Number(data.skipped) || 0;
+          saveFailed = Array.isArray(data.failed) ? data.failed.length : 0;
+        }
+      }
+
+      // ③ 其余（failed / pending / processing / 空题干 / 入库失败）统一舍弃并清原图。
+      //    save 已把「题干重复 / 空题干」标成 discarded，这里重新查一次避免重复写。
+      const latest = await restJson<any[]>(
+        `/BatchItem?select=id,status&jobId=eq.${encodeURIComponent(jobId)}`,
+      ).catch(() => []);
+      const discardIds = (latest || [])
+        .filter((i) => i.status !== "saved" && i.status !== "discarded")
+        .map((i) => String(i.id));
+      await Promise.allSettled(discardIds.map((id) =>
+        restJson(`/BatchItem?id=eq.${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({
+            status: "discarded",
+            failureReason: "结束批次时舍弃（未入库）",
+            imageBase64: "",
+            updatedAt: nowIso(),
+          }),
+        }),
+      ));
+
+      // ④ 统一计数并归档（currentStatus 传 done，即使有漏网条目也不会退回 confirming）
+      const counts = await finalizeJob(jobId, user.id, "done");
+      return json({
+        success: true, saved, skipped, saveFailed,
+        discarded: discardIds.length, counts,
+      });
+    }
+
+    /** 单条舍弃：不入库、清原图；若已是最后一条未处理条目则自动收尾 */
+    if (action === "discard" && ctx.method === "POST") {
+      const jobId = String(ctx.body?.jobId || "");
+      const itemId = String(ctx.body?.itemId || "");
+      const job = await loadJob(jobId, user.id);
+      if (!job) return apiError(404, "批次不存在");
+      const rows = await restJson<any[]>(
+        `/BatchItem?select=id,idx,status&id=eq.${encodeURIComponent(itemId)}`
+        + `&jobId=eq.${encodeURIComponent(jobId)}&userId=eq.${encodeURIComponent(user.id)}&limit=1`,
+      ).catch(() => []);
+      if (!rows?.length) return apiError(404, "条目不存在");
+      const item = rows[0];
+      if (item.status === "saved") {
+        return apiError(400, "这条已入库，不能舍弃；如需删除请到错题本操作");
+      }
+      if (item.status === "discarded") {
+        return json({ success: true, already: true, finished: job.status === "done" });
+      }
+      await restJson(`/BatchItem?id=eq.${encodeURIComponent(itemId)}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({
+          status: "discarded",
+          failureReason: "用户舍弃",
+          imageBase64: "",
+          updatedAt: nowIso(),
+        }),
+      });
+      // 已归档的批次不用再统计；其余状态下若已无未处理条目，自动归档
+      let finished = false;
+      if (job.status !== "done" && job.status !== "canceled") {
+        const counts = await finalizeJob(jobId, user.id, job.status);
+        finished = counts.pending === 0;
+      }
+      return json({ success: true, finished });
+    }
+
     return apiError(404, "Unknown batch endpoint");
-  },
-];
+};
+
+export const BATCH_HANDLERS: RouteHandler[] = [batchHandler];
 
 /** 草稿到期时间：最后一次改动 + TTL，前端据此显示「还有 N 天」 */
 function draftExpiresAt(job: any): string | null {
@@ -791,6 +942,69 @@ function draftExpiresAt(job: any): string | null {
   const base = Date.parse(job.updatedAt || job.createdAt || "");
   if (!Number.isFinite(base)) return null;
   return new Date(base + DRAFT_TTL_MS).toISOString();
+}
+
+/**
+ * 「结束批次」的分流规则：解析成功（done 且题干非空）的自动入库，其余全部舍弃。
+ * 预览与执行共用同一份判定，弹窗数字和实际动作不会打架。
+ */
+function splitForFinish(rows: any[]) {
+    const toSave = rows
+        .filter((i) => i.status === "done" && String(i.questionText || "").trim())
+        .map((i) => String(i.id));
+    const saveSet = new Set(toSave);
+    const toDiscard = rows
+        .filter((i) =>
+            i.status !== "saved" && i.status !== "discarded" && !saveSet.has(String(i.id)))
+        .map((i) => String(i.id));
+    return {
+        toSave,
+        toDiscard,
+        saved: rows.filter((i) => i.status === "saved").length,
+        total: rows.length,
+    };
+}
+
+/**
+ * 统一收尾：按「未处理条目数」判定，只要没有非终态条目，批次就归档为 done。
+ * save / finish / discard 共用，避免三处各写一套导致判定漂移。
+ *
+ * 旧判定是 pending===0 && done===0，要求所有解析结果都变成 saved 才能结束；
+ * 只要有一条 done（哪怕用户不想要、或题干重复被静默跳过），批次就永远停在 confirming。
+ */
+async function finalizeJob(
+    jobId: string, userId: string, currentStatus: string,
+): Promise<Record<string, number>> {
+    const all = await restJson<any[]>(
+        `/BatchItem?select=status&jobId=eq.${encodeURIComponent(jobId)}`,
+    ).catch(() => []);
+    const rows = all || [];
+    const counts = {
+        total: rows.length,
+        done: rows.filter((i) => i.status === "done").length,
+        saved: rows.filter((i) => i.status === "saved").length,
+        discarded: rows.filter((i) => i.status === "discarded").length,
+        failed: rows.filter((i) => i.status === "failed").length,
+        pending: rows.filter((i) => !TERMINAL_ITEM_STATUSES.has(i.status)).length,
+    };
+    const finished = counts.pending === 0;
+    await restJson(`/BatchJob?id=eq.${encodeURIComponent(jobId)}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({
+            savedCount: counts.saved,
+            // 进度条算「已处理」：入库 + 舍弃 + 失败都算处理完，
+            // 否则结束的批次还显示 93%，用户以为没跑完。
+            doneCount: counts.saved + counts.discarded + counts.failed,
+            failedCount: counts.failed,
+            totalCount: counts.total,
+            status: finished ? "done" : currentStatus,
+            ...(finished ? { finishedAt: nowIso() } : {}),
+            updatedAt: nowIso(),
+        }),
+    });
+    if (finished) await startNextQueued(userId, jobId);
+    return counts;
 }
 
 /** 当前批次收尾后，把同账号排队最久的一批拉起来 */

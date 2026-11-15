@@ -12,14 +12,14 @@ import { apiClient } from "@/lib/api-client";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { BatchJobList } from "@/components/batch-job-list";
-import { refreshActiveBatch } from "@/lib/batch-store";
+import { confirmAndFinish, refreshActiveBatch } from "@/lib/batch-store";
 import { draftDaysLeft } from "@/lib/batch-draft";
 import { backToBatch, openBatch, readOpenBatch } from "@/lib/batch-nav";
 import type { ParsedQuestion } from "@/lib/ai";
 
 import {
     AlertTriangle, ArrowLeft, CheckCircle2, Clock, ImagePlus, Loader2,
-    PauseCircle, RefreshCw, Trash2, XCircle,
+    PauseCircle, RefreshCw, Trash2, X, XCircle,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { imageSrc } from "@/lib/storage";
@@ -39,7 +39,7 @@ const CorrectionEditor = dynamic(
 );
 
 type JobStatus = "draft" | "queued" | "processing" | "confirming" | "paused" | "done" | "canceled";
-type ItemStatus = "pending" | "edited" | "processing" | "done" | "failed" | "saved";
+type ItemStatus = "pending" | "edited" | "processing" | "done" | "failed" | "saved" | "discarded";
 
 interface BatchJob {
     id: string;
@@ -142,6 +142,8 @@ function BatchDetail({ jobId }: { jobId: string }) {
     const [loading, setLoading] = useState(true);
     const [checked, setChecked] = useState<Set<string>>(new Set());
     const [saving, setSaving] = useState(false);
+    /** 结束批次执行中（自动入库可能要几秒，防重复点击） */
+    const [finishing, setFinishing] = useState(false);
     /** 保存中的真实进度（每完成一片更新一次），null 表示不在保存 */
     const [saveProgress, setSaveProgress] = useState<{ done: number; total: number } | null>(null);
     /** 上次入库未完成，回来后待续跑的条目 */
@@ -260,7 +262,10 @@ function BatchDetail({ jobId }: { jobId: string }) {
     const currentIdx = items.find((i) => i.status === "processing")?.idx;
 
     const elapsed = job?.startedAt ? (Date.now() - new Date(job.startedAt).getTime()) / 1000 : 0;
-    const finished = items.filter((i) => i.status === "done" || i.status === "saved").length;
+    // 已舍弃也算「处理完」，否则结束的批次进度条会永远差几格
+    const finished = items.filter(
+        (i) => i.status === "done" || i.status === "saved" || i.status === "discarded",
+    ).length;
     const pct = items.length ? Math.round((finished / items.length) * 100) : 0;
     const remainMin = finished > 0 && items.length > finished
         ? Math.max(1, Math.round(((elapsed / finished) * (items.length - finished)) / 60))
@@ -353,6 +358,44 @@ function BatchDetail({ jobId }: { jobId: string }) {
         }
     };
 
+    /** 结束批次：解析成功的自动入库、没解析成功的自动舍弃，然后归档 */
+    const doFinish = async () => {
+        if (finishing || saving) return;
+        setFinishing(true);
+        try {
+            const res = await confirmAndFinish(jobId, {
+                title: b.finishTitle,
+                autoSave: b.finishAutoSave,
+                autoDiscard: b.finishAutoDiscard,
+                keepSaved: b.finishKeepSaved,
+                note: b.finishNote,
+            });
+            if (!res) return; // 用户取消
+            toast.success(b.finishToast
+                .replace("{saved}", String(res.saved || 0))
+                .replace("{discarded}", String(res.discarded || 0)));
+            await load();
+            refreshActiveBatch();
+        } catch (e: any) {
+            toast.error(e?.message || t.common.error);
+        } finally {
+            setFinishing(false);
+        }
+    };
+
+    /** 单条舍弃：轻确认，不入库并清原图 */
+    const doDiscard = async (item: BatchItem) => {
+        if (!window.confirm(b.discardItemConfirm.replace("{n}", String(item.idx + 1)))) return;
+        try {
+            await apiClient.post("/api/batch/discard", { jobId, itemId: item.id }, { timeout: 60000 });
+            toast.success(b.discardItemToast);
+            await load();
+            refreshActiveBatch();
+        } catch (e: any) {
+            toast.error(e?.message || t.common.error);
+        }
+    };
+
     /** 丢弃草稿：连已上传的原图一起删（BatchItem 级联），删完回列表 */
     const discardDraftJob = async () => {
         if (!window.confirm("丢弃这批？已上传的图片会一起删掉，不能恢复。")) return;
@@ -435,7 +478,9 @@ function BatchDetail({ jobId }: { jobId: string }) {
     }
 
     const meta = statusMeta(job.status, b);
-    const doneCount = items.filter((i) => i.status === "done" || i.status === "saved").length;
+    const doneCount = items.filter(
+        (i) => i.status === "done" || i.status === "saved" || i.status === "discarded",
+    ).length;
 
     return (
         <div className="mx-auto w-full max-w-4xl pb-24">
@@ -566,6 +611,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
                             className={cn(
                                 "flex gap-2.5 rounded-lg border bg-card p-2.5 transition-colors sm:gap-3 sm:p-3",
                                 item.status === "saved" && "opacity-60",
+                                item.status === "discarded" && "opacity-50",
                                 item.status === "failed" && "border-destructive/30",
                             )}
                         >
@@ -604,6 +650,11 @@ function BatchDetail({ jobId }: { jobId: string }) {
                                         {item.status === "saved" && (
                                             <span className="flex items-center gap-0.5 text-[11px] text-emerald-600">
                                                 <CheckCircle2 className="h-3 w-3" />{b.saved}
+                                            </span>
+                                        )}
+                                        {item.status === "discarded" && (
+                                            <span className="flex items-center gap-0.5 text-[11px] text-muted-foreground">
+                                                <X className="h-3 w-3" />{b.discarded}
                                             </span>
                                         )}
                                         {item.status === "failed" && (
@@ -663,6 +714,18 @@ function BatchDetail({ jobId }: { jobId: string }) {
                                     <RefreshCw className="mr-1 h-3.5 w-3.5" />{b.retry}
                                 </Button>
                             )}
+                            {/* 只让 done / failed 可单条舍弃：processing 那条 worker 跑完会写回 done，
+                                前端标 discarded 会被覆盖，想整批停手请用「结束批次」。 */}
+                            {(item.status === "done" || item.status === "failed") && (
+                                <Button
+                                    size="sm" variant="ghost"
+                                    className="h-7 shrink-0 self-center px-2 text-muted-foreground"
+                                    title={b.discardItem}
+                                    onClick={() => doDiscard(item)}
+                                >
+                                    <X className="mr-1 h-3.5 w-3.5" />{b.discardItem}
+                                </Button>
+                            )}
                         </div>
                     );
                 })}
@@ -691,6 +754,19 @@ function BatchDetail({ jobId }: { jobId: string }) {
                         <Button variant="ghost" size="sm" onClick={toggleAll} disabled={!selectable.length} className="shrink-0 px-2">
                             {b.selectAll}
                         </Button>
+                        {/* 确认阶段和解析中都能点：后者用于立即止损，后台会立刻停手不再烧 token */}
+                        {(job.status === "confirming" || job.status === "processing") && (
+                            <Button
+                                variant="outline" size="sm" className="shrink-0 px-2"
+                                disabled={finishing || saving}
+                                onClick={doFinish}
+                            >
+                                {finishing
+                                    ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                                    : <CheckCircle2 className="mr-1 h-3.5 w-3.5" />}
+                                {b.finishBatch}
+                            </Button>
+                        )}
                         {job.status === "confirming" && (
                             <Button
                                 variant="ghost" size="icon" title={b.dismiss}

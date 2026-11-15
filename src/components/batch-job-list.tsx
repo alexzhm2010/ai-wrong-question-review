@@ -4,8 +4,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { apiClient } from "@/lib/api-client";
+import { Button } from "@/components/ui/button";
+import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { openBatch } from "@/lib/batch-nav";
+import { confirmAndFinish, refreshActiveBatch } from "@/lib/batch-store";
 import { Loader2, AlertTriangle, CheckCircle2, PauseCircle, Clock, ImagePlus } from "lucide-react";
 
 export type JobStatus = "draft" | "queued" | "processing" | "confirming" | "paused" | "done" | "canceled";
@@ -58,6 +61,8 @@ export function BatchJobList({ jobs: external, onOpen, limit, className }: Props
     const router = useRouter();
     const [fetched, setFetched] = useState<BatchJobRow[] | null>(external ?? null);
     const [now, setNow] = useState(() => Date.now());
+    /** 正在结束的批次 id，防重复点击 */
+    const [finishingId, setFinishingId] = useState<string | null>(null);
 
     // 只有存在解析中/排队批次才需要周期性刷新；全已结束时零轮询、零重渲染
     const hasActive = (fetched || []).some(
@@ -106,6 +111,31 @@ export function BatchJobList({ jobs: external, onOpen, limit, className }: Props
             document.removeEventListener("visibilitychange", onVisible);
         };
     }, [external, hasActive, load]);
+
+    /** 列表卡片上的「结束批次」：与详情页走同一套预览 → 一次确认 → 执行 */
+    const doFinish = async (id: string) => {
+        if (finishingId) return;
+        setFinishingId(id);
+        try {
+            const res = await confirmAndFinish(id, {
+                title: b.finishTitle,
+                autoSave: b.finishAutoSave,
+                autoDiscard: b.finishAutoDiscard,
+                keepSaved: b.finishKeepSaved,
+                note: b.finishNote,
+            });
+            if (!res) return; // 用户取消
+            toast.success(b.finishToast
+                .replace("{saved}", String(res.saved || 0))
+                .replace("{discarded}", String(res.discarded || 0)));
+            refreshActiveBatch();
+            await load();
+        } catch (e: any) {
+            toast.error(e?.message || t.common.error);
+        } finally {
+            setFinishingId(null);
+        }
+    };
 
     const jobs = fetched;
 
@@ -181,10 +211,18 @@ export function BatchJobList({ jobs: external, onOpen, limit, className }: Props
                             const pct = job.totalCount ? Math.round((done / job.totalCount) * 100) : 0;
                             const pos = queuePos.get(job.id);
                             return (
-                                <button
+                                <div
                                     key={job.id}
+                                    role="button"
+                                    tabIndex={0}
                                     onClick={() => open(job.id)}
-                                    className="w-full rounded-lg border bg-card p-3 text-left transition-colors hover:border-primary/40"
+                                    onKeyDown={(e) => {
+                                        if (e.key === "Enter" || e.key === " ") {
+                                            e.preventDefault();
+                                            open(job.id);
+                                        }
+                                    }}
+                                    className="w-full cursor-pointer rounded-lg border bg-card p-3 text-left transition-colors hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                                 >
                                     <div className="flex items-center justify-between gap-2">
                                         <span className="min-w-0 truncate text-sm font-medium">
@@ -216,7 +254,25 @@ export function BatchJobList({ jobs: external, onOpen, limit, className }: Props
                                             <span className="text-amber-600 dark:text-amber-400">{b.toSaveHint}</span>
                                         )}
                                     </div>
-                                </button>
+                                    {(job.status === "confirming" || job.status === "processing") && (
+                                        <div className="mt-2 flex justify-end">
+                                            <Button
+                                                variant="outline" size="sm"
+                                                className="h-7 px-2 text-[11px]"
+                                                disabled={finishingId !== null}
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    void doFinish(job.id);
+                                                }}
+                                            >
+                                                {finishingId === job.id
+                                                    ? <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                                                    : <CheckCircle2 className="mr-1 h-3 w-3" />}
+                                                {b.finishBatch}
+                                            </Button>
+                                        </div>
+                                    )}
+                                </div>
                             );
                         })}
                     </div>

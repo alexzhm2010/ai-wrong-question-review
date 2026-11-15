@@ -96,3 +96,57 @@ export function useActiveBatch(): ActiveBatch | null | undefined {
         s === "draft" ? 0 : s === "paused" ? 1 : s === "confirming" ? 2 : s === "processing" ? 3 : 4;
     return [...list].sort((a, b) => weight(a.status) - weight(b.status))[0];
 }
+
+/* ----------------------------- 结束批次（共用） ----------------------------- */
+
+export interface FinishPreview {
+    status: string;
+    /** 解析成功、将被自动入库的条目数（其中重复题会被去重跳过） */
+    toSave: number;
+    /** 未解析成功、将被舍弃的条目数 */
+    toDiscard: number;
+    /** 已入库、完全不受影响的条目数 */
+    saved: number;
+    total: number;
+}
+
+export interface FinishResult {
+    success: boolean;
+    saved: number;
+    skipped: number;
+    saveFailed: number;
+    discarded: number;
+    already?: boolean;
+    counts?: Record<string, number>;
+}
+
+/** 弹窗要显示的文案模板，由调用方从 t.batch 传入 */
+export interface FinishStrings {
+    title: string;
+    autoSave: string;
+    autoDiscard: string;
+    keepSaved: string;
+    note: string;
+}
+
+/**
+ * 详情页与列表卡片共用：先拉预览数字 → 一次确认 → 执行。
+ * 数字由后端算，避免两处前端各写一套分流规则导致弹窗和实际动作不一致。
+ * 返回 null 表示用户取消；失败由调用方 catch 后 toast。
+ */
+export async function confirmAndFinish(
+    jobId: string, strings: FinishStrings,
+): Promise<FinishResult | null> {
+    const p = await apiClient.get<FinishPreview>("/api/batch/finish-preview", { params: { id: jobId } });
+    const text = [
+        strings.title,
+        "",
+        strings.autoSave.replace("{n}", String(p.toSave)),
+        strings.autoDiscard.replace("{n}", String(p.toDiscard)),
+        strings.keepSaved.replace("{n}", String(p.saved)),
+        "",
+        strings.note,
+    ].join("\n");
+    if (!window.confirm(text)) return null;
+    return apiClient.post<FinishResult>("/api/batch/finish", { jobId }, { timeout: 120000 });
+}
