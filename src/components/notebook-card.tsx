@@ -19,25 +19,37 @@ interface NotebookCardProps {
  *
  * 旧版用 CardHeader + CardContent 两段式，再叠加 Card 默认的 py-6 / gap-6，
  * 单张卡片在手机上高约 150px，6 个学科要滚两屏。这里改成单行横排：
- * 图标 + 名称/题数 + 右箭头，整卡约 60px，移动端两列即可一屏看全。
+ * 图标 + 名称/题数 + 右箭头，整卡约 64px，移动端两列即可一屏看全。
+ *
+ * 注意：重命名/删除按钮必须绝对定位。它们虽然默认 opacity-0，但若留在文档流中，
+ * 仍会占掉约 60px 宽度；手机两列布局下文字区只剩十几像素，学科名会被截成省略号、
+ * 题数被挤成竖排单字。
  */
 export function NotebookCard({ id, name, errorCount, onClick, onRename, onDelete, itemLabel = "items" }: NotebookCardProps) {
+    const hasActions = Boolean(onRename || onDelete);
+
     return (
         <Card
-            className="cursor-pointer hover:border-primary/50 transition-colors relative group py-0 gap-0"
+            className="cursor-pointer hover:border-primary/50 transition-colors relative group py-0 gap-0 overflow-hidden"
             onClick={onClick}
         >
-            <div className="flex items-center gap-2.5 px-3.5 py-3">
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
-                    <BookOpen className="h-4 w-4 text-primary" />
+            <div className="flex items-center gap-2 px-3 py-3 sm:gap-2.5 sm:px-3.5">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 sm:h-8 sm:w-8">
+                    <BookOpen className="h-3.5 w-3.5 text-primary sm:h-4 sm:w-4" />
                 </span>
                 <div className="min-w-0 flex-1">
-                    <div className="truncate text-[15px] font-semibold leading-tight">{name}</div>
-                    <div className="mt-0.5 text-xs text-muted-foreground">
+                    <div className="truncate whitespace-nowrap text-sm font-semibold leading-tight sm:text-[15px]">
+                        {name}
+                    </div>
+                    <div className="mt-0.5 truncate whitespace-nowrap text-[11px] leading-tight text-muted-foreground sm:text-xs">
                         {errorCount} {itemLabel}
                     </div>
                 </div>
-                <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50 transition-opacity group-hover:opacity-0" />
+            </div>
+
+            {hasActions && (
+                <div className="absolute right-1 top-1 flex items-center gap-0.5 rounded-md bg-card/90 opacity-0 shadow-sm backdrop-blur transition-opacity group-hover:opacity-100 focus-within:opacity-100">
                     {onRename && (
                         <Button
                             variant="ghost"
@@ -65,8 +77,7 @@ export function NotebookCard({ id, name, errorCount, onClick, onRename, onDelete
                         </Button>
                     )}
                 </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50 transition-opacity group-hover:hidden" />
-            </div>
+            )}
         </Card>
     );
 }
