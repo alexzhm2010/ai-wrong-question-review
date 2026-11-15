@@ -121,12 +121,18 @@ create table if not exists public.frontend_logs (
   created_at   timestamptz not null default now()
 );
 
+-- 火山方舟账户余额快照：由 Edge Function quota-sync 用 IAM 只读密钥查询后写入。
+-- 只允许 SELECT 给登录用户（见下方 quota_read 策略），写入必须走 service_role。
+-- source: volc-api = 服务端自动同步；manual = 管理员手动录入的兜底值。
 create table if not exists public.quota_snapshot (
-  id                 bigint generated always as identity primary key,
-  balance            numeric,
-  currency           text default 'CNY',
-  free_quota_expired boolean default false,
-  captured_at        timestamptz not null default now()
+  id                     bigint generated always as identity primary key,
+  balance                numeric,
+  currency               text default 'CNY',
+  source                 text default 'volc-api',
+  raw                    jsonb,
+  free_quota_expired     boolean default false,
+  stop_when_free_expired boolean default true,
+  captured_at            timestamptz not null default now()
 );
 
 -- ------------------------------ RLS ------------------------------

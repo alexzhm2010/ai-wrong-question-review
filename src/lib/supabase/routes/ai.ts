@@ -1,5 +1,5 @@
 /** AI 端点：全部转发到 Supabase Edge Function ai-proxy（密钥不落前端） */
-import { aiEdge, nowIso, requireAdmin, restJson } from "../core";
+import { aiEdge, nowIso, requireAdmin, restJson, quotaSyncEdge } from "../core";
 import { apiError, json, type RouteContext } from "../http";
 import { buildQuotaView, DEFAULT_QUOTA_SETTINGS, toNumber } from "../../quota-view";
 
@@ -30,7 +30,16 @@ async function readQuotaSnapshot(): Promise<Record<string, any> | null> {
   return rows?.[0] || null;
 }
 
-async function quotaView(): Promise<Record<string, any>> {
+/**
+ * 读取额度视图。先请服务端同步一次真实余额（10 分钟节流，force 跳过节流），
+ * 同步失败时静默降级：快照表里上一次的结果或手动录入值仍可正常展示。
+ */
+async function quotaView(force = false): Promise<Record<string, any>> {
+  try {
+    await quotaSyncEdge(force);
+  } catch {
+    // 网络抖动 / 函数冷启动 / 未配置密钥都不该让整张卡片打不开
+  }
   const [snap, cfg] = await Promise.all([readQuotaSnapshot(), readRawConfig()]);
   return buildQuotaView(snap, cfg);
 }
@@ -94,7 +103,7 @@ export async function handleAiRoute(ctx: RouteContext): Promise<Response> {
 
   if (ctx.path === "/api/ai-quota") {
     if (ctx.method === "POST") return saveQuotaSettings(ctx.body);
-    return json(await quotaView());
+    return json(await quotaView(ctx.query.get("refresh") === "1"));
   }
 
   return apiError(404, "Unknown AI endpoint");

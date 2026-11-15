@@ -151,13 +151,19 @@ export function AiQuotaCard() {
 
             <p className="text-xs text-muted-foreground">{q?.desc}</p>
 
-            {/* 余额来源说明：推理 Key 无账单权限，避免把设置页示例值误认成真实余额 */}
+            {/* 自动同步状态：密钥只在服务端，前端永远不接触 */}
             <div className="rounded-lg border border-blue-200 bg-blue-50/70 p-3 text-xs space-y-1.5 dark:border-blue-900 dark:bg-blue-950/40">
-                <div className="font-medium text-blue-900 dark:text-blue-100">
-                    {q?.balanceNotice || "余额说明"}
+                <div className="flex flex-wrap items-center justify-between gap-2 font-medium text-blue-900 dark:text-blue-100">
+                    <span>{q?.balanceNotice || "余额与自动同步"}</span>
+                    <span className="inline-flex items-center gap-1 rounded-full border border-blue-300 bg-white/70 px-2 py-0.5 text-[11px] dark:border-blue-700 dark:bg-blue-900/40">
+                        <span className={`h-1.5 w-1.5 rounded-full ${data?.autoSyncConfigured ? "bg-green-500" : "bg-amber-500"}`} />
+                        {data?.autoSyncConfigured
+                            ? (q?.autoSyncOn || "自动同步已开启")
+                            : (q?.autoSyncOff || "自动同步未开启")}
+                    </span>
                 </div>
                 <p className="leading-relaxed text-blue-900/75 dark:text-blue-100/75">
-                    {q?.keyNotice || "火山方舟的推理 API Key 没有账单查询权限，无法自动读取账户余额。请在下方录入控制台显示的余额，或开启服务端自动同步。"}
+                    {q?.keyNotice || "已配置火山引擎 IAM 只读密钥，打开本页时自动向费用中心查询真实余额（10 分钟节流），密钥仅保存在服务端。点「刷新」可立即重新查询。"}
                 </p>
                 <a
                     href={consoleUrl}

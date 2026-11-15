@@ -7,7 +7,7 @@
  * - AI：Edge Function ai-proxy（服务端持有各家 AI 厂商密钥）
  * - 特权操作：Postgres RPC（注册用户、管理员增删用户、重置数据）
  */
-import { SUPABASE_URL, SUPABASE_ANON_KEY, AI_EDGE, UPLOAD_EDGE } from "./config";
+import { SUPABASE_URL, SUPABASE_ANON_KEY, AI_EDGE, UPLOAD_EDGE, QUOTA_EDGE } from "./config";
 
 const SESSION_KEY = "sb-static-session";
 
@@ -305,6 +305,30 @@ export async function aiEdge(
     body: JSON.stringify({ action, payload }),
     signal,
   });
+}
+
+/**
+ * 触发火山账户余额同步。服务端持有 IAM 只读密钥，前端只带用户 JWT。
+ * force=true 跳过 10 分钟节流；调用方应静默处理失败（快照表仍可展示上一次结果）。
+ */
+export async function quotaSyncEdge(force = false): Promise<Response> {
+  const token = await accessToken();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12_000);
+  try {
+    return await fetch(QUOTA_EDGE, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${token || SUPABASE_ANON_KEY}`,
+      },
+      body: JSON.stringify({ force }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** OpenClaw 批量导入 */
