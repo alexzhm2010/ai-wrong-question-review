@@ -1,4 +1,4 @@
-:HL["/ai-wrong-question-review/_next/static/chunks/a0908e28c7e09aaf.css","style"]
+:HL["/ai-wrong-question-review/_next/static/chunks/675b6335c734cae6.css","style"]
 :HC["/",""]
 :HL["/ai-wrong-question-review/_next/static/chunks/6f04dbb31b3b2afc.css","style"]
-0:{"buildId":"AGyMHlCKBBLS9unDBAiX8","tree":{"name":"","paramType":null,"paramKey":"","hasRuntimePrefetch":false,"slots":{"children":{"name":"notebook","paramType":null,"paramKey":"notebook","hasRuntimePrefetch":false,"slots":{"children":{"name":"add","paramType":null,"paramKey":"add","hasRuntimePrefetch":false,"slots":{"children":{"name":"__PAGE__","paramType":null,"paramKey":"__PAGE__","hasRuntimePrefetch":false,"slots":null,"isRootLayout":false}},"isRootLayout":false}},"isRootLayout":false}},"isRootLayout":true},"staleTime":300}
+0:{"buildId":"3J0jPn-wVfmODONYkaLDJ","tree":{"name":"","paramType":null,"paramKey":"","hasRuntimePrefetch":false,"slots":{"children":{"name":"notebook","paramType":null,"paramKey":"notebook","hasRuntimePrefetch":false,"slots":{"children":{"name":"add","paramType":null,"paramKey":"add","hasRuntimePrefetch":false,"slots":{"children":{"name":"__PAGE__","paramType":null,"paramKey":"__PAGE__","hasRuntimePrefetch":false,"slots":null,"isRootLayout":false}},"isRootLayout":false}},"isRootLayout":false}},"isRootLayout":true},"staleTime":300}
