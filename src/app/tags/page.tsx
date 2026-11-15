@@ -285,50 +285,57 @@ export default function TagsPage() {
     // 渲染标准标签库
     const renderStandardTags = () => {
         return (
-            <>
-                {SUBJECTS.map(({ key, name }) => {
-                    const subjectName = (t.tags?.subjects as any)?.[key] || name;
-                    const isExpanded = expandedNodes[`subject-${key}`];
-                    const rawTags = tagsBySubject[key];
-                    const tags = Array.isArray(rawTags) ? rawTags : (rawTags === null ? null : []);
+            <Card className="py-0 gap-0 overflow-hidden">
+                <div className="divide-y divide-border/60">
+                    {SUBJECTS.map(({ key, name }) => {
+                        const subjectName = (t.tags?.subjects as any)?.[key] || name;
+                        const isExpanded = expandedNodes[`subject-${key}`];
+                        const rawTags = tagsBySubject[key];
+                        const tags = Array.isArray(rawTags) ? rawTags : (rawTags === null ? null : []);
 
-                    return (
-                        <Card key={key} className="mb-4">
-                            <CardHeader
-                                className="cursor-pointer hover:bg-muted/50 transition-colors flex flex-row items-center justify-between py-4"
-                                onClick={() => {
-                                    toggleNode(`subject-${key}`);
-                                    if (tags === null) fetchTags(key);
-                                }}
-                            >
-                                <CardTitle className="text-lg flex items-center gap-2">
-                                    {isExpanded ? <ChevronDown className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
-                                    {subjectName}
-                                </CardTitle>
-                                <span className="text-sm text-muted-foreground">
-                                    {isExpanded ? (t.common?.collapse || "Collapse") : (t.common?.expand || "Expand")}
-                                </span>
-                            </CardHeader>
-                            {isExpanded && (
-                                <CardContent className="space-y-4 pt-0">
-                                    {tags === null ? (
-                                        <div className="text-center py-4 text-muted-foreground">
-                                            <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2" />
-                                            Loading...
-                                        </div>
-                                    ) : tags.filter(t => t.isSystem).length === 0 ? (
-                                        <div className="text-center py-4 text-muted-foreground">
-                                            {t.tags?.stats?.empty || "暂无系统标签"}
-                                        </div>
-                                    ) : (
-                                        tags.filter(t => t.isSystem).map(node => renderTreeNode(node))
-                                    )}
-                                </CardContent>
-                            )}
-                        </Card>
-                    );
-                })}
-            </>
+                        return (
+                            <div key={key}>
+                                <button
+                                    type="button"
+                                    className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/50"
+                                    onClick={() => {
+                                        toggleNode(`subject-${key}`);
+                                        if (tags === null) fetchTags(key);
+                                    }}
+                                >
+                                    <span className="flex items-center gap-2">
+                                        {isExpanded ? (
+                                            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                                        ) : (
+                                            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                                        )}
+                                        <span className="text-[15px] font-medium">{subjectName}</span>
+                                    </span>
+                                    <span className="text-xs text-muted-foreground">
+                                        {isExpanded ? (t.common?.collapse || "收起") : (t.common?.expand || "展开")}
+                                    </span>
+                                </button>
+                                {isExpanded && (
+                                    <div className="space-y-2 px-4 pb-3 pl-10">
+                                        {tags === null ? (
+                                            <div className="py-2 text-sm text-muted-foreground">
+                                                <Loader2 className="mr-1 inline h-4 w-4 animate-spin" />
+                                                Loading...
+                                            </div>
+                                        ) : tags.filter(t => t.isSystem).length === 0 ? (
+                                            <div className="py-2 text-sm text-muted-foreground">
+                                                {t.tags?.stats?.empty || "暂无系统标签"}
+                                            </div>
+                                        ) : (
+                                            tags.filter(t => t.isSystem).map(node => renderTreeNode(node))
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            </Card>
         );
     };
 
