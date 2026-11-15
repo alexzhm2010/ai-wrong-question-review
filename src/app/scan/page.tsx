@@ -496,8 +496,8 @@ function ScanContent() {
     };
 
     return (
-        <div className="min-h-screen bg-slate-50 pb-28">
-            <div className="sticky top-0 z-20 bg-background/95 backdrop-blur border-b px-3 py-2 flex items-center gap-3">
+        <div className="min-h-screen pb-28">
+            <div className="sticky top-0 z-20 bg-card/90 backdrop-blur-xl border-b px-3 py-2 flex items-center gap-3">
                 <BackButton fallbackUrl="/notebooks" />
                 <div className="flex-1">
                     <div className="font-bold leading-tight">拍照批改</div>
@@ -533,10 +533,10 @@ function ScanContent() {
                 />
 
                 {pages.length === 0 ? (
-                    <div className="w-full rounded-xl border-2 border-dashed border-slate-300 bg-white py-10 px-4 flex flex-col items-center gap-3">
+                    <div className="w-full rounded-xl border-2 border-dashed border-border bg-card py-10 px-4 flex flex-col items-center gap-3">
                         <span className="text-3xl">📷</span>
                         <span className="text-sm font-semibold text-slate-700">拍整页试卷，自动判分</span>
-                        <span className="text-xs text-slate-400 text-center leading-relaxed">
+                        <span className="text-xs text-muted-foreground text-center leading-relaxed">
                             拍正、光照均匀，编号和作答框都要看清。
                             整页会被切成几段并发识别，比一次读全页快一倍。
                         </span>
@@ -549,7 +549,7 @@ function ScanContent() {
                             </button>
                             <button
                                 onClick={() => fileRef.current?.click()}
-                                className="flex-1 rounded-lg border bg-white py-2.5 text-sm"
+                                className="flex-1 rounded-lg border bg-card py-2.5 text-sm"
                             >
                                 相册（可多页）
                             </button>
@@ -559,7 +559,7 @@ function ScanContent() {
                     <>
                         <div className="grid grid-cols-2 gap-2">
                             {pages.map((p) => (
-                                <div key={p.id} className="relative rounded-xl overflow-hidden border bg-white">
+                                <div key={p.id} className="relative rounded-xl overflow-hidden border bg-card">
                                     <img src={p.dataUrl} alt="试卷" className="w-full h-40 object-cover object-top" />
                                     <button
                                         onClick={() => removePage(p.id)}
@@ -574,7 +574,7 @@ function ScanContent() {
                                 <button
                                     onClick={() => fileRef.current?.click()}
                                     disabled={preparing}
-                                    className="rounded-xl border-2 border-dashed border-slate-300 bg-white h-40 flex flex-col items-center justify-center gap-1 text-slate-500 disabled:opacity-50"
+                                    className="rounded-xl border-2 border-dashed border-border bg-card h-40 flex flex-col items-center justify-center gap-1 text-muted-foreground disabled:opacity-50"
                                 >
                                     <span className="text-xl">＋</span>
                                     <span className="text-xs">再加一页</span>
@@ -586,7 +586,7 @@ function ScanContent() {
                             <button
                                 onClick={() => camRef.current?.click()}
                                 disabled={preparing}
-                                className="flex-1 rounded-lg border bg-white py-2.5 text-sm disabled:opacity-50"
+                                className="flex-1 rounded-lg border bg-card py-2.5 text-sm disabled:opacity-50"
                             >
                                 重拍
                             </button>
@@ -617,7 +617,7 @@ function ScanContent() {
                                         }`}
                                     />
                                 ))}
-                                <span className="text-[11px] text-slate-500 ml-1">
+                                <span className="text-[11px] text-muted-foreground ml-1">
                                     {okStrips}/{strips.length} 段
                                     {errStrips > 0 ? ` · ${errStrips} 段失败` : ""}
                                     {elapsed ? ` · 用时 ${(elapsed / 1000).toFixed(1)} 秒` : ""}
@@ -635,7 +635,7 @@ function ScanContent() {
                 )}
 
                 {!running && rows.length > 0 && (
-                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                    <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs text-foreground/80">
                         识别到 {rows.length} 道题，{highConf} 道高置信
                         {reviewedCount > 0 ? ` · 复核过 ${reviewedCount} 道` : ""}
                         {conflictCount > 0 ? ` · ${conflictCount} 道两次判定不一致` : ""}
@@ -651,7 +651,7 @@ function ScanContent() {
                         </span>
                         <button
                             onClick={() => setOnlyTodo((v) => !v)}
-                            className="shrink-0 rounded border border-amber-300 bg-white px-2 py-1 font-semibold"
+                            className="shrink-0 rounded border border-amber-300 bg-card px-2 py-1 font-semibold"
                         >
                             {onlyTodo ? "看全部" : "只看这些"}
                         </button>
@@ -659,13 +659,13 @@ function ScanContent() {
                 )}
 
                 {!running && rows.length > 0 && missing.length > 0 && (
-                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 flex items-center gap-2">
+                    <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs text-foreground/80 flex items-center gap-2">
                         <span className="flex-1 leading-relaxed">
                             还有 {missing.length} 道没识别到：多半是作答框空白，也可能这页没拍到
                         </span>
                         <button
                             onClick={markMissingAsSkip}
-                            className="shrink-0 rounded border border-slate-300 bg-white px-2 py-1 font-semibold"
+                            className="shrink-0 rounded border border-border bg-card px-2 py-1 font-semibold"
                         >
                             标为没做
                         </button>
@@ -680,12 +680,12 @@ function ScanContent() {
                         {sortedRows.map((r, index) => (
                             <div
                                 key={`${r.code}-${index}`}
-                                className={`rounded-lg border bg-white p-2.5 ${
+                                className={`rounded-lg border bg-card p-2.5 ${
                                     r.needsReview ? "border-amber-300" : ""
                                 }`}
                             >
                                 <div className="flex items-center gap-2 flex-wrap">
-                                    <span className="font-mono text-[10px] text-slate-400">#{r.code}</span>
+                                    <span className="font-mono text-[10px] text-muted-foreground">#{r.code}</span>
                                     <span className="text-xs font-semibold">{r.label}</span>
                                     {!r.matched && (
                                         <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">
@@ -693,7 +693,7 @@ function ScanContent() {
                                         </span>
                                     )}
                                     {r.localChecked && (
-                                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">
+                                        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                                             选择题核对
                                         </span>
                                     )}
@@ -713,7 +713,7 @@ function ScanContent() {
                                         </span>
                                     )}
                                     {r.reviewedBlank && (
-                                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">
+                                        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                                             复核确认空白
                                         </span>
                                     )}
@@ -722,7 +722,7 @@ function ScanContent() {
                                             待确认
                                         </span>
                                     )}
-                                    <span className={`ml-auto text-[10px] ${r.confidence >= REVIEW_THRESHOLD ? "text-slate-400" : "text-amber-600"}`}>
+                                    <span className={`ml-auto text-[10px] ${r.confidence >= REVIEW_THRESHOLD ? "text-muted-foreground" : "text-amber-600"}`}>
                                         置信 {Math.round(r.confidence * 100)}%
                                         {r.sources.length > 1 ? ` · ${r.sources.length} 处看到` : ""}
                                     </span>
@@ -735,10 +735,10 @@ function ScanContent() {
                                     </p>
                                 )}
                                 {r.studentAnswer && (
-                                    <p className="mt-1 text-xs text-slate-600 line-clamp-2">学生写：{r.studentAnswer}</p>
+                                    <p className="mt-1 text-xs text-foreground/80 line-clamp-2">学生写：{r.studentAnswer}</p>
                                 )}
                                 {standardOf(r.code) && (
-                                    <p className="mt-0.5 text-[11px] text-slate-400 line-clamp-1">标准：{standardOf(r.code)}</p>
+                                    <p className="mt-0.5 text-[11px] text-muted-foreground line-clamp-1">标准：{standardOf(r.code)}</p>
                                 )}
                                 <div className="mt-1.5 flex gap-1.5">
                                     {(["correct", "wrong", "skip"] as Verdict[]).map((v) => (
@@ -752,7 +752,7 @@ function ScanContent() {
                                                         : v === "wrong"
                                                             ? "bg-red-600 border-red-600 text-white"
                                                             : "bg-slate-700 border-slate-700 text-white"
-                                                    : "bg-white text-slate-600"
+                                                    : "bg-card text-foreground/80"
                                             }`}
                                         >
                                             {VERDICT_TEXT[v]}
@@ -766,9 +766,9 @@ function ScanContent() {
             </div>
 
             {rows.length > 0 && (
-                <div className="fixed bottom-0 left-0 right-0 border-t bg-background px-3 py-2.5 pb-[calc(10px+env(safe-area-inset-bottom))]">
+                <div className="app-bottom-bar fixed bottom-0 left-0 right-0 border-t bg-background px-3 py-2.5 pb-[calc(10px+env(safe-area-inset-bottom))]">
                     <div className="max-w-3xl mx-auto flex gap-2">
-                        <div className="flex-1 text-xs text-slate-500 self-center">
+                        <div className="flex-1 text-xs text-muted-foreground self-center">
                             可用 {rows.filter((r) => r.id).length} / {rows.length} 条
                             {todo.length > 0 ? ` · ${todo.length} 道待确认` : ""}
                         </div>

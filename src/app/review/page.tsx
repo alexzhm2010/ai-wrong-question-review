@@ -137,8 +137,8 @@ export default function ReviewPage() {
     );
 
     return (
-        <div className="min-h-screen bg-slate-50/60 pb-28">
-            <div className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b">
+        <div className="min-h-screen pb-28">
+            <div className="sticky top-0 z-20 bg-card/90 backdrop-blur-xl border-b">
                 <div className="max-w-3xl mx-auto px-4 py-3 flex items-center gap-3">
                     <BackButton fallbackUrl="/" />
                     <div className="flex-1 min-w-0">
@@ -149,7 +149,7 @@ export default function ReviewPage() {
                     </div>
                     <button
                         onClick={() => setSeed((s) => s + 1)}
-                        className="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-600"
+                        className="shrink-0 rounded-md border border-border bg-card px-2.5 py-1.5 text-xs text-foreground/80"
                     >
                         换一批
                     </button>
@@ -171,7 +171,7 @@ export default function ReviewPage() {
                 )}
 
                 {!hasAttempts && picks.length > 0 && (
-                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] leading-relaxed text-slate-600">
+                    <div className="rounded-lg border border-border bg-card px-3 py-2 text-[11px] leading-relaxed text-foreground/80">
                         还没有作答记录，现在按「入库时间」挑的是新题。做过几轮、在批改页标过对错之后，
                         这里会优先挑你真正没掌握的那几道。
                     </div>
@@ -186,20 +186,20 @@ export default function ReviewPage() {
                             className={`rounded-full border px-3 py-1 transition ${
                                 size === n
                                     ? "bg-slate-900 border-slate-900 text-white font-semibold"
-                                    : "border-slate-200 bg-white text-slate-600"
+                                    : "border-border bg-card text-foreground/80"
                             }`}
                         >
                             {n} 道
                         </button>
                     ))}
-                    <Link href="/mastery" className="ml-auto text-[11px] text-slate-500 underline">
+                    <Link href="/mastery" className="ml-auto text-[11px] text-muted-foreground underline">
                         看掌握度
                     </Link>
                 </div>
 
                 {picks.length === 0 ? (
-                    <div className="rounded-xl border bg-white px-4 py-12 text-center">
-                        <p className="text-sm text-slate-600">题库里还没有可复习的题</p>
+                    <div className="rounded-xl border bg-card px-4 py-12 text-center">
+                        <p className="text-sm text-foreground/80">题库里还没有可复习的题</p>
                         <Link href="/notebook/add" className="mt-3 inline-block text-xs text-blue-600 underline">
                             去录入第一道错题
                         </Link>
@@ -213,9 +213,9 @@ export default function ReviewPage() {
                                 <Link
                                     key={item.id}
                                     href={`/item/${item.id}`}
-                                    className="flex gap-2.5 rounded-xl border bg-white p-2.5 hover:border-slate-300"
+                                    className="flex gap-2.5 rounded-xl border bg-card p-2.5 hover:border-border"
                                 >
-                                    <div className="w-20 h-24 shrink-0 rounded-lg bg-slate-100 overflow-hidden relative">
+                                    <div className="w-20 h-24 shrink-0 rounded-lg bg-muted overflow-hidden relative">
                                         {item.originalImageUrl ? (
                                             <AutoCropImage
                                                 src={imageSrc(item.originalImageUrl)}
@@ -223,10 +223,10 @@ export default function ReviewPage() {
                                                 enabled
                                                 alt=""
                                                 loading="lazy"
-                                                className="w-full h-full object-contain bg-white"
+                                                className="w-full h-full object-contain bg-card"
                                             />
                                         ) : (
-                                            <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-400 px-1 text-center">
+                                            <div className="w-full h-full flex items-center justify-center text-[10px] text-muted-foreground px-1 text-center">
                                                 无图
                                             </div>
                                         )}
@@ -243,7 +243,7 @@ export default function ReviewPage() {
                                                 {p.reason}
                                             </span>
                                         </div>
-                                        <div className="mt-1 flex items-center gap-2 text-[10px] text-slate-400">
+                                        <div className="mt-1 flex items-center gap-2 text-[10px] text-muted-foreground">
                                             <span className="text-red-500">错 {item.wrongCount || 0}</span>
                                             <span className="text-green-600">对 {item.correctCount || 0}</span>
                                             {names[0] && <span className="truncate">· {names[0]}</span>}
@@ -258,7 +258,7 @@ export default function ReviewPage() {
 
             {/* 底部主操作：固定在拇指能碰到的地方 */}
             {picks.length > 0 && (
-                <div className="fixed inset-x-0 bottom-0 z-30 border-t bg-white/95 backdrop-blur px-4 py-3">
+                <div className="app-bottom-bar fixed inset-x-0 bottom-0 z-30 border-t bg-card/90 backdrop-blur-xl px-4 py-3">
                     <div className="max-w-3xl mx-auto flex items-center gap-3">
                         <div className="min-w-0 text-[11px] text-muted-foreground leading-tight">
                             <div className="font-medium text-slate-700">{picks.length} 道 · 约 {minutes} 分钟</div>

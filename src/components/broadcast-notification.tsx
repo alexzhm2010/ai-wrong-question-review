@@ -51,12 +51,13 @@ export function BroadcastNotification() {
                     className={cn(
                         "rounded-full border transition-colors",
                         hasUnread
-                            ? "border-red-500/70 text-red-500 hover:border-red-500 hover:text-red-600 dark:border-red-400/70 dark:text-red-400"
+                            /* 素雅主题：未读态用雾蓝描边 + 主色，不再用正红跳色 */
+                            ? "border-primary/70 text-primary hover:border-primary hover:text-primary dark:border-primary/70 dark:text-primary"
                             : "border-transparent text-muted-foreground hover:text-primary"
                     )}
                     title={triggerLabel}
                 >
-                    {/* lucide 图标是 currentColor 描边：只改文字色即只让线条变红，不填充、不加红点 */}
+                    {/* lucide 图标是 currentColor 描边：只改文字色即只让线条变色，不填充、不加红点 */}
                     <Bell className="h-5 w-5" />
                     <span className="sr-only">{triggerLabel}</span>
                 </Button>

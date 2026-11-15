@@ -777,7 +777,7 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
 
             {/* 多选模式底部操作栏：选择集合跨页累积，顶部是本页快捷操作 */}
             {isSelectMode && (
-                <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 shadow-lg backdrop-blur px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+                <div className="app-bottom-bar fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 shadow-lg backdrop-blur px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
                     <div className="max-w-6xl mx-auto space-y-2">
                         <div className="flex items-center justify-between gap-3 text-xs">
                             <span className="text-muted-foreground">

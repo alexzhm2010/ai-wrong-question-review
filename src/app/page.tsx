@@ -5,16 +5,12 @@ import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { UploadZone } from "@/components/upload-zone";
 import { ParsedQuestion } from "@/lib/ai";
-import { UserWelcome } from "@/components/user-welcome";
 import { apiClient } from "@/lib/api-client";
 import { AnalyzeResponse, Notebook, AppConfig } from "@/types/api";
-import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { processImageFile } from "@/lib/image-utils";
-import { Upload, BookOpen, Tags, LogOut, BarChart3, Images, ChevronRight, Sparkles } from "lucide-react";
+import { Upload, Images, ChevronRight, Sparkles, User, BookOpen, Layers, Activity } from "lucide-react";
 import { BroadcastNotification } from "@/components/broadcast-notification";
-import { VersionBadge } from "@/components/version-badge";
-import { signOut } from "@/lib/supabase/session";
 
 import type { ProgressStatus } from "@/components/ui/progress-feedback";
 import { TopProgressBar } from "@/components/top-progress-bar";
@@ -30,7 +26,6 @@ import { BatchJobList } from "@/components/batch-job-list";
 import { streamAnalyze } from "@/lib/stream-analyze";
 import { putImage } from "@/lib/storage";
 import { inferSubjectFromName } from "@/lib/knowledge-tags";
-import { SettingsDialog } from "@/components/settings-dialog";
 
 import { StreamingReview } from "@/components/streaming-review";
 import dynamic from "next/dynamic";
@@ -550,7 +545,7 @@ function HomeContent() {
     };
 
     return (
-        <main className={`flex flex-col bg-background ${step === 'upload' ? 'h-[100dvh] overflow-hidden' : 'min-h-[100dvh]'}`}>
+        <main className="min-h-[100dvh]">
             <TopProgressBar
                 status={analysisStep}
                 progress={progress}
@@ -559,107 +554,31 @@ function HomeContent() {
                 cancelLabel={t.common?.cancel || '取消'}
             />
 
-            <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-3 p-3 pb-4 sm:gap-6 sm:p-4 sm:pb-8">
-                {/* Header Section */}
-                <div className="flex shrink-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-                    <UserWelcome />
-
-                    <div className="flex w-full items-center justify-between gap-1 rounded-lg border bg-card p-2 shadow-sm sm:w-auto sm:shrink-0 sm:justify-end sm:gap-2">
+            <div className="mx-auto w-full max-w-7xl p-3 sm:p-5 lg:p-6">
+                {/* 页面标题行：桌面/手机共用；「我的」入口只在手机出现（桌面走侧栏） */}
+                <div className="mb-3 flex items-start justify-between gap-2 sm:mb-5">
+                    <div className="min-w-0">
+                        <h1 className="text-lg font-bold tracking-tight sm:text-xl">导入错题</h1>
+                        <p className="mt-0.5 text-xs text-muted-foreground">添加新错题，或查看正在进行的批次</p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
                         <BroadcastNotification />
-                        <SettingsDialog />
-                        <VersionBadge />
-                        <Button
-                            variant="ghost"
-                            size="icon"
-                            className="rounded-full text-muted-foreground hover:text-destructive"
-                            onClick={() => signOut({ callbackUrl: '/login' })}
-                            title={t.app?.logout || 'Logout'}
+                        <Link
+                            href="/me"
+                            aria-label="我的"
+                            className="flex h-9 w-9 items-center justify-center rounded-xl border bg-card text-muted-foreground md:hidden"
                         >
-                            <LogOut className="h-5 w-5" />
-                        </Button>
+                            <User className="h-4 w-4" />
+                        </Link>
                     </div>
                 </div>
 
                 <BatchBanner />
 
-                {/* 每日入口：打开就想先做今天这几道，所以放在最上面 */}
-                {!initialNotebookId && (
-                    <Link
-                        href="/review"
-                        className="shrink-0 rounded-xl border bg-white px-3 py-2.5 flex items-center gap-3 hover:border-primary/40 transition-colors"
-                    >
-                        <span className="w-9 h-9 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
-                            <Sparkles className="h-4 w-4" />
-                        </span>
-                        <span className="min-w-0 flex-1">
-                            <span className="block text-sm font-semibold leading-tight">今日复习</span>
-                            <span className="block text-[11px] text-muted-foreground leading-tight">
-                                按「错得多、放得久」挑好题，一键生成卷子打印
-                            </span>
-                        </span>
-                        <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />
-                    </Link>
-                )}
-
-                {/* Action Center */}
-                <div className={initialNotebookId ? "flex shrink-0 justify-center" : "grid shrink-0 grid-cols-2 gap-2 sm:gap-4 md:grid-cols-4"}>
-                    <Button
-                        size="lg"
-                        className={`h-auto px-3 py-2.5 text-sm shadow-sm transition-all hover:shadow-md sm:px-8 sm:py-4 sm:text-base ${initialNotebookId ? "w-full max-w-md" : ""}`}
-                        variant={step === "upload" ? "default" : "secondary"}
-                        onClick={() => { setStep("upload"); setInputMode("image"); }}
-                    >
-                        <div className="flex items-center gap-2">
-                            <Upload className="h-5 w-5" />
-                            <span>{t.app.uploadNew}</span>
-                        </div>
-                    </Button>
-
-                    {!initialNotebookId && (
-                        <>
-                            <Link href="/notebooks" className="w-full">
-                                <Button
-                                    variant="outline"
-                                    size="lg"
-                                    className="w-full h-auto px-3 py-2.5 text-sm shadow-sm transition-all hover:shadow-md border hover:border-primary/50 hover:bg-accent/50 sm:px-8 sm:py-4 sm:text-base"
-                                >
-                                    <div className="flex items-center gap-2">
-                                        <BookOpen className="h-5 w-5" />
-                                        <span>{t.app.viewNotebook}</span>
-                                    </div>
-                                </Button>
-                            </Link>
-
-                            <Link href="/tags" className="w-full">
-                                <Button
-                                    variant="outline"
-                                    size="lg"
-                                    className="w-full h-auto px-3 py-2.5 text-sm shadow-sm transition-all hover:shadow-md border hover:border-primary/50 hover:bg-accent/50 sm:px-8 sm:py-4 sm:text-base"
-                                >
-                                    <div className="flex items-center gap-2">
-                                        <Tags className="h-5 w-5" />
-                                        <span>{t.app?.tags || 'Tags'}</span>
-                                    </div>
-                                </Button>
-                            </Link>
-
-                            <Link href="/stats" className="w-full">
-                                <Button
-                                    variant="outline"
-                                    size="lg"
-                                    className="w-full h-auto px-3 py-2.5 text-sm shadow-sm transition-all hover:shadow-md border hover:border-primary/50 hover:bg-accent/50 sm:px-8 sm:py-4 sm:text-base"
-                                >
-                                    <div className="flex items-center gap-2">
-                                        <BarChart3 className="h-5 w-5" />
-                                        <span>{t.app?.stats || 'Stats'}</span>
-                                    </div>
-                                </Button>
-                            </Link>
-                        </>
-                    )}
-                </div>
-
-                {step === "upload" && (
+                {/* 方案 C：桌面双栏（主操作 + 概览），手机单栏只留导入工作台 */}
+                <div className="mt-3 grid gap-3 sm:mt-5 sm:gap-5 lg:grid-cols-[minmax(0,1.55fr)_minmax(280px,1fr)]">
+                    <div className="min-w-0">
+                        {step === "upload" && (
                     <div className="flex min-h-0 flex-1 flex-col gap-2 sm:gap-4">
                         {/* 两个 tab：拍照上传（唯一入口，多选自动转批量）/ 批量进展跟踪 */}
                         <div className="flex shrink-0 gap-1 border-b sm:gap-2">
@@ -714,7 +633,7 @@ function HomeContent() {
                         </div>
 
                         {/* 拍照上传：保持挂载，切 tab 不丢已选图片 */}
-                        <div className={`${inputMode === "image" ? "flex" : "hidden"} min-h-0 flex-1 flex-col ${batchFiles.length ? "pb-20" : ""}`}>
+                        <div className={`${inputMode === "image" ? "flex" : "hidden"} h-[360px] flex-col sm:h-[460px] ${batchFiles.length ? "pb-20" : ""}`}>
                             <UploadZone
                                 onImageSelect={onImageSelect}
                                 onImagesSelect={(files) => {
@@ -727,7 +646,7 @@ function HomeContent() {
                         </div>
 
                         {/* 批量进展跟踪：多任务视图 */}
-                        <div className={inputMode === "batch" ? "min-h-0 flex-1 overflow-y-auto" : "hidden"}>
+                        <div className={inputMode === "batch" ? "max-h-[460px] overflow-y-auto" : "hidden"}>
                             <BatchJobList
                                 jobs={activeBatches.map((j) => ({
                                     id: j.id,
@@ -778,7 +697,64 @@ function HomeContent() {
                         />
                     ) : null
                 )}
+                    </div>
 
+                    {/* 右侧概览：仅桌面 ≥1024px 显示；手机由「复习 / 我的」Tab 承接 */}
+                    <aside className="hidden min-w-0 flex-col gap-4 lg:flex">
+                        <Link href="/batch" className="app-glass block p-4 transition-shadow hover:shadow-lg">
+                            <div className="flex items-center gap-2">
+                                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-secondary text-secondary-foreground">
+                                    <Layers className="h-4 w-4" />
+                                </span>
+                                <span className="flex-1 text-[13px] font-semibold">进行中批次</span>
+                                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                            </div>
+                            <p className="mt-2 text-xs text-muted-foreground">
+                                {activeBatches.length > 0
+                                    ? `${activeBatches.length} 个批次进行中 · 点击查看进度`
+                                    : "暂无进行中的批次，导入后会自动出现在这里"}
+                            </p>
+                        </Link>
+
+                        <div className="app-glass p-4">
+                            <p className="text-[13px] font-semibold">今日概览</p>
+                            <div className="mt-3 flex gap-2">
+                                <div className="flex-1 rounded-xl bg-secondary/60 py-2.5 text-center">
+                                    <p className="text-lg font-bold tabular-nums">{notebooks.length}</p>
+                                    <p className="text-[10px] text-muted-foreground">错题本</p>
+                                </div>
+                                <Link
+                                    href="/mastery"
+                                    className="flex flex-1 flex-col items-center justify-center gap-1 rounded-xl bg-secondary/60 py-2.5 text-[10px] text-muted-foreground hover:bg-accent"
+                                >
+                                    <Activity className="h-5 w-5 text-primary" />
+                                    掌握度
+                                </Link>
+                                <Link
+                                    href="/notebooks"
+                                    className="flex flex-1 flex-col items-center justify-center gap-1 rounded-xl bg-secondary/60 py-2.5 text-[10px] text-muted-foreground hover:bg-accent"
+                                >
+                                    <BookOpen className="h-5 w-5 text-primary" />
+                                    查看全部
+                                </Link>
+                            </div>
+                        </div>
+
+                        {/* 「今日复习」从首页顶部移出：桌面放概览，手机走底部「复习」Tab */}
+                        <Link href="/review" className="app-glass flex items-center gap-3 p-4 transition-shadow hover:shadow-lg">
+                            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent text-accent-foreground">
+                                <Sparkles className="h-5 w-5" />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                                <span className="block text-[13px] font-semibold">今日复习</span>
+                                <span className="block text-[11px] leading-snug text-muted-foreground">
+                                    按「错得多、放得久」挑好题，一键生成卷子打印
+                                </span>
+                            </span>
+                            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        </Link>
+                    </aside>
+                </div>
             </div>
 
             {/* 多选后的轻确认条：确认才建批次，避免手滑直接花钱 */}

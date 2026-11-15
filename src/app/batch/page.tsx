@@ -733,7 +733,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
 
             {/* 底部固定操作栏：已归档/已取消时不再需要提交动作 */}
             {job.status !== "done" && job.status !== "canceled" && job.status !== "draft" && (
-            <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-background/95 backdrop-blur">
+            <div className="app-bottom-bar fixed inset-x-0 bottom-0 z-20 border-t bg-card/90 backdrop-blur-xl">
                 <div className="mx-auto w-full max-w-4xl px-3 pb-3 pt-2 sm:px-4 sm:pb-4">
                     <p className="mb-1.5 truncate text-[11px] text-muted-foreground">
                         {saveProgress

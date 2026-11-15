@@ -3,9 +3,11 @@ import { BASE_PATH, SUPABASE_URL, SUPABASE_ANON_KEY } from "@/lib/supabase/confi
 import "./globals.css";
 import { Providers } from "@/components/providers";
 import { PwaInstaller } from "@/components/pwa-installer";
+import { AppShell } from "@/components/app-shell";
 
 export const viewport: Viewport = {
-  themeColor: '#f97316',
+  // 与 C 淡蓝玻璃主题一致（PWA 状态栏 / 浏览器工具栏配色）
+  themeColor: '#4a7db5',
   width: 'device-width',
   initialScale: 1,
   // standalone / 全面屏下让内容延伸到刘海与状态栏区域，避免顶部出现白边
@@ -108,7 +110,7 @@ export default function RootLayout({
         suppressHydrationWarning={true}
       >
         <Providers>
-          {children}
+          <AppShell>{children}</AppShell>
           <PwaInstaller />
         </Providers>
       </body>

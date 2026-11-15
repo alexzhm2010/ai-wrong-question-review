@@ -335,7 +335,7 @@ function PracticeContent() {
                                     )}
                                 </div>
                                 {notes && (
-                                    <div className="mt-4 p-3 bg-white rounded-lg border">
+                                    <div className="mt-4 p-3 bg-card rounded-lg border">
                                         <p className="text-sm font-medium text-gray-600 mb-1">
                                             {t.practice.yourNotes || "你的笔记："}
                                         </p>

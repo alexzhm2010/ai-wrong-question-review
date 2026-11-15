@@ -131,8 +131,8 @@ export default function MasteryPage() {
     const activeTotal = summary.total - summary.archived;
 
     return (
-        <div className="min-h-screen bg-slate-50/60 pb-16">
-            <div className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b">
+        <div className="min-h-screen pb-16">
+            <div className="sticky top-0 z-20 bg-card/90 backdrop-blur-xl border-b">
                 <div className="max-w-4xl mx-auto px-4 py-3 flex items-center gap-3">
                     <BackButton fallbackUrl="/stats" />
                     <div className="flex-1 min-w-0">
@@ -172,7 +172,7 @@ export default function MasteryPage() {
                 )}
 
                 {/* 掌握率 + 四档 */}
-                <div className="rounded-xl border bg-white p-4">
+                <div className="rounded-xl border bg-card p-4">
                     <div className="flex items-end gap-3">
                         <div>
                             <div className="text-3xl font-bold leading-none tabular-nums">{ratePct}%</div>
@@ -189,7 +189,7 @@ export default function MasteryPage() {
                         </button>
                     </div>
 
-                    <div className="mt-3 flex h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
+                    <div className="mt-3 flex h-2.5 w-full overflow-hidden rounded-full bg-muted">
                         {BAND_ORDER.map((b) => {
                             const n = summary.bands[b];
                             const pct = activeTotal > 0 ? (n / activeTotal) * 100 : 0;
@@ -227,7 +227,7 @@ export default function MasteryPage() {
 
                 {/* 知识点掌握率：只列最薄弱的 8 个 */}
                 {tags.length > 0 && (
-                    <div className="rounded-xl border bg-white p-4">
+                    <div className="rounded-xl border bg-card p-4">
                         <div className="flex items-baseline gap-2 mb-3">
                             <h2 className="text-sm font-bold">最薄弱的知识点</h2>
                             <span className="text-[11px] text-muted-foreground">至少 2 道题才会统计</span>
@@ -245,7 +245,7 @@ export default function MasteryPage() {
                                             {t.mastered}/{t.total} · {Math.round(t.rate * 100)}%
                                         </span>
                                     </div>
-                                    <div className="h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
+                                    <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
                                         <div
                                             className="h-full rounded-full"
                                             style={{
@@ -269,7 +269,7 @@ export default function MasteryPage() {
                 )}
 
                 {/* 分档题目清单 */}
-                <div className="rounded-xl border bg-white overflow-hidden">
+                <div className="rounded-xl border bg-card overflow-hidden">
                     <div className="flex items-center gap-2 px-4 py-3 border-b">
                         <h2 className="text-sm font-bold">
                             {band ? BAND_META[band].label : "全部题目"}
@@ -278,7 +278,7 @@ export default function MasteryPage() {
                         {band === "weak" && list.length > 0 && (
                             <Link
                                 href="/review"
-                                className="ml-auto rounded border border-slate-200 px-2 py-1 text-[11px] text-slate-600"
+                                className="ml-auto rounded border border-border px-2 py-1 text-[11px] text-foreground/80"
                             >
                                 去今日卷
                             </Link>
@@ -303,12 +303,12 @@ export default function MasteryPage() {
                                 <Link
                                     key={item.id}
                                     href={`/item/${item.id}`}
-                                    className="flex items-start gap-3 px-4 py-2.5 hover:bg-slate-50"
+                                    className="flex items-start gap-3 px-4 py-2.5 hover:bg-secondary"
                                 >
-                                    <span className="w-6 shrink-0 text-[11px] text-slate-400 tabular-nums pt-0.5">{i + 1}</span>
+                                    <span className="w-6 shrink-0 text-[11px] text-muted-foreground tabular-nums pt-0.5">{i + 1}</span>
                                     <div className="min-w-0 flex-1">
                                         <p className="text-xs leading-relaxed line-clamp-2">{brief(item.questionText || item.ocrText) || "（无题干文字）"}</p>
-                                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-400">
+                                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground">
                                             <span className="text-red-500">错 {item.wrongCount || 0}</span>
                                             <span className="text-green-600">对 {item.correctCount || 0}</span>
                                             {Number(item.correctStreak || 0) > 0 && (
@@ -333,7 +333,7 @@ export default function MasteryPage() {
                     <button
                         onClick={unarchiveAll}
                         disabled={busy}
-                        className="w-full rounded-lg border border-slate-200 bg-white py-2 text-xs text-slate-500 disabled:opacity-40"
+                        className="w-full rounded-lg border border-border bg-card py-2 text-xs text-muted-foreground disabled:opacity-40"
                     >
                         取消归档全部 {summary.archived} 道
                     </button>

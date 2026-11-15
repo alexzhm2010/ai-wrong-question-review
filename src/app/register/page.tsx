@@ -83,7 +83,7 @@ export default function RegisterPage() {
     // 加载中状态
     if (allowRegistration === null) {
         return (
-            <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+            <div className="min-h-screen flex items-center justify-center p-4">
                 <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
             </div>
         );
@@ -92,7 +92,7 @@ export default function RegisterPage() {
     // 注册已禁用
     if (allowRegistration === false) {
         return (
-            <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+            <div className="min-h-screen flex items-center justify-center p-4">
                 <Card className="w-full max-w-md">
                     <CardHeader>
                         <CardTitle className="text-2xl text-center">
@@ -118,7 +118,7 @@ export default function RegisterPage() {
     }
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+        <div className="min-h-screen flex items-center justify-center p-4">
             <Card className="w-full max-w-md">
                 <CardHeader>
                     <CardTitle className="text-2xl text-center">

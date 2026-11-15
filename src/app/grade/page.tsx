@@ -72,7 +72,7 @@ function resolveIds(fromUrl: string | null): string[] {
 const OPTIONS: Array<{ key: AttemptResult; label: string; hint: string; cls: string; on: string }> = [
     { key: "correct", label: "做对了", hint: "连续答对 +1", cls: "border-green-300 text-green-700", on: "bg-green-600 border-green-600 text-white" },
     { key: "wrong", label: "做错了", hint: "连续答对归零", cls: "border-red-300 text-red-700", on: "bg-red-600 border-red-600 text-white" },
-    { key: "skip", label: "没做", hint: "不计对错", cls: "border-slate-300 text-slate-600", on: "bg-slate-700 border-slate-700 text-white" },
+    { key: "skip", label: "没做", hint: "不计对错", cls: "border-border text-foreground/80", on: "bg-slate-700 border-slate-700 text-white" },
 ];
 
 function GradeContent() {
@@ -202,7 +202,7 @@ function GradeContent() {
     if (error) {
         return (
             <div className="min-h-screen">
-                <div className="sticky top-0 z-10 bg-background/95 backdrop-blur border-b px-3 py-2 flex items-center gap-3">
+                <div className="sticky top-0 z-10 bg-card/90 backdrop-blur-xl border-b px-3 py-2 flex items-center gap-3">
                     <BackButton fallbackUrl="/notebooks" />
                     <span className="font-bold">批改</span>
                 </div>
@@ -223,13 +223,13 @@ function GradeContent() {
         const delta = prevRate === null ? null : rate - prevRate;
         return (
             <div className="min-h-screen">
-                <div className="sticky top-0 z-10 bg-background/95 backdrop-blur border-b px-3 py-2 flex items-center gap-3">
+                <div className="sticky top-0 z-10 bg-card/90 backdrop-blur-xl border-b px-3 py-2 flex items-center gap-3">
                     <BackButton fallbackUrl="/notebooks" />
                     <span className="font-bold">批改完成</span>
                 </div>
                 <div className="max-w-lg mx-auto px-5 py-6 space-y-5">
                     {/* 本次卷面得分率 */}
-                    <div className="rounded-2xl border bg-white px-5 py-5 text-center">
+                    <div className="rounded-2xl border bg-card px-5 py-5 text-center">
                         <div className="text-xs text-muted-foreground">本次卷面得分率</div>
                         <div className="mt-1 flex items-end justify-center gap-1">
                             <span className={`text-5xl font-bold leading-none ${
@@ -245,7 +245,7 @@ function GradeContent() {
                         </div>
                         {delta !== null && (
                             <div className={`mt-2 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${
-                                delta > 0 ? "bg-green-50 text-green-700" : delta < 0 ? "bg-red-50 text-red-700" : "bg-slate-100 text-slate-600"
+                                delta > 0 ? "bg-green-50 text-green-700" : delta < 0 ? "bg-red-50 text-red-700" : "bg-muted text-foreground/80"
                             }`}>
                                 {delta > 0 ? `↑ 比上次高 ${delta} 分` : delta < 0 ? `↓ 比上次低 ${-delta} 分` : "和上次持平"}
                                 <span className="font-normal opacity-70">（上次 {prevRate}%）</span>
@@ -262,14 +262,14 @@ function GradeContent() {
                             <div className="text-2xl font-bold text-red-700">{saved.wrong}</div>
                             <div className="text-xs text-red-700/80 mt-0.5">做错</div>
                         </div>
-                        <div className="rounded-lg border border-slate-200 bg-slate-50 py-3">
-                            <div className="text-2xl font-bold text-slate-600">{saved.skip}</div>
-                            <div className="text-xs text-slate-500 mt-0.5">没做</div>
+                        <div className="rounded-lg border border-border bg-secondary py-3">
+                            <div className="text-2xl font-bold text-foreground/80">{saved.skip}</div>
+                            <div className="text-xs text-muted-foreground mt-0.5">没做</div>
                         </div>
                     </div>
 
                     {weakPoints.length > 0 && (
-                        <div className="rounded-xl border bg-white px-4 py-3">
+                        <div className="rounded-xl border bg-card px-4 py-3">
                             <div className="text-xs text-muted-foreground">这次错在</div>
                             <div className="mt-2 flex flex-wrap gap-1.5">
                                 {weakPoints.map(([name, n]) => (
@@ -314,9 +314,9 @@ function GradeContent() {
     const unanswered = items.length - markedCount;
 
     return (
-        <div className="min-h-screen flex flex-col bg-slate-50">
+        <div className="min-h-screen flex flex-col">
             {/* 顶栏 */}
-            <div className="sticky top-0 z-20 bg-background/95 backdrop-blur border-b px-3 py-2 flex items-center gap-3 shrink-0">
+            <div className="sticky top-0 z-20 bg-card/90 backdrop-blur-xl border-b px-3 py-2 flex items-center gap-3 shrink-0">
                 <BackButton fallbackUrl="/notebooks" />
                 <div className="flex-1 min-w-0">
                     <div className="font-bold leading-tight">批改</div>
@@ -345,13 +345,13 @@ function GradeContent() {
             <div className="flex-1 overflow-auto px-2 py-2">
                 <div className="max-w-3xl mx-auto">
                     <div className="flex items-center gap-2 mb-1.5 px-1">
-                        <span className="font-mono text-[10px] tracking-wider text-slate-400">#{current.shortCode || "—"}</span>
-                        <span className="text-xs text-slate-500">
+                        <span className="font-mono text-[10px] tracking-wider text-muted-foreground">#{current.shortCode || "—"}</span>
+                        <span className="text-xs text-muted-foreground">
                             错 {current.wrongCount || 0} · 对 {current.correctCount || 0}
                         </span>
                         {curResult && (
                             <span className={`ml-auto text-[11px] font-semibold ${
-                                curResult === "correct" ? "text-green-600" : curResult === "wrong" ? "text-red-600" : "text-slate-500"
+                                curResult === "correct" ? "text-green-600" : curResult === "wrong" ? "text-red-600" : "text-muted-foreground"
                             }`}>
                                 已标：{curResult === "correct" ? "对" : curResult === "wrong" ? "错" : "没做"}
                             </span>
@@ -361,17 +361,17 @@ function GradeContent() {
                         <img
                             src={imageSrc(current.originalImageUrl)}
                             alt="题目"
-                            className="w-full h-auto rounded-lg border bg-white"
+                            className="w-full h-auto rounded-lg border bg-card"
                         />
                     ) : (
-                        <div className="rounded-lg border bg-white p-4 text-sm whitespace-pre-wrap">
+                        <div className="rounded-lg border bg-card p-4 text-sm whitespace-pre-wrap">
                             {current.questionText}
                         </div>
                     )}
 
                     <button
                         onClick={() => setShowAnswer((v) => !v)}
-                        className="mt-2 w-full rounded-lg border border-dashed border-slate-300 bg-white py-2 text-xs text-slate-600"
+                        className="mt-2 w-full rounded-lg border border-dashed border-border bg-card py-2 text-xs text-foreground/80"
                     >
                         {showAnswer ? "收起答案" : "看答案"}
                     </button>
@@ -392,7 +392,7 @@ function GradeContent() {
                                 key={o.key}
                                 onClick={() => mark(o.key)}
                                 className={`flex-1 rounded-xl border py-3 text-sm font-semibold transition ${
-                                    curResult === o.key ? o.on : `bg-white ${o.cls}`
+                                    curResult === o.key ? o.on : `bg-card ${o.cls}`
                                 }`}
                             >
                                 {o.label}
@@ -403,14 +403,14 @@ function GradeContent() {
                         <button
                             onClick={() => setCur((v) => Math.max(0, v - 1))}
                             disabled={cur === 0}
-                            className="flex-1 rounded-lg border py-2 text-xs text-slate-600 disabled:opacity-40"
+                            className="flex-1 rounded-lg border py-2 text-xs text-foreground/80 disabled:opacity-40"
                         >
                             ‹ 上一题
                         </button>
                         <button
                             onClick={() => setCur((v) => Math.min(items.length - 1, v + 1))}
                             disabled={cur === items.length - 1}
-                            className="flex-1 rounded-lg border py-2 text-xs text-slate-600 disabled:opacity-40"
+                            className="flex-1 rounded-lg border py-2 text-xs text-foreground/80 disabled:opacity-40"
                         >
                             下一题 ›
                         </button>

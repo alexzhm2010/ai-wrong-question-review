@@ -56,7 +56,7 @@ describe('公告铃铛已读状态持久化', () => {
     });
 });
 
-describe('铃铛视觉：去掉红点，只在有未读时用红色描边', () => {
+describe('铃铛视觉：去掉红点，未读用主题主色描边（C 淡蓝素雅主题）', () => {
     const source = readSource('src/components/broadcast-notification.tsx');
 
     it('不再有实心红点、呼吸动画与硬编码的未读初值', () => {
@@ -66,10 +66,12 @@ describe('铃铛视觉：去掉红点，只在有未读时用红色描边', () =
         expect(source).not.toContain('未读角标');
     });
 
-    it('未读时铃铛图标与按钮边框均为红色，且不填充', () => {
-        expect(source).toContain('text-red-500');
-        expect(source).toContain('border-red-500/70');
+    it('未读时铃铛图标与按钮边框均为主题主色，且不填充、不用正红跳色', () => {
+        expect(source).toContain('text-primary');
+        expect(source).toContain('border-primary/70');
         expect(source).toContain('border-transparent');
+        expect(source).not.toContain('text-red-500');
+        expect(source).not.toContain('border-red-500');
         // lucide 的 Bell 用 currentColor 描边，不要额外给它加 fill
         expect(source).toContain('<Bell className="h-5 w-5" />');
     });

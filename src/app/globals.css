@@ -43,73 +43,88 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
+/* ============================================================
+   主题：C 玻璃渐变 · 淡蓝（浅色）
+   低饱和雾蓝 + 半透明毛玻璃卡片 + 高光描边 + 20px 大圆角。
+   不含紫色。全站组件均通过下面这套语义变量取色。
+   ============================================================ */
 :root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --radius: 16px; /* rounded-xl = 20px，卡片用得到玻璃感的大圆角 */
+
+  --background: #f3f8fd;
+  --foreground: #27384a;
+
+  --card: rgba(255, 255, 255, 0.74);
+  --card-foreground: #27384a;
+  --popover: rgba(255, 255, 255, 0.94);
+  --popover-foreground: #27384a;
+
+  --primary: #4a7db5;
+  --primary-foreground: #ffffff;
+  --secondary: rgba(226, 240, 252, 0.72);
+  --secondary-foreground: #2f5f8d;
+  --muted: rgba(233, 242, 251, 0.72);
+  --muted-foreground: #61758b;
+  --accent: rgba(226, 240, 252, 0.72);
+  --accent-foreground: #35618f;
+  --destructive: #c2594e;
+
+  --border: rgba(148, 180, 210, 0.32);
+  --input: rgba(255, 255, 255, 0.9);
+  --ring: #7ba6d0;
+
+  --chart-1: #4a7db5;
+  --chart-2: #7ba6d0;
+  --chart-3: #9cc0df;
+  --chart-4: #8ba0b4;
+  --chart-5: #b6d2ec;
+
+  --sidebar: rgba(255, 255, 255, 0.55);
+  --sidebar-foreground: #27384a;
+  --sidebar-primary: #4a7db5;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: rgba(255, 255, 255, 0.88);
+  --sidebar-accent-foreground: #3f6d9e;
+  --sidebar-border: rgba(148, 180, 210, 0.30);
+  --sidebar-ring: #7ba6d0;
+
+  /* 手机端底部 Tab 高度，业务底部固定条据此抬高，避免被遮挡 */
+  --app-tabbar-h: 64px;
 }
 
+/* 深色变量保留（本期默认浅色、不提供切换），便于后续启用 */
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --background: #111c27;
+  --foreground: #eaf2f9;
+  --card: rgba(30, 48, 66, 0.64);
+  --card-foreground: #eaf2f9;
+  --popover: rgba(30, 48, 66, 0.94);
+  --popover-foreground: #eaf2f9;
+  --primary: #8ab4de;
+  --primary-foreground: #101c28;
+  --secondary: rgba(90, 150, 205, 0.16);
+  --secondary-foreground: #d3e6f7;
+  --muted: rgba(90, 150, 205, 0.14);
+  --muted-foreground: #a9c0d4;
+  --accent: rgba(90, 150, 205, 0.18);
+  --accent-foreground: #cfe3f5;
+  --destructive: #e08a80;
+  --border: rgba(255, 255, 255, 0.13);
+  --input: rgba(255, 255, 255, 0.12);
+  --ring: #8ab4de;
+  --chart-1: #8ab4de;
+  --chart-2: #b6d2ec;
+  --chart-3: #5a96cd;
+  --chart-4: #93aec4;
+  --chart-5: #c0d3e2;
+  --sidebar: rgba(20, 34, 48, 0.52);
+  --sidebar-foreground: #eaf2f9;
+  --sidebar-primary: #8ab4de;
+  --sidebar-primary-foreground: #101c28;
+  --sidebar-accent: rgba(90, 150, 205, 0.24);
+  --sidebar-accent-foreground: #d3e6f7;
+  --sidebar-border: rgba(255, 255, 255, 0.12);
+  --sidebar-ring: #8ab4de;
 }
 
 @layer base {
@@ -119,10 +134,90 @@
 
   body {
     @apply bg-background text-foreground;
+    /* 极淡的三处光斑 + 淡蓝底，玻璃卡片叠在上面才有通透感 */
+    background-image:
+      radial-gradient(1100px 700px at 6% -10%, rgba(255, 255, 255, 0.88), transparent 62%),
+      radial-gradient(900px 620px at 100% 0%, rgba(196, 222, 245, 0.42), transparent 60%),
+      radial-gradient(900px 700px at 50% 112%, rgba(214, 232, 247, 0.40), transparent 62%),
+      linear-gradient(135deg, #f3f8fd 0%, #e9f2fb 50%, #f7fafd 100%);
+    background-attachment: fixed;
   }
 }
 
-/* Print Styles for PDF Export */
+/* ============================================================
+   玻璃材质：作用于 Tailwind 生成的 bg-* 类，全站自动生效
+   （写在 @layer 之外，优先级高于 utilities，便于覆盖）
+   ============================================================ */
+.bg-card,
+.bg-popover,
+.bg-secondary,
+.bg-muted,
+.bg-accent {
+  -webkit-backdrop-filter: blur(16px) saturate(125%);
+  backdrop-filter: blur(16px) saturate(125%);
+}
+
+.bg-card {
+  /* 只给极轻的顶部高光；大卡片阴影交给 .app-glass / shadcn Card 自带 shadow-*，
+     避免小元素（badge / 图标底）也被套上大投影 */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.62);
+}
+
+.bg-primary {
+  /* 主色用雾蓝渐变；background-color 保留作不支持时的兜底 */
+  background-image: linear-gradient(135deg, #4a7db5, #7ba6d0);
+}
+
+/* 统一玻璃面板：新增外壳与概览卡使用 */
+.app-glass {
+  background-color: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82), 0 8px 28px rgba(70, 115, 160, 0.12);
+  -webkit-backdrop-filter: blur(16px) saturate(125%);
+  backdrop-filter: blur(16px) saturate(125%);
+}
+
+/* 手机端降级：低端机 backdrop-filter 耗电且容易糊，改为不透明卡片 */
+@media (max-width: 767px) {
+  :root {
+    --card: #ffffff;
+    --popover: #ffffff;
+    --secondary: #eef6fd;
+    --muted: #f1f6fb;
+    --accent: #e2f0fc;
+    --sidebar: #ffffff;
+    --sidebar-accent: #e2f0fc;
+  }
+
+  .bg-card,
+  .bg-popover,
+  .bg-secondary,
+  .bg-muted,
+  .bg-accent,
+  .app-glass {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  /* 业务里的底部固定操作条统一抬高，避开 4 Tab。
+     限定 .app-shell 后代，例外页（登录 / 打印 / 沉浸式流程）没有底部 Tab，不受影响 */
+  .app-shell .app-bottom-bar {
+    bottom: calc(var(--app-tabbar-h) + env(safe-area-inset-bottom)) !important;
+  }
+
+  /* PWA 安装提示浮层在 AppShell 之外渲染，用 :has 判断当前页是否带底部 Tab，
+     有则抬高，避免盖住 4 个 Tab；桌面端（sm 以上）不受影响 */
+  body:has(.app-tabbar) .app-pwa-prompt {
+    bottom: calc(var(--app-tabbar-h) + env(safe-area-inset-bottom) + 12px) !important;
+  }
+
+  .app-main {
+    padding-bottom: calc(var(--app-tabbar-h) + env(safe-area-inset-bottom) + 12px);
+  }
+}
+
+/* Print Styles for PDF Export —— 毛玻璃不吃打印，这里全部洗成白底 */
 @media print {
   @page {
     size: A4;
@@ -132,6 +227,36 @@
   body {
     print-color-adjust: exact;
     -webkit-print-color-adjust: exact;
+  }
+
+  html,
+  body {
+    background: #ffffff !important;
+    background-image: none !important;
+  }
+
+  /* 洗掉玻璃材质：半透明、模糊、渐变、阴影、高光一律不要 */
+  .bg-card,
+  .bg-popover,
+  .bg-secondary,
+  .bg-muted,
+  .bg-accent,
+  .bg-primary,
+  .app-glass,
+  .app-shell,
+  .app-sidebar,
+  .app-tabbar {
+    background: #ffffff !important;
+    background-image: none !important;
+    color: #111111 !important;
+    box-shadow: none !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  /* 导航壳不进卷子 */
+  .app-shell-nav {
+    display: none !important;
   }
 
   /* Hide elements that shouldn't be printed */
