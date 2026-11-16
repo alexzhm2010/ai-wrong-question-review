@@ -299,6 +299,13 @@ export default function ReviewPage() {
                                     选择全部科目
                                 </button>
                             </>
+                        ) : filteredItems.length > 0 ? (
+                            <>
+                                <p className="text-sm text-foreground/80">这些科目的题都连续答对 2 次，暂时不用练了</p>
+                                <p className="mt-2 text-[11px] text-muted-foreground">
+                                    想再练某道题，去错题详情把它标回“未掌握”即可；答错后也会自动重新加入。
+                                </p>
+                            </>
                         ) : (
                             <>
                                 <p className="text-sm text-foreground/80">这些科目里还没有可复习的题</p>

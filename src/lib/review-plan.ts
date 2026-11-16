@@ -1,11 +1,12 @@
 /**
  * 今日复习卷：从错题里挑「今天最该做」的一小批。
  *
- * 排序不用黑盒模型，四条人话规则：
- *   1. 错得越多越靠前；
- *   2. 越久没碰越靠前（最多计 30 天，再久也不额外加分）；
- *   3. 一次都没对过的，优先；
- *   4. 已经连续对 2 次的，往后压——它大概率是真会了。
+ * 排序完全由「掌握得怎么样 + 多久没碰」决定，人话规则：
+ *   1. 已经掌握的（连续答对 ≥2 次）——直接不进候选，除非后来又答错让 streak 归零；
+ *   2. 掌握度越差越优先：待攻克 > 巩固中 > 未开始；
+ *   3. 越久没做越优先：距上次作答按 60 天线性计分，不再 30 天就封顶；
+ *      从没做过的题另算「入库时长」分，且权重刻意低，避免新题挤掉真错题；
+ *   4. 换一批时叠加 ±20 分抖动，保证分差大的题也能被换掉。
  * 选完再做一次知识点去重，避免整张卷子五道题都是同一个考点。
  */
 
@@ -40,6 +41,11 @@ function jitter(id: string, seed: number): number {
     return ((h >>> 0) % 1000) / 1000; // 0~1
 }
 
+/** 连续答对 ≥2 次视为已掌握：不再进今日卷，答错后 streak 归零自动回归 */
+export function isMastered(item: ReviewCandidate): boolean {
+    return Number(item.correctStreak || 0) >= 2;
+}
+
 export function scoreItem(
     item: ReviewCandidate,
     now: number = Date.now(),
@@ -50,21 +56,45 @@ export function scoreItem(
     const attempts = wc + cc;
 
     const lastAt = item.lastAttemptAt ? Date.parse(item.lastAttemptAt) : NaN;
-    const daysSince = Number.isFinite(lastAt) ? Math.max(0, (now - lastAt) / DAY) : null;
+    const hasAttemptAt = Number.isFinite(lastAt);
+    const daysSince = hasAttemptAt ? Math.max(0, (now - lastAt) / DAY) : null;
     const created = item.createdAt ? Date.parse(item.createdAt) : NaN;
     const ageDays = Number.isFinite(created) ? Math.max(0, (now - created) / DAY) : 0;
 
     let score = 0;
+
+    // ① 掌握度档位分：待攻克 > 巩固中 > 未开始。已掌握由 pickReview 硬排除，不在这里给分。
+    if (streak >= 2) {
+        score -= 200; // 双保险：即便直接调用 scoreItem，也已掌握的也沉到最底
+    } else if (streak === 1) {
+        score += 6; // 巩固中：刚答对一次，还差一次确认
+    } else if (attempts > 0) {
+        score += 24; // 待攻克：做过但还没连续答对两次，最该练
+    } else {
+        score += 4; // 未开始：入库后一次都没做过
+    }
+
+    // ② 错次分：历史错得越多越优先（掌握度已由档位分兜底，这里只做细分）
     score += wc * 9;
     if (cc === 0 && attempts > 0) score += 16; // 做过但从没对过，最扎心
-    score += Math.min(daysSince ?? 30, 30) * 1.6;
+
+    // ③ 时间分：按最近一次作答拆成两路
+    if (hasAttemptAt && daysSince !== null) {
+        // 做过的：越久没碰越该练，线性计到 60 天（封顶 96 分）
+        score += Math.min(daysSince, 60) * 1.6;
+    } else {
+        // 从没做过的：只按入库时长给低权重分（封顶约 18 分），不再拿「30 天」那份满额
+        score += Math.min(ageDays, 30) * 0.6;
+    }
+
+    // ④ 最近一次结果
     if (item.lastResult === "wrong") score += 18;
     if (item.lastResult === "correct") score -= 6;
-    score -= streak >= 2 ? 60 : streak === 1 ? 14 : 0;
-    if (attempts === 0) score += 12 + Math.min(ageDays, 30) * 1.2;
 
     let reason: string;
-    if (attempts === 0) {
+    if (streak >= 2) {
+        reason = "最近连续答对 2 次，已掌握";
+    } else if (attempts === 0) {
         reason = ageDays >= 1 ? `入库 ${Math.round(ageDays)} 天，一直没做` : "新入库，先过一遍";
     } else if (item.lastResult === "wrong" && (daysSince ?? 0) >= 3) {
         reason = `上次做错，已隔 ${Math.round(daysSince ?? 0)} 天`;
@@ -96,11 +126,12 @@ export function pickReview<T extends ReviewCandidate>(
     const want = Math.max(1, Math.min(60, Math.floor(size) || 12));
 
     const scored = items
-        .filter((i) => !isArchived(i))
+        // 归档的（手动确认掌握）和已掌握的（连续答对 ≥2）都不进今日卷
+        .filter((i) => !isArchived(i) && !isMastered(i))
         .map((item) => {
             const base = scoreItem(item, now);
-            // 抖动幅度控制在 ±6 分：只影响同分档的先后，不会把冷门题顶上来
-            const score = base.score + (jitter(item.id, seed) - 0.5) * 12;
+            // ±20 分抖动：即使基础分差较大，换一批也能真正换掉一批题
+            const score = base.score + (jitter(item.id, seed) - 0.5) * 40;
             return { item, score, reason: base.reason, daysSince: base.daysSince };
         })
         .sort((a, b) => b.score - a.score || a.item.id.localeCompare(b.item.id));
