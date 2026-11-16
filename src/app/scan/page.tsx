@@ -9,6 +9,7 @@ import { splitForScan, zoomCrop } from "@/lib/scan-split";
 import { mergeHits, needsReview, planReview, VERDICT_TEXT, type MergedHit, type ScanHit, type Verdict } from "@/lib/scan-merge";
 import { AttemptResult, ErrorItem } from "@/types/api";
 import { resolveScanIds } from "@/lib/resolve-scan-ids";
+import { scanErrorNotice } from "@/lib/scan-error-notice";
 
 const SCAN_KEY = "wq:scan-results";
 /** 同时发几段。段数固定不超过 4，所以基本是一轮发完，墙钟≈最慢那一段 */
@@ -452,9 +453,11 @@ function ScanContent() {
     const running = strips.some((s) => s.state === "run" || s.state === "wait") || !!reviewState?.running;
     const okStrips = strips.filter((s) => s.state === "ok").length;
     const errStrips = strips.filter((s) => s.state === "err").length;
+    const usableCount = rows.filter((r) => r.id).length;
     const highConf = rows.filter((r) => r.matched && r.confidence >= REVIEW_THRESHOLD).length;
     const todo = rows.filter((r) => r.needsReview);
     const conflictCount = rows.filter((r) => r.conflict && !r.overridden).length;
+    const notice = scanErrorNotice(error, hint, usableCount);
 
     /**
      * 这批卷子里还没被识别出来的题。多半是作答框空白（模型容易整条跳过），
@@ -651,9 +654,9 @@ function ScanContent() {
                     </>
                 )}
 
-                {(hint || error) && (
-                    <p className={`text-xs px-1 ${error ? "text-red-600" : "text-muted-foreground"}`}>
-                        {error || hint}
+                {notice && (
+                    <p className={`text-xs px-1 ${notice.red ? "text-red-600" : "text-muted-foreground"}`}>
+                        {notice.text}
                     </p>
                 )}
 
