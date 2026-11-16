@@ -1,3 +1,3 @@
 :HL["/ai-wrong-question-review/_next/static/chunks/13363519ce42699e.css","style"]
 :HC["/",""]
-0:{"buildId":"A8pM0o4F9SchbYDmdnM4e","tree":{"name":"","paramType":null,"paramKey":"","hasRuntimePrefetch":false,"slots":{"children":{"name":"batch","paramType":null,"paramKey":"batch","hasRuntimePrefetch":false,"slots":{"children":{"name":"__PAGE__","paramType":null,"paramKey":"__PAGE__","hasRuntimePrefetch":false,"slots":null,"isRootLayout":false}},"isRootLayout":false}},"isRootLayout":true},"staleTime":300}
+0:{"buildId":"YfUeUU2BSXOp4QOxsl1jB","tree":{"name":"","paramType":null,"paramKey":"","hasRuntimePrefetch":false,"slots":{"children":{"name":"batch","paramType":null,"paramKey":"batch","hasRuntimePrefetch":false,"slots":{"children":{"name":"__PAGE__","paramType":null,"paramKey":"__PAGE__","hasRuntimePrefetch":false,"slots":null,"isRootLayout":false}},"isRootLayout":false}},"isRootLayout":true},"staleTime":300}
