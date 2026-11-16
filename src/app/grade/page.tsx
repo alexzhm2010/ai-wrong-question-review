@@ -326,12 +326,6 @@ function GradeContent() {
                         {preFilled > 0 ? ` · 扫描预填 ${preFilled}` : ""}
                     </div>
                 </div>
-                <Link
-                    href={`/scan?ids=${items.map((i) => i.id).join(",")}`}
-                    className="rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs text-blue-700 whitespace-nowrap"
-                >
-                    拍照识别
-                </Link>
             </div>
 
             {/* 对错比例条：比单一进度条更能一眼看出这份卷子做得怎么样 */}

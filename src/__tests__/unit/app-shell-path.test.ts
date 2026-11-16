@@ -39,7 +39,7 @@ describe("isShellExempt", () => {
     it("全屏表单 / 打印 / 后台 / 沉浸式流程页不带壳", () => {
         const cases = [
             "/login", "/register", "/admin", "/admin/user", "/print-preview",
-            "/latex-test", "/item", "/scan", "/practice",
+            "/latex-test", "/item", "/scan", "/practice", "/mark",
         ];
         for (const p of cases) expect(isShellExempt(p), p).toBe(true);
     });
@@ -48,6 +48,7 @@ describe("isShellExempt", () => {
         expect(isShellExempt(BASE + "/login/")).toBe(true);
         expect(isShellExempt(BASE + "/item/")).toBe(true);
         expect(isShellExempt(BASE + "/scan/")).toBe(true);
+        expect(isShellExempt(BASE + "/mark/")).toBe(true);
         expect(isShellExempt(BASE + "/notebooks/")).toBe(false);
     });
 

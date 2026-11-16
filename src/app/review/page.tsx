@@ -105,7 +105,7 @@ export default function ReviewPage() {
     }, [items, selectedSubjects]);
 
     const picks = useMemo(
-        () => pickReview(filteredItems as any, size, { seed }),
+        () => pickReview<ErrorItem>(filteredItems, size, { seed }),
         [filteredItems, size, seed],
     );
 
@@ -166,7 +166,7 @@ export default function ReviewPage() {
         }
     };
 
-    const startPaper = () => {
+    const startPaper = async () => {
         const ids = picks.map((p) => p.item.id);
         if (!ids.length) return;
         setGenerating(true);
@@ -177,7 +177,31 @@ export default function ReviewPage() {
         } catch {
             /* 写不进也能继续，打印页只是需要重新选 */
         }
-        router.push(`/print-preview?ids=${ids.join(",")}`);
+
+        // 把题目快照写库，换一个凭证 code 供卷面二维码扫码批改。
+        // 失败不阻断打印：老用户仍可打印卷子，只是这次没有二维码。
+        let code = "";
+        let paperNo = "";
+        try {
+            const res = await apiClient.post<{ code: string; paperNo: string }>("/api/paper/create", {
+                subjectNames: picks.map((p) => subjectNameOf(p.item)).filter((v, i, a) => a.indexOf(v) === i).join("、"),
+                items: ids.map((id, i) => ({
+                    id,
+                    orderIndex: i,
+                    shortCode: picks[i].item.shortCode || "",
+                })),
+            });
+            code = res?.code || "";
+            paperNo = res?.paperNo || "";
+        } catch {
+            /* 出卷失败降级为无二维码打印 */
+        }
+
+        const paperParams = code
+            ? `&paper=${encodeURIComponent(code)}&paperNo=${encodeURIComponent(paperNo)}`
+            : "";
+        const q = ids.length ? `?ids=${ids.join(",")}${paperParams}` : "";
+        router.push(`/print-preview${q}`);
     };
 
     if (loading) {
@@ -373,7 +397,7 @@ export default function ReviewPage() {
                     <div className="max-w-3xl mx-auto flex items-center gap-3">
                         <div className="min-w-0 text-[11px] text-muted-foreground leading-tight">
                             <div className="font-medium text-slate-700">{picks.length} 道 · 约 {minutes} 分钟</div>
-                            <div>生成后可打印，做完拍照批改</div>
+                            <div>生成后可打印，扫码批改不耗 AI 额度</div>
                         </div>
                         <button
                             onClick={startPaper}

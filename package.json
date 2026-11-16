@@ -1,6 +1,6 @@
 {
   "name": "ai-wrong-question-review",
-  "version": "1.21.16",
+  "version": "1.22.0",
   "private": true,
   "scripts": {
     "dev": "next dev -H 0.0.0.0",
@@ -40,6 +40,7 @@
     "next": "^16.0.10",
     "next-auth": "^4.24.13",
     "openai": "^6.9.1",
+    "qrcode": "^1.5.4",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "react-dropzone": "^14.3.8",
@@ -60,6 +61,7 @@
     "@tailwindcss/postcss": "^4",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^5.1.1",

@@ -160,7 +160,7 @@ export default function MasteryPage() {
                     <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-[11px] text-amber-900 flex items-center gap-2">
                         <span className="flex-1 leading-relaxed">
                             这 {summary.total} 道题还没有作答记录，所以每个数字都是 0。
-                            打印一份卷子、做完拍照批改，这里就会开始有变化。
+                            打印一份卷子、做完扫码批改，这里就会开始有变化。
                         </span>
                         <Link
                             href="/review"

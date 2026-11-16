@@ -15,6 +15,7 @@ export const SHELL_EXEMPT_PREFIXES = [
     "/item",
     "/scan",
     "/practice",
+    "/mark",
 ] as const;
 
 const BASE_PATH = "/ai-wrong-question-review";

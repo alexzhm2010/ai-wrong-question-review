@@ -17,6 +17,7 @@ import {
     shouldReserveAnswerSpace,
 } from "@/lib/print-preview";
 import { imageSrc } from "@/lib/storage";
+import { PaperQrCode } from "@/components/paper-qr-code";
 
 type SpaceKey = "none" | "sm" | "md" | "lg";
 
@@ -108,6 +109,8 @@ function PrintPreviewContent() {
     const [searchParams] = useState<URLSearchParams | null>(() =>
         typeof window === "undefined" ? null : new URLSearchParams(window.location.search),
     );
+    /** 扫码批改的凭证编号（出卷时写库生成）；有它才在卷首印二维码 */
+    const paperCode = searchParams?.get("paper") || "";
     const [items, setItems] = useState<ErrorItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [settings, setSettings] = useState<PrintSettings>(DEFAULT_SETTINGS);
@@ -558,6 +561,9 @@ function PrintPreviewContent() {
                     </div>
                 ) : (
                     <div className="space-y-8">
+                        {paperCode && (
+                            <PaperQrCode code={paperCode} paperNo={searchParams?.get("paperNo") || ""} />
+                        )}
                         {orderedItems.map((item, index) => {
                             let tags: string[] = [];
                             if (item.tags && item.tags.length > 0) tags = item.tags.map((t) => t.name);
@@ -637,7 +643,7 @@ function PrintPreviewContent() {
                  * 区块存在与否只由开关决定，绝不依赖某几道题恰好有没有答案文本，
                  * 缺答案的题显示「（暂无答案）」，用户至少能确认这一功能生效。
                  */}
-                {(showAnswers || showAnalysis) && total > 0 && (
+                {(showAnswers || showAnalysis) && total > 0 && !paperCode && (
                     <section
                         className={`mt-10 pt-6 border-t-2 border-dashed ${
                             printWithAnswers ? "print:break-before-page" : "print:hidden"

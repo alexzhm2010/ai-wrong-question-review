@@ -23,7 +23,7 @@ const SHORTCUTS = [
     { href: "/stats", label: "统计中心", desc: "错题分布与趋势", icon: BarChart3 },
     { href: "/mastery", label: "掌握度", desc: "各知识点掌握情况", icon: Activity },
     { href: "/batch", label: "批量进展", desc: "导入批次与历史记录", icon: Layers },
-    { href: "/scan", label: "拍照批改", desc: "扫描卷面并判分", icon: ScanLine },
+    { href: "/review", label: "扫码批改", desc: "生成试卷，扫码判分不耗AI", icon: ScanLine },
 ];
 
 export default function MePage() {

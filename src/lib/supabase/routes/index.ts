@@ -7,8 +7,10 @@ import { TAG_HANDLERS } from "./tags";
 import { PRACTICE_HANDLERS } from "./practice";
 import { ADMIN_HANDLERS } from "./admin";
 import { BATCH_HANDLERS } from "./batch";
+import { PAPER_HANDLERS } from "./paper";
 
 export const ROUTE_HANDLERS: RouteHandler[] = [
+  ...PAPER_HANDLERS,
   ...BATCH_HANDLERS,
   ...MISC_HANDLERS,
   ...NOTEBOOK_HANDLERS,

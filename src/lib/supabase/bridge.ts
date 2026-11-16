@@ -14,7 +14,8 @@ import { handleAiRoute } from "./routes/ai";
 import { handleAuthRoute } from "./routes/auth";
 
 /** 无需登录即可访问的根路径（与旧版 middleware 的 PUBLIC_API_PREFIXES 对齐） */
-const PUBLIC_ROOTS = ["version", "auth", "register", "openclaw"];
+// paper: 扫码批改免登录，靠凭证 code 鉴权（RPC 授权给 anon + 强随机 code）
+const PUBLIC_ROOTS = ["version", "auth", "register", "openclaw", "paper"];
 
 function normalize(raw: string): string {
   let path = raw;

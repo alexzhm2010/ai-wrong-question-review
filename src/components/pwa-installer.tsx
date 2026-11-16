@@ -125,7 +125,7 @@ export function PwaInstaller() {
             promptRef.current = event as PromptEvent;
             promptUsedRef.current = false;
             setHasPrompt(true);
-            if (!isStandalone() && !wasDismissed() && !pathname?.startsWith("/login") && !pathname?.startsWith("/register")) {
+            if (!isStandalone() && !wasDismissed() && !pathname?.startsWith("/login") && !pathname?.startsWith("/register") && !pathname?.startsWith("/mark")) {
                 setMode("install");
             }
         };
@@ -181,7 +181,9 @@ export function PwaInstaller() {
             isStandalone() ||
             wasDismissed() ||
             pathname?.startsWith("/login") ||
-            pathname?.startsWith("/register");
+            pathname?.startsWith("/register") ||
+            // 扫码批改是「扫一下立刻核对」的场景，弹安装引导会挡住题目
+            pathname?.startsWith("/mark");
         if (!skipAuto) {
             // 不派发安装事件的浏览器（iOS、部分国产浏览器）给一次菜单引导
             timer = window.setTimeout(() => {
