@@ -13,8 +13,17 @@ import { imageSrc } from "@/lib/storage";
 
 const SIZE_KEY = "wq:review-size";
 const PAPER_KEY = "wq:today-paper";
+const SUBJECT_KEY = "wq:review-subjects";
 
 const SIZES = [6, 12, 20];
+
+function subjectKeyOf(item: ErrorItem): string {
+    return item.subjectId || item.subject?.id || "__none__";
+}
+
+function subjectNameOf(item: ErrorItem): string {
+    return item.subject?.name || "未分类";
+}
 
 function todayKey(): string {
     const d = new Date();
@@ -32,6 +41,8 @@ export default function ReviewPage() {
     const [seed, setSeed] = useState(0);
     const [doneToday, setDoneToday] = useState<string[] | null>(null);
     const [generating, setGenerating] = useState(false);
+    // null = 还没从存储里恢复（此时等价于全选）；[] = 用户主动清空
+    const [selectedSubjects, setSelectedSubjects] = useState<string[] | null>(null);
 
     useEffect(() => {
         try {
@@ -59,7 +70,44 @@ export default function ReviewPage() {
         })();
     }, []);
 
-    const picks = useMemo(() => pickReview(items as any, size, { seed }), [items, size, seed]);
+    // 只列出题库里真正有题的学科，避免空选项
+    const subjectOptions = useMemo(() => {
+        const map = new Map<string, { id: string; name: string; count: number }>();
+        for (const it of items) {
+            const id = subjectKeyOf(it);
+            const row = map.get(id);
+            if (row) row.count += 1;
+            else map.set(id, { id, name: subjectNameOf(it), count: 1 });
+        }
+        return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
+    }, [items]);
+
+    // 学科列表就绪后恢复用户上次的选择；首次使用默认全选
+    useEffect(() => {
+        if (!subjectOptions.length || selectedSubjects !== null) return;
+        let restored: string[] | null = null;
+        try {
+            const raw = localStorage.getItem(SUBJECT_KEY);
+            if (raw) {
+                const arr = JSON.parse(raw);
+                if (Array.isArray(arr)) restored = arr.filter((x) => subjectOptions.some((o) => o.id === x));
+            }
+        } catch {
+            /* 隐私模式读不到就用全选 */
+        }
+        setSelectedSubjects(restored ?? subjectOptions.map((o) => o.id));
+    }, [subjectOptions, selectedSubjects]);
+
+    const filteredItems = useMemo(() => {
+        if (!selectedSubjects) return items;
+        const set = new Set(selectedSubjects);
+        return items.filter((it) => set.has(subjectKeyOf(it)));
+    }, [items, selectedSubjects]);
+
+    const picks = useMemo(
+        () => pickReview(filteredItems as any, size, { seed }),
+        [filteredItems, size, seed],
+    );
 
     /** 缩略图：按 8 张一片补，加载失败就留文字版，不影响挑题 */
     useEffect(() => {
@@ -89,6 +137,25 @@ export default function ReviewPage() {
             cancelled = true;
         };
     }, [loading, picks.map((p) => p.item.id).join(",")]);
+
+    /** 保存选择并即时生效；null 状态按全选处理 */
+    const applySubjects = (next: string[]) => {
+        setSelectedSubjects(next);
+        try {
+            localStorage.setItem(SUBJECT_KEY, JSON.stringify(next));
+        } catch {
+            /* 忽略 */
+        }
+    };
+
+    const toggleSubject = (id: string) => {
+        const cur = selectedSubjects ?? subjectOptions.map((o) => o.id);
+        applySubjects(cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]);
+    };
+
+    const setAllSubjects = (all: boolean) => {
+        applySubjects(all ? subjectOptions.map((o) => o.id) : []);
+    };
 
     const changeSize = (n: number) => {
         setSize(n);
@@ -123,7 +190,7 @@ export default function ReviewPage() {
 
     const minutes = estimateMinutes(picks.length);
     // 一条作答记录都没有时，推荐理由只有「入库 X 天」，得跟用户说清楚这是暂时的
-    const hasAttempts = items.some(
+    const hasAttempts = filteredItems.some(
         (i) => (Number(i.wrongCount) || 0) + (Number(i.correctCount) || 0) > 0,
     );
 
@@ -188,12 +255,58 @@ export default function ReviewPage() {
                     </Link>
                 </div>
 
+                {/* 学科多选：默认全选，选择会记住；清空后提示用户重新选 */}
+                {subjectOptions.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                        <span className="text-muted-foreground mr-1 shrink-0">科目</span>
+                        {subjectOptions.map((o) => {
+                            const active = !selectedSubjects || selectedSubjects.includes(o.id);
+                            return (
+                                <button
+                                    key={o.id}
+                                    onClick={() => toggleSubject(o.id)}
+                                    aria-pressed={active}
+                                    className={`rounded-full border px-2.5 py-1 transition ${
+                                        active
+                                            ? "bg-slate-900 border-slate-900 text-white font-semibold"
+                                            : "border-border bg-card text-foreground/80"
+                                    }`}
+                                >
+                                    {o.name} <span className="opacity-60">{o.count}</span>
+                                </button>
+                            );
+                        })}
+                        <div className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
+                            <button onClick={() => setAllSubjects(true)} className="underline">
+                                全选
+                            </button>
+                            <button onClick={() => setAllSubjects(false)} className="underline">
+                                清空
+                            </button>
+                        </div>
+                    </div>
+                )}
+
                 {picks.length === 0 ? (
                     <div className="rounded-xl border bg-card px-4 py-12 text-center">
-                        <p className="text-sm text-foreground/80">题库里还没有可复习的题</p>
-                        <Link href="/notebook/add" className="mt-3 inline-block text-xs text-blue-600 underline">
-                            去录入第一道错题
-                        </Link>
+                        {selectedSubjects && selectedSubjects.length === 0 ? (
+                            <>
+                                <p className="text-sm text-foreground/80">请先在上方选择要复习的科目</p>
+                                <button
+                                    onClick={() => setAllSubjects(true)}
+                                    className="mt-3 text-xs text-blue-600 underline"
+                                >
+                                    选择全部科目
+                                </button>
+                            </>
+                        ) : (
+                            <>
+                                <p className="text-sm text-foreground/80">这些科目里还没有可复习的题</p>
+                                <Link href="/notebook/add" className="mt-3 inline-block text-xs text-blue-600 underline">
+                                    去录入第一道错题
+                                </Link>
+                            </>
+                        )}
                     </div>
                 ) : (
                     <div className="grid gap-2 sm:grid-cols-2">
