@@ -34,6 +34,39 @@ export function markHref(code: string): string {
     return `/mark?c=${encodeURIComponent(code)}`;
 }
 
+/**
+ * 从摄像头扫到的二维码文本里解析出试卷凭证 code。
+ * 卷首二维码编码的是完整网址（markUrl），但也可能扫到纯 code 或未带 basePath 的
+ * 相对链接，这里都做兼容；解析不出返回空串。
+ */
+export function parseScannedCode(raw: string): string {
+    const text = (raw || "").trim();
+    if (!text) return "";
+    try {
+        // 绝对网址（含 origin + basePath）
+        const u = new URL(text);
+        const c = u.searchParams.get("c");
+        if (c) return c.trim();
+        return "";
+    } catch {
+        /* 不是绝对网址，继续尝试相对形式 */
+    }
+    // 相对链接：/ai-wrong-question-review/mark?c=xxx 或 /mark?c=xxx
+    const qIndex = text.indexOf("?");
+    if (qIndex >= 0 && /\/mark\b/.test(text.slice(0, qIndex))) {
+        try {
+            const params = new URLSearchParams(text.slice(qIndex + 1));
+            const c = params.get("c");
+            if (c) return c.trim();
+        } catch {
+            /* 忽略 */
+        }
+    }
+    // 纯 code：不含协议、斜杠、问号、空白的一串
+    if (!/[\s/?#:]/.test(text)) return text;
+    return "";
+}
+
 /** createdAt 转成「MM-DD HH:mm」，固定用 Asia/Shanghai 墙上时间，避免随运行环境时区漂移 */
 export function formatPaperTime(iso: string | null | undefined): string {
     if (!iso) return "";

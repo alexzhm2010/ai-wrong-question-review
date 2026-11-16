@@ -1,6 +1,6 @@
 {
   "name": "ai-wrong-question-review",
-  "version": "1.23.0",
+  "version": "1.23.1",
   "private": true,
   "scripts": {
     "dev": "next dev -H 0.0.0.0",
@@ -36,6 +36,7 @@
     "dotenv": "^17.2.3",
     "global-agent": "^3.0.0",
     "jsonrepair": "^3.13.1",
+    "jsqr": "^1.4.0",
     "katex": "^0.16.25",
     "next": "^16.0.10",
     "next-auth": "^4.24.13",

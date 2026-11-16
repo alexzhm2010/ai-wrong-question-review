@@ -6,8 +6,10 @@
  * 题目与答案仍由 /mark 页凭 code 通过 paper_read 读取。
  */
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { BackButton } from "@/components/ui/back-button";
+import { QrScanner } from "@/components/qr-scanner";
 import { apiClient } from "@/lib/api-client";
 import { useSession } from "@/lib/supabase/session";
 import {
@@ -16,14 +18,16 @@ import {
     paperStatus,
 } from "@/lib/paper-list";
 import type { PaperListRow } from "@/lib/supabase/routes/paper";
-import { FileText, Plus, RefreshCw } from "lucide-react";
+import { FileText, RefreshCw, ScanLine } from "lucide-react";
 
 export default function MarkCenterPage() {
+    const router = useRouter();
     const { status: sessionStatus } = useSession();
     const [rows, setRows] = useState<PaperListRow[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
     const [refreshing, setRefreshing] = useState(false);
+    const [scanning, setScanning] = useState(false);
 
     const load = useCallback(async (silent = false) => {
         if (silent) setRefreshing(true);
@@ -61,7 +65,7 @@ export default function MarkCenterPage() {
                     <div className="min-w-0 flex-1">
                         <div className="text-sm font-bold leading-tight">批改中心</div>
                         <div className="text-[11px] leading-tight text-muted-foreground">
-                            选一份试卷，查看题目与批改结果
+                            扫描卷首二维码批卷，或选一份试卷查看结果
                         </div>
                     </div>
                     <button
@@ -77,24 +81,25 @@ export default function MarkCenterPage() {
             </div>
 
             <div className="mx-auto max-w-2xl px-3 py-4">
-                {/* 生成入口 */}
-                <Link
-                    href="/review"
-                    className="mb-4 flex items-center justify-between rounded-xl border border-dashed border-primary/40 bg-primary/5 px-4 py-3 transition-colors hover:bg-primary/10"
+                {/* 核心入口：扫码批卷 */}
+                <button
+                    type="button"
+                    onClick={() => setScanning(true)}
+                    className="mb-4 flex w-full items-center justify-between rounded-xl bg-primary px-4 py-3.5 text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
                 >
                     <span className="flex items-center gap-3">
-                        <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                            <Plus className="h-5 w-5" />
+                        <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-white/20">
+                            <ScanLine className="h-5 w-5" />
                         </span>
-                        <span>
-                            <span className="block text-[13px] font-semibold">生成今日复习卷</span>
-                            <span className="block text-[11px] text-muted-foreground">
-                                出卷后打印，卷首二维码供扫码批改
+                        <span className="text-left">
+                            <span className="block text-sm font-bold">扫码批卷</span>
+                            <span className="block text-[11px] text-white/80">
+                                扫描卷首二维码，直接打开试卷逐题判分
                             </span>
                         </span>
                     </span>
-                    <span className="text-xs font-medium text-primary">去生成 ›</span>
-                </Link>
+                    <span className="text-xs font-semibold">开始 ›</span>
+                </button>
 
                 {loading ? (
                     <div className="flex justify-center py-16 text-sm text-muted-foreground">
@@ -115,10 +120,9 @@ export default function MarkCenterPage() {
                 ) : rows.length === 0 ? (
                     <div className="flex flex-col items-center gap-3 py-16 text-center">
                         <div className="text-4xl">📄</div>
-                        <p className="text-sm font-medium">还没有生成的试卷</p>
+                        <p className="text-sm font-medium">还没有试卷记录</p>
                         <p className="max-w-xs text-xs leading-relaxed text-muted-foreground">
-                            点上方「生成今日复习卷」出第一份卷子，打印后让学生扫码批改，
-                            这里就会出现记录。
+                            点上方「扫码批卷」扫描卷首二维码即可批改；已打印过的试卷也会出现在下方列表。
                         </p>
                     </div>
                 ) : (
@@ -171,6 +175,16 @@ export default function MarkCenterPage() {
                     </div>
                 )}
             </div>
+
+            {scanning && (
+                <QrScanner
+                    onClose={() => setScanning(false)}
+                    onResult={(code) => {
+                        setScanning(false);
+                        router.push(markHref(code));
+                    }}
+                />
+            )}
         </div>
     );
 }

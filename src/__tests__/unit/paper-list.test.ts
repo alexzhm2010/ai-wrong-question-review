@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { paperStatus, markHref, formatPaperTime } from "@/lib/paper-list";
+import { paperStatus, markHref, formatPaperTime, parseScannedCode } from "@/lib/paper-list";
 
 describe("paperStatus：批改中心试卷状态", () => {
     it("未提交 → 待批改", () => {
@@ -37,6 +37,40 @@ describe("markHref：进入批改页地址", () => {
 
     it("特殊字符被编码，避免破坏 query", () => {
         expect(markHref("a b&c")).toBe("/mark?c=a%20b%26c");
+    });
+});
+
+describe("parseScannedCode：从二维码内容解析试卷编号", () => {
+    it("完整网址（含 basePath）取 ?c=", () => {
+        expect(
+            parseScannedCode(
+                "https://example.github.io/ai-wrong-question-review/mark?c=261116ABC123",
+            ),
+        ).toBe("261116ABC123");
+    });
+
+    it("凭证含编码字符时被正确解码", () => {
+        expect(
+            parseScannedCode(
+                "https://x.io/ai-wrong-question-review/mark?c=a%20b%26c",
+            ),
+        ).toBe("a b&c");
+    });
+
+    it("相对链接形式也能解析", () => {
+        expect(parseScannedCode("/ai-wrong-question-review/mark?c=CODE9")).toBe("CODE9");
+        expect(parseScannedCode("/mark?c=CODE8")).toBe("CODE8");
+    });
+
+    it("纯 code（二维码直接存的编号）原样返回", () => {
+        expect(parseScannedCode("261116ABC123")).toBe("261116ABC123");
+    });
+
+    it("无关网址、空串、垃圾内容返回空", () => {
+        expect(parseScannedCode("https://example.com/nope?x=1")).toBe("");
+        expect(parseScannedCode("")).toBe("");
+        expect(parseScannedCode("   ")).toBe("");
+        expect(parseScannedCode("hello world")).toBe("");
     });
 });
 
