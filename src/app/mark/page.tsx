@@ -4,9 +4,11 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { BackButton } from "@/components/ui/back-button";
 import { ReferenceAnswer } from "@/components/reference-answer";
+import { useRouter } from "next/navigation";
 import { apiClient } from "@/lib/api-client";
 import { imageSrc } from "@/lib/storage";
 import { scoreMood } from "@/lib/paper-score";
+import { MARK_HOME } from "@/lib/navigation";
 
 type PaperItem = {
     errorItemId: string;
@@ -36,8 +38,12 @@ const VERDICTS: { key: Verdict; label: string; active: string }[] = [
 ];
 
 function MarkContent() {
+    const router = useRouter();
     const searchParams = useSearchParams();
     const code = (searchParams.get("c") || "").trim();
+
+    /** 批改流程的统一出口：返回箭头、出错态、结果页都回批改中心 */
+    const backToCenter = () => router.push(MARK_HOME);
 
     const [paper, setPaper] = useState<Paper | null>(null);
     const [loading, setLoading] = useState(true);
@@ -135,7 +141,13 @@ function MarkContent() {
             <div className="min-h-screen flex flex-col items-center justify-center gap-3 px-6 text-center">
                 <div className="text-4xl">📄</div>
                 <p className="text-sm text-foreground/80">{loadError}</p>
-                <BackButton fallbackUrl="/review" />
+                <button
+                    type="button"
+                    onClick={backToCenter}
+                    className="rounded-lg border bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
+                >
+                    返回批改中心
+                </button>
             </div>
         );
     }
@@ -149,7 +161,7 @@ function MarkContent() {
             {/* 顶栏 */}
             <div className="sticky top-0 z-20 border-b bg-white/95 backdrop-blur">
                 <div className="max-w-2xl mx-auto px-3 py-2.5 flex items-center gap-2.5">
-                    <BackButton fallbackUrl="/review" />
+                    <BackButton fallbackUrl={MARK_HOME} />
                     <div className="min-w-0 flex-1">
                         <div className="text-sm font-bold leading-tight">扫码批改</div>
                         <div className="text-[11px] text-muted-foreground leading-tight truncate">
@@ -268,7 +280,8 @@ function MarkContent() {
                     score={result.score}
                     correctCount={result.correctCount}
                     total={result.total}
-                    onClose={() => setResult(null)}
+                    onBack={backToCenter}
+                    onStay={() => setResult(null)}
                 />
             )}
         </div>
@@ -279,12 +292,14 @@ function ResultOverlay({
     score,
     correctCount,
     total,
-    onClose,
+    onBack,
+    onStay,
 }: {
     score: number;
     correctCount: number;
     total: number;
-    onClose: () => void;
+    onBack: () => void;
+    onStay: () => void;
 }) {
     const mood = scoreMood(score);
     const confetti = useMemo(
@@ -326,10 +341,16 @@ function ResultOverlay({
                     答对 <span className="font-bold text-emerald-600">{correctCount}</span> / {total} 题
                 </div>
                 <button
-                    onClick={onClose}
+                    onClick={onBack}
                     className="mt-5 w-full rounded-lg bg-slate-900 py-2.5 text-sm font-semibold text-white"
                 >
-                    继续
+                    返回批改中心
+                </button>
+                <button
+                    onClick={onStay}
+                    className="mt-2 w-full py-1.5 text-xs text-slate-500 hover:text-slate-700"
+                >
+                    留在本页重新批改
                 </button>
             </div>
         </div>
