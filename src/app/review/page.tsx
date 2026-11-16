@@ -22,15 +22,6 @@ function todayKey(): string {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function brief(text?: string | null, len = 54): string {
-    const s = (text || "")
-        .replace(/\$[^$]*\$/g, " ")
-        .replace(/\\[a-zA-Z]+/g, " ")
-        .replace(/[{}$\\^_]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-    return s.length > len ? `${s.slice(0, len)}…` : s;
-}
 
 export default function ReviewPage() {
     const router = useRouter();
@@ -213,41 +204,41 @@ export default function ReviewPage() {
                                 <Link
                                     key={item.id}
                                     href={`/item/${item.id}`}
-                                    className="flex gap-2.5 rounded-xl border bg-card p-2.5 hover:border-border"
+                                    className="overflow-hidden rounded-xl border bg-card transition-colors hover:border-primary/40"
                                 >
-                                    <div className="w-20 h-24 shrink-0 rounded-lg bg-muted overflow-hidden relative">
+                                    {/* 元信息压成一行：序号 · 错/对 · 知识点 · 推荐理由 */}
+                                    <div className="flex items-center gap-1.5 px-2.5 py-2 text-[11px] leading-none">
+                                        <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded bg-slate-900 px-1 text-[10px] font-bold leading-none text-white">
+                                            {i + 1}
+                                        </span>
+                                        <span className="shrink-0 text-red-500">错 {item.wrongCount || 0}</span>
+                                        <span className="shrink-0 text-green-600">对 {item.correctCount || 0}</span>
+                                        {names[0] && (
+                                            <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                                                · {names[0]}
+                                            </span>
+                                        )}
+                                        <span className="ml-auto max-w-[48%] shrink-0 truncate rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-amber-700">
+                                            {p.reason}
+                                        </span>
+                                    </div>
+
+                                    {/* 主体只放题图：整宽展示，竖长卷面按视口高度收口，不再和文字抢宽度 */}
+                                    <div className="border-t bg-white">
                                         {item.originalImageUrl ? (
                                             <AutoCropImage
                                                 src={imageSrc(item.originalImageUrl)}
-                                                maxWidth={200}
+                                                maxWidth={900}
                                                 enabled
                                                 alt=""
                                                 loading="lazy"
-                                                className="w-full h-full object-contain bg-card"
+                                                className="mx-auto block max-h-[65vh] w-full object-contain sm:max-h-[55vh]"
                                             />
                                         ) : (
-                                            <div className="w-full h-full flex items-center justify-center text-[10px] text-muted-foreground px-1 text-center">
-                                                无图
+                                            <div className="flex h-28 items-center justify-center text-[11px] text-muted-foreground">
+                                                暂无题目截图
                                             </div>
                                         )}
-                                        <span className="absolute left-1 top-1 rounded bg-slate-900/80 px-1 py-0.5 text-[10px] font-bold text-white leading-none">
-                                            {i + 1}
-                                        </span>
-                                    </div>
-                                    <div className="min-w-0 flex-1 py-0.5">
-                                        <p className="text-xs leading-relaxed line-clamp-3">
-                                            {brief(item.questionText || item.ocrText) || "（无题干文字）"}
-                                        </p>
-                                        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px]">
-                                            <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700 border border-amber-200">
-                                                {p.reason}
-                                            </span>
-                                        </div>
-                                        <div className="mt-1 flex items-center gap-2 text-[10px] text-muted-foreground">
-                                            <span className="text-red-500">错 {item.wrongCount || 0}</span>
-                                            <span className="text-green-600">对 {item.correctCount || 0}</span>
-                                            {names[0] && <span className="truncate">· {names[0]}</span>}
-                                        </div>
                                     </div>
                                 </Link>
                             );
