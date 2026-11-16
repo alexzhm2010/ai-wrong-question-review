@@ -8,6 +8,7 @@ import { compressImage } from "@/lib/image-utils";
 import { splitForScan, zoomCrop } from "@/lib/scan-split";
 import { mergeHits, needsReview, planReview, VERDICT_TEXT, type MergedHit, type ScanHit, type Verdict } from "@/lib/scan-merge";
 import { AttemptResult, ErrorItem } from "@/types/api";
+import { resolveScanIds } from "@/lib/resolve-scan-ids";
 
 const SCAN_KEY = "wq:scan-results";
 /** 同时发几段。段数固定不超过 4，所以基本是一轮发完，墙钟≈最慢那一段 */
@@ -118,7 +119,15 @@ function ScanContent() {
     const reviewedRef = useRef<Set<string>>(new Set());
 
     const idsParam = searchParams.get("ids") || "";
-    const ids = useMemo(() => idsParam.split(",").filter(Boolean), [idsParam]);
+
+    /**
+     * 批改目标题：URL 的 ?ids= 优先；从「我的 → 拍照批改」等入口进来时没有 ids，
+     * 就回退到上次打印的那批，否则 items 为空会把每道题都误判成「库里没有这个号」。
+     */
+    const { ids, fromLastPrint } = useMemo(
+        () => resolveScanIds(idsParam, typeof localStorage !== "undefined" ? localStorage : null),
+        [idsParam],
+    );
 
     useEffect(() => {
         if (!ids.length) return;
@@ -508,6 +517,20 @@ function ScanContent() {
             </div>
 
             <div className="max-w-3xl mx-auto px-3 py-3 space-y-3">
+                {/* 明确告诉用户当前批改的是哪一批，避免题号对不上时一头雾水 */}
+                <div className="rounded-lg border bg-card px-3 py-2 text-[11px] leading-relaxed">
+                    {items.length > 0 ? (
+                        <span className="text-foreground/80">
+                            当前批改：<span className="font-semibold">{fromLastPrint ? "上次打印" : "指定"}</span>的{" "}
+                            <span className="font-semibold">{items.length}</span> 道题。请确认拍的是这批卷子；题号对不上时请先重新打印。
+                        </span>
+                    ) : (
+                        <span className="text-amber-700">
+                            还没有加载要批改的题目。请先从「打印预览」打印一批卷子，或从错题列表进入批改；否则卷面题号都会被判为「库里没有这个号」。
+                        </span>
+                    )}
+                </div>
+
                 {/* 拍照和选相册分开两个 input：带 capture 的 input 会强制调相机，multiple 会失效 */}
                 <input
                     ref={camRef}
