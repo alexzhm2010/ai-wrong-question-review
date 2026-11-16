@@ -45,7 +45,8 @@ export function activeTabKey(pathname: string | null | undefined): string {
     if (p.startsWith("/review") || p.startsWith("/mastery") || p.startsWith("/practice")) return "/review";
     if (
         p.startsWith("/me") || p.startsWith("/tags") || p.startsWith("/stats") ||
-        p.startsWith("/batch") || p.startsWith("/grade") || p.startsWith("/scan")
+        p.startsWith("/batch") || p.startsWith("/grade") || p.startsWith("/scan") ||
+        p.startsWith("/mark-center")
     ) return "/me";
     return "/";
 }

@@ -53,13 +53,14 @@ describe("isShellExempt", () => {
     });
 
     it("主流程页都带壳", () => {
-        const cases = ["/", "/notebooks", "/notebook", "/review", "/mastery", "/tags", "/stats", "/batch", "/me", "/grade"];
+        const cases = ["/", "/notebooks", "/notebook", "/review", "/mastery", "/tags", "/stats", "/batch", "/me", "/grade", "/mark-center"];
         for (const p of cases) expect(isShellExempt(p), p).toBe(false);
     });
 
-    it("前缀边界不误伤（/itemized 不是 /item）", () => {
+    it("前缀边界不误伤（/itemized 不是 /item、/mark-center 不是 /mark）", () => {
         expect(isShellExempt("/itemized")).toBe(false);
         expect(isShellExempt("/practice-log")).toBe(false);
+        expect(isShellExempt("/mark-center")).toBe(false);
     });
 
     it("白名单常量与预期一致", () => {
@@ -85,6 +86,8 @@ describe("activeTabKey", () => {
         expect(activeTabKey("/stats")).toBe("/me");
         expect(activeTabKey("/batch")).toBe("/me");
         expect(activeTabKey("/grade")).toBe("/me");
+        expect(activeTabKey("/mark-center")).toBe("/me");
+        expect(activeTabKey("/scan")).toBe("/me");
     });
 
     it("basePath 不影响命中", () => {

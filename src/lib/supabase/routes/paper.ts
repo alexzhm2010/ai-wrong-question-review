@@ -15,6 +15,16 @@ import { apiError, json, type RouteContext, type RouteHandler } from "../http";
 type Created = { code?: string; paperNo?: string; error?: string };
 type PaperData = { code?: string; items?: any[]; error?: string };
 type SubmitResult = { ok?: boolean; score?: number; correctCount?: number; total?: number; error?: string };
+export type PaperListRow = {
+    code: string;
+    paperNo: string;
+    subjectNames: string;
+    itemCount: number;
+    score: number | null;
+    correctCount: number | null;
+    submittedAt: string | null;
+    createdAt: string;
+};
 
 async function handleCreate(ctx: RouteContext): Promise<Response | null> {
     if (ctx.parts[0] !== "paper" || ctx.parts[1] !== "create") return null;
@@ -89,8 +99,29 @@ async function handleSubmit(ctx: RouteContext): Promise<Response | null> {
     }
 }
 
+/**
+ * 批改中心：列出当前用户生成过的试卷。
+ * 走 paper_list RPC（SECURITY DEFINER，内部按 current_app_user_id 过滤），
+ * 需登录；未登录时 RPC 抛 NOT_LOGGED_IN，转成 401。
+ */
+async function handleList(ctx: RouteContext): Promise<Response | null> {
+    if (ctx.parts[0] !== "paper" || ctx.parts[1] !== "list") return null;
+    if (ctx.method !== "GET") return apiError(405, "Method not allowed");
+
+    try {
+        const res = await rpc<PaperListRow[]>("paper_list");
+        if (!Array.isArray(res)) return apiError(500, "列表格式异常");
+        return json(res);
+    } catch (e: any) {
+        const msg = String(e?.message || e || "");
+        if (msg.includes("NOT_LOGGED_IN")) return apiError(401, "请先登录");
+        return apiError(500, "加载试卷列表失败");
+    }
+}
+
 export const PAPER_HANDLERS: RouteHandler[] = [
     handleCreate,
     handleRead,
     handleSubmit,
+    handleList,
 ];
