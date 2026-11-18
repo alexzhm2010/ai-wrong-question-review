@@ -1,3 +1,5 @@
+import { BASE_PATH } from "@/lib/supabase/config";
+
 /**
  * 页面导航规范（集中定义，避免各页面各自写死返回目标）。
  *
@@ -26,4 +28,22 @@ export function parentOf(path: string): string {
         if (clean.startsWith(key + "/")) return NAV_PARENT[key];
     }
     return "/";
+}
+
+/**
+ * 整页导航（硬跳转）。
+ *
+ * 用于进入 /print-preview 这类「靠 URL query 取数」的页面。静态导出 + App Router
+ * 下用 next/link 客户端导航进来时，Link 的预取缓存可能把带 query 的页面固化成
+ * 空壳（location.search 还没切过去），打印页只读一次 location.search 就拿到空
+ * ids，结果是「继续打印 / 重做错题」点进去一片空白。整页加载能保证渲染时 URL 已就绪。
+ * path 传站内路径（如 /print-preview?ids=...），函数负责补 basePath。
+ */
+export function hardNavHref(path: string): string {
+    return `${BASE_PATH}${path.startsWith("/") ? path : "/" + path}`.replace(/\/+/g, "/");
+}
+
+export function hardNavigate(path: string): void {
+    if (typeof window === "undefined") return;
+    window.location.assign(hardNavHref(path));
 }

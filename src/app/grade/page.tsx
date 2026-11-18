@@ -7,6 +7,7 @@ import { BackButton } from "@/components/ui/back-button";
 import { apiClient } from "@/lib/api-client";
 import { AttemptResult, ErrorItem } from "@/types/api";
 import { imageSrc } from "@/lib/storage";
+import { hardNavigate } from "@/lib/navigation";
 
 const LAST_PRINT_KEY = "wq:last-print";
 const HISTORY_KEY = "wq:grade-history";
@@ -286,12 +287,15 @@ function GradeContent() {
 
                     <div className="space-y-2">
                         {wrongIds.length > 0 && (
-                            <Link
-                                href={`/print-preview?ids=${wrongIds.join(",")}`}
+                            <button
+                                type="button"
+                                onClick={() =>
+                                    hardNavigate(`/print-preview?ids=${encodeURIComponent(wrongIds.join(","))}`)
+                                }
                                 className="block w-full text-center rounded-lg bg-red-600 text-white py-3 text-sm font-semibold"
                             >
                                 重做这 {wrongIds.length} 道错题
-                            </Link>
+                            </button>
                         )}
                         <Link href="/notebooks" className="block w-full text-center rounded-lg bg-slate-900 text-white py-3 text-sm font-semibold">
                             再打印一批

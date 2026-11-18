@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { BackButton } from "@/components/ui/back-button";
 import { apiClient } from "@/lib/api-client";
+import { hardNavigate } from "@/lib/navigation";
 import { ErrorItem, PaginatedResponse } from "@/types/api";
 import {
     BAND_META,
@@ -234,10 +235,13 @@ export default function MasteryPage() {
                         </div>
                         <div className="space-y-2">
                             {tags.slice(0, 8).map((t) => (
-                                <Link
+                                <button
                                     key={t.name}
-                                    href={`/print-preview?tag=${encodeURIComponent(t.name)}`}
-                                    className="block group"
+                                    type="button"
+                                    onClick={() =>
+                                        hardNavigate(`/print-preview?tag=${encodeURIComponent(t.name)}`)
+                                    }
+                                    className="block group w-full text-left"
                                 >
                                     <div className="flex items-center justify-between text-xs mb-1">
                                         <span className="truncate pr-2 group-hover:underline">{t.name}</span>
@@ -262,7 +266,7 @@ export default function MasteryPage() {
                                             }}
                                         />
                                     </div>
-                                </Link>
+                                </button>
                             ))}
                         </div>
                     </div>

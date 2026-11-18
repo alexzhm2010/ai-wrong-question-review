@@ -10,6 +10,7 @@ import { ErrorItem, PaginatedResponse } from "@/types/api";
 import { estimateMinutes, pickReview } from "@/lib/review-plan";
 import { knowledgeNames } from "@/lib/mastery";
 import { imageSrc } from "@/lib/storage";
+import { hardNavigate } from "@/lib/navigation";
 
 const SIZE_KEY = "wq:review-size";
 const PAPER_KEY = "wq:today-paper";
@@ -246,9 +247,15 @@ export default function ReviewPage() {
                 {doneToday && (
                     <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] text-blue-800 flex items-center gap-2">
                         <span>今天已经生成过一份 {doneToday.length} 道的卷子。</span>
-                        <Link href={`/print-preview?ids=${doneToday.join(",")}`} className="underline font-medium">
+                        <button
+                            type="button"
+                            onClick={() =>
+                                hardNavigate(`/print-preview?ids=${encodeURIComponent(doneToday.join(","))}`)
+                            }
+                            className="underline font-medium"
+                        >
                             继续打印那份
-                        </Link>
+                        </button>
                     </div>
                 )}
 
