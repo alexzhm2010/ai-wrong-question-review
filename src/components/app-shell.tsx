@@ -3,7 +3,7 @@
 /**
  * 方案 C 双端外壳：一套页面组件，两套导航壳。
  *
- * 桌面（≥768px）左侧固定侧栏，手机（<768px）底部 4 Tab。
+ * 桌面（≥768px）左侧固定侧栏，手机（<768px）底部 5 Tab（含练习试卷）。
  * 内容页不重复写导航，只在本组件里按断点切换。
  *
  * 静态导出注意：Next 的 usePathname() 在 basePath 下通常不含前缀，但不同
@@ -14,7 +14,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
     Upload, BookOpen, Sparkles, User, Layers, Tags, BarChart3, Activity,
-    ChevronRight, Settings,
+    ChevronRight, Settings, Files,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSession } from "@/lib/supabase/session";
@@ -37,6 +37,7 @@ const MAIN_TABS: NavItem[] = [
     { href: "/", label: "导入", icon: Upload },
     { href: "/notebooks", label: "错题本", icon: BookOpen },
     { href: "/review", label: "复习", icon: Sparkles },
+    { href: "/papers", label: "试卷", icon: Files },
     { href: "/me", label: "我的", icon: User },
 ];
 
@@ -47,6 +48,7 @@ const SIDE_GROUPS: { title: string; items: NavItem[] }[] = [
             { href: "/", label: "导入错题", icon: Upload },
             { href: "/notebooks", label: "错题本", icon: BookOpen, match: ["/notebook"] },
             { href: "/review", label: "今日复习", icon: Sparkles, match: ["/practice"] },
+            { href: "/papers", label: "练习试卷", icon: Files, match: ["/paper-view"] },
             { href: "/mastery", label: "掌握度", icon: Activity },
         ],
     },
@@ -149,7 +151,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             {/* ============ 内容区 ============ */}
             <main className="app-main min-w-0 flex-1">{children}</main>
 
-            {/* ============ 手机底部 4 Tab ============ */}
+            {/* ============ 手机底部 5 Tab ============ */}
             <nav
                 className={cn(
                     "app-shell-nav app-tabbar fixed inset-x-0 bottom-0 z-40 md:hidden",

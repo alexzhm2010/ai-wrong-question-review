@@ -53,14 +53,14 @@ describe("isShellExempt", () => {
     });
 
     it("主流程页都带壳", () => {
-        const cases = ["/", "/notebooks", "/notebook", "/review", "/mastery", "/tags", "/stats", "/batch", "/me", "/grade", "/mark-center"];
+        const cases = ["/", "/notebooks", "/notebook", "/review", "/mastery", "/tags", "/stats", "/batch", "/me", "/grade", "/papers", "/paper-view"];
         for (const p of cases) expect(isShellExempt(p), p).toBe(false);
     });
 
-    it("前缀边界不误伤（/itemized 不是 /item、/mark-center 不是 /mark）", () => {
+    it("前缀边界不误伤（/itemized 不是 /item、/papers 不是 /paper-view 的误判）", () => {
         expect(isShellExempt("/itemized")).toBe(false);
         expect(isShellExempt("/practice-log")).toBe(false);
-        expect(isShellExempt("/mark-center")).toBe(false);
+        expect(isShellExempt("/papers")).toBe(false);
     });
 
     it("白名单常量与预期一致", () => {
@@ -70,11 +70,12 @@ describe("isShellExempt", () => {
 });
 
 describe("activeTabKey", () => {
-    it("4 个主 Tab 各自命中", () => {
+    it("5 个主 Tab 各自命中（含手机端新增的「试卷」Tab）", () => {
         expect(activeTabKey("/")).toBe("/");
         expect(activeTabKey("/notebooks")).toBe("/notebooks");
         expect(activeTabKey("/notebook/add")).toBe("/notebooks");
         expect(activeTabKey("/review")).toBe("/review");
+        expect(activeTabKey("/papers")).toBe("/papers");
         expect(activeTabKey("/me")).toBe("/me");
     });
 
@@ -86,8 +87,9 @@ describe("activeTabKey", () => {
         expect(activeTabKey("/stats")).toBe("/me");
         expect(activeTabKey("/batch")).toBe("/me");
         expect(activeTabKey("/grade")).toBe("/me");
-        expect(activeTabKey("/mark-center")).toBe("/me");
         expect(activeTabKey("/scan")).toBe("/me");
+        expect(activeTabKey("/paper-view")).toBe("/papers");
+        expect(activeTabKey("/paper-view?c=abc")).toBe("/papers");
     });
 
     it("basePath 不影响命中", () => {

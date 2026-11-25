@@ -560,10 +560,13 @@ function PrintPreviewContent() {
                         </p>
                     </div>
                 ) : (
-                    <div className="space-y-8">
+                    <>
                         {paperCode && (
                             <PaperQrCode code={paperCode} paperNo={searchParams?.get("paperNo") || ""} />
                         )}
+                        {/* 卷首条与第一题之间只留一段紧凑间距，不套用题目之间的 space-y-8，
+                            否则第一题被推得很远、纸张上半部分白白浪费 */}
+                        <div className={paperCode ? "mt-4 space-y-8 print:mt-3" : "space-y-8"}>
                         {orderedItems.map((item, index) => {
                             let tags: string[] = [];
                             if (item.tags && item.tags.length > 0) tags = item.tags.map((t) => t.name);
@@ -630,7 +633,8 @@ function PrintPreviewContent() {
                                 </div>
                             );
                         })}
-                    </div>
+                        </div>
+                    </>
                 )}
 
                 {/*
@@ -640,10 +644,13 @@ function PrintPreviewContent() {
                  *   关       → 整块 print:hidden，学生卷只有题目和作答区，答案仅屏幕可见。
                  * 不能在屏幕上用 break-before-page：非分页媒体下部分手机浏览器会把
                  * 整块推到「下一页」，预览里就完全看不到答案了。
-                 * 区块存在与否只由开关决定，绝不依赖某几道题恰好有没有答案文本，
+                 * 区块存在与否只由「附答案/附解析」勾选决定，绝不依赖某几道题恰好有没有
+                 * 答案文本，也不因卷子带二维码凭证（paperCode）而强制隐藏——否则用户明明
+                 * 勾了附答案却看不到，正是曾经的 bug。学生卷不带答案靠默认不勾附答案实现，
+                 * 打印环节再由「打印含答案」开关把关，两层职责分开。
                  * 缺答案的题显示「（暂无答案）」，用户至少能确认这一功能生效。
                  */}
-                {(showAnswers || showAnalysis) && total > 0 && !paperCode && (
+                {(showAnswers || showAnalysis) && total > 0 && (
                     <section
                         className={`mt-10 pt-6 border-t-2 border-dashed ${
                             printWithAnswers ? "print:break-before-page" : "print:hidden"

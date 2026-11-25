@@ -37,16 +37,19 @@ export function isShellExempt(pathname: string | null | undefined): boolean {
     return SHELL_EXEMPT_PREFIXES.some((prefix) => p === prefix || p.startsWith(prefix + "/"));
 }
 
-/** 手机 4 Tab 的选中项（管理类页面归到「我的」） */
+/** 手机 5 Tab 的选中项（管理类页面归到「我的」；批改/归档归到「练习试卷」） */
 export function activeTabKey(pathname: string | null | undefined): string {
     const p = normalizeShellPath(pathname);
     if (p === "/") return "/";
     if (p.startsWith("/notebook")) return "/notebooks";
-    if (p.startsWith("/review") || p.startsWith("/mastery") || p.startsWith("/practice")) return "/review";
+    // 练习试卷（含查看页）单独成 Tab：扫码批卷与归档已合并到这里
+    if (p.startsWith("/papers") || p.startsWith("/paper-view")) return "/papers";
+    if (
+        p.startsWith("/review") || p.startsWith("/mastery") || p.startsWith("/practice")
+    ) return "/review";
     if (
         p.startsWith("/me") || p.startsWith("/tags") || p.startsWith("/stats") ||
-        p.startsWith("/batch") || p.startsWith("/grade") || p.startsWith("/scan") ||
-        p.startsWith("/mark-center")
+        p.startsWith("/batch") || p.startsWith("/grade") || p.startsWith("/scan")
     ) return "/me";
     return "/";
 }

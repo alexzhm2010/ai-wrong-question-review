@@ -107,7 +107,8 @@ export async function loadPublicConfig(): Promise<Record<string, any>> {
   const instances = (cfg.openai?.instances || []).map((i: any) => ({ ...i, apiKey: "********" }));
   return {
     ...cfg,
-    timeouts: { analyze: 180_000, ...(cfg.timeouts || {}) },
+    // analyze 默认超时必须小于平台 150s，否则前端根本等不到自己兜底（旧版 180s 必踩坑）
+    timeouts: { analyze: 140_000, ...(cfg.timeouts || {}) },
     aiProvider: cfg.aiProvider || "openai",
     openai: {
       ...(cfg.openai || {}),

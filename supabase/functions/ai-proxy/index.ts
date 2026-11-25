@@ -10,6 +10,11 @@ import {
 } from "./lib/response-guard.ts";
 import { deriveAnswerFromAnalysis, findConclusionExpr, answersEquivalent, intervals } from "./lib/answer-consistency.ts";
 import { resolveSubject } from "./lib/subject-resolve.ts";
+import {
+    FIRST_TOKEN_TIMEOUT_MS, ANALYZE_HARD_DEADLINE_MS,
+    PRIMARY_DEEP_BUDGET_MS, FALLBACK_FAST_BUDGET_MS,
+    canDegradeToFast, primaryBudgetMs, remainingBudget,
+} from "./analyze-timeout.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -184,9 +189,24 @@ type ChatOptions = {
   reasoningMode?: "deep" | "fast";
   onDelta?: (s: string) => void;
   signal?: AbortSignal;
+  /**
+   * 整体超时（毫秒）：从发起调用到流正常结束的总预算。到点仍未结束则 abort，
+   * 抛 <message>STREAM_TIMEOUT</message> 结构化错误，杜绝无限等待撞平台 150s。
+   */
+  overallTimeoutMs?: number;
+  /**
+   * 首字节超时（毫秒）：连一个有效 delta 都没吐就 abort，
+   * 抛 FIRST_TOKEN_TIMEOUT。用于识别「连上却不吐数据」的挂死上游。
+   */
+  firstTokenTimeoutMs?: number;
   /** 指定调用哪个 provider；省略则用主模型（OPENAI_*） */
   creds?: ChatCreds;
 };
+
+/** 把结构化超时错误码包装成带明确 message 的 Error，便于上层判定降级/兜底 */
+function timeoutError(code: "FIRST_TOKEN_TIMEOUT" | "STREAM_TIMEOUT"): Error {
+    return new Error(code);
+}
 
 async function chat(opts: ChatOptions): Promise<string> {
   const creds = opts.creds ?? { apiKey: API_KEY, baseUrl: BASE_URL, model: MODEL };
@@ -218,48 +238,95 @@ async function chat(opts: ChatOptions): Promise<string> {
   }
   if (opts.stream) body.stream_options = { include_usage: true };
 
-  const res = await fetch(`${creds.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${creds.apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal: opts.signal,
-  });
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`AI_HTTP_${res.status}: ${t.slice(0, 300)}`);
+  // —— 超时护栏：组合「外部取消 + 首字节超时 + 整体超时」到一个 signal ——
+  // 任何一路触发都 abort fetch/reader，把「无限挂起」变成可控的结构化错误。
+  // 这是 11-21 必现 150s 崩溃的核心修复：过去这里没护栏，上游一挂就等平台杀。
+  const guard = new AbortController();
+  let guardReason: "FIRST_TOKEN_TIMEOUT" | "STREAM_TIMEOUT" | "EXTERNAL" | "" = "";
+  const abortWith = (reason: typeof guardReason) => {
+    if (guard.signal.aborted) return;
+    guardReason = reason;
+    guard.abort();
+  };
+  const onExternal = () => abortWith("EXTERNAL");
+  if (opts.signal) {
+    if (opts.signal.aborted) onExternal();
+    else opts.signal.addEventListener("abort", onExternal, { once: true });
   }
-  if (!opts.stream) {
-    const j = await res.json();
-    return j.choices?.[0]?.message?.content || "";
+  let firstTokenTimer: ReturnType<typeof setTimeout> | undefined;
+  let overallTimer: ReturnType<typeof setTimeout> | undefined;
+  let sawFirstToken = false;
+  if (opts.stream && opts.firstTokenTimeoutMs) {
+    firstTokenTimer = setTimeout(() => {
+      if (!sawFirstToken) abortWith("FIRST_TOKEN_TIMEOUT");
+    }, opts.firstTokenTimeoutMs);
   }
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "", full = "";
-  const controller = new AbortController();
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let idx: number;
-    while ((idx = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, idx).trim();
-      buffer = buffer.slice(idx + 1);
-      if (!line.startsWith("data:")) continue;
-      const payload = line.slice(5).trim();
-      if (payload === "[DONE]") continue;
-      try {
-        const j = JSON.parse(payload);
-        const delta = j.choices?.[0]?.delta?.content || "";
-        if (delta) {
-          full += delta;
-          opts.onDelta?.(delta);
-          if (shouldStopGeneration(full)) { controller.abort(); await reader.cancel(); break; }
-        }
-      } catch { /* 忽略非 JSON 心跳 */ }
+  if (opts.overallTimeoutMs) {
+    overallTimer = setTimeout(() => abortWith("STREAM_TIMEOUT"), opts.overallTimeoutMs);
+  }
+
+  const clearTimers = () => {
+    if (firstTokenTimer) clearTimeout(firstTokenTimer);
+    if (overallTimer) clearTimeout(overallTimer);
+    opts.signal?.removeEventListener("abort", onExternal);
+  };
+
+  try {
+    const res = await fetch(`${creds.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${creds.apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: guard.signal,
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(`AI_HTTP_${res.status}: ${t.slice(0, 300)}`);
     }
-    if (controller.signal.aborted) break;
+    if (!opts.stream) {
+      const j = await res.json();
+      return j.choices?.[0]?.message?.content || "";
+    }
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "", full = "";
+    const stopper = new AbortController(); // 仅用于 shouldStopGeneration 提前收束
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx: number;
+      while ((idx = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (payload === "[DONE]") continue;
+        try {
+          const j = JSON.parse(payload);
+          const delta = j.choices?.[0]?.delta?.content || "";
+          if (delta) {
+            if (!sawFirstToken) {
+              sawFirstToken = true;
+              if (firstTokenTimer) clearTimeout(firstTokenTimer); // 首字节到达，取消首字节计时
+            }
+            full += delta;
+            opts.onDelta?.(delta);
+            if (shouldStopGeneration(full)) { stopper.abort(); await reader.cancel(); break; }
+          }
+        } catch { /* 忽略非 JSON 心跳 */ }
+      }
+      if (stopper.signal.aborted || guard.signal.aborted) break;
+    }
+    return full;
+  } catch (e) {
+    // guard 因超时触发 → 转成明确错误码；外部取消则原样抛（保留 abort 语义）
+    if (guardReason === "FIRST_TOKEN_TIMEOUT" || guardReason === "STREAM_TIMEOUT") {
+      throw timeoutError(guardReason);
+    }
+    throw e;
+  } finally {
+    clearTimers();
   }
-  return full;
 }
 
 /**
@@ -297,6 +364,8 @@ async function verifyAnswerViaSubstitution(
     stream: false,
     enableThinking: false,
     reasoningMode,
+    // 二次验算只是「取数可信度」增强，绝不能拖垮整条流：20s 没结果就由上层 fallback。
+    overallTimeoutMs: 20_000,
   });
   const m = text.match(/<verified>\s*([\s\S]*?)\s*<\/verified>/i);
   if (!m) return "";
@@ -472,34 +541,77 @@ Deno.serve(async (req: Request) => {
       language, payload.grade ?? null, subject, options, payload.gradeSemester ?? null,
     );
     const encoder = new TextEncoder();
+    // 请求级硬截止：抢在平台 150s 之前收尾（解析 + 二次验算 + 发 done 都要在里面）。
+    const requestDeadlineAt = Date.now() + ANALYZE_HARD_DEADLINE_MS;
     const stream = new ReadableStream({
       async start(controller) {
+        let closed = false;
         const send = (obj: unknown) => {
+          if (closed) return;
           try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`)); } catch { /* closed */ }
         };
-        // 主模型：流式（保证 UX），逐段转发 delta。
-        const primaryPromise = chat({
+        const close = () => {
+          if (closed) return;
+          closed = true;
+          try { controller.close(); } catch { /* noop */ }
+        };
+        const fail = (e: unknown) => {
+          send({ type: "error", message: e instanceof Error ? e.message : String(e) });
+          close();
+        };
+
+        /** 跑一次主模型；首字节超时 + 整体超时双护栏，确保不会无限挂起 */
+        const runPrimary = (mode: "deep" | "fast", budgetMs: number) => chat({
           systemPrompt, imageBase64, mimeType, stream: true,
           enableThinking: isMath,
           // 豆包/推理模型会把「思考」也计入 completion tokens；给足空间，
           // 避免思考+作答被 8192 截断导致 <analysis>/<final_answer> 标签缺失而报错。
           maxTokens: 16000,
-          reasoningMode,
+          reasoningMode: mode,
+          firstTokenTimeoutMs: Math.min(FIRST_TOKEN_TIMEOUT_MS, budgetMs),
+          overallTimeoutMs: budgetMs,
           onDelta: (d) => send({ type: "delta", content: d }),
         });
+
         let primaryText: string;
+        let usedMode: "deep" | "fast" = reasoningMode;
+        let degraded = false;
         try {
-          primaryText = await primaryPromise;
+          primaryText = await runPrimary(
+            reasoningMode,
+            primaryBudgetMs(reasoningMode, remainingBudget(requestDeadlineAt, Date.now())),
+          );
         } catch (e) {
-          send({ type: "error", message: e instanceof Error ? e.message : String(e) });
-          return;
+          const msg = e instanceof Error ? e.message : String(e);
+          const remaining = remainingBudget(requestDeadlineAt, Date.now());
+          // 深度失败且可重试、预算够 → 同请求内降级快速模式重试一次。
+          // 若深度阶段已经吐过 delta，先发 reset 让前端清空，避免两段内容拼接。
+          if (canDegradeToFast(reasoningMode, msg, remaining)) {
+            console.warn(`[ai-proxy] analyze ${reasoningMode} failed (${msg}), degrade to fast, remaining=${remaining}ms`);
+            send({ type: "reset" });
+            degraded = true;
+            usedMode = "fast";
+            try {
+              primaryText = await runPrimary(
+                "fast",
+                primaryBudgetMs("fast", remainingBudget(requestDeadlineAt, Date.now())),
+              );
+            } catch (e2) {
+              fail(e2); // 兜底也失败：明确报错并关流，绝不等平台杀
+              return;
+            }
+          } else {
+            fail(e); // 不可重试 / 预算不足：立即明确失败，不拖到 150s
+            return;
+          }
         }
+
         try {
           const result = parseResponse(primaryText);
           // —— 参考答案取数可信度：反向代入验算后再决定填入哪个值 ——
           // 不再默认直接采信 <answer_text> 标签；以「正文推理结论」为第一候选，
           // 当其与标签答案不一致时发起独立反向代入验算，由验算结果定夺。
-          const decided = await decideReferenceAnswer(primaryText, result, payload, language, reasoningMode);
+          const decided = await decideReferenceAnswer(primaryText, result, payload, language, usedMode);
           send({
             type: "done",
             result: {
@@ -507,12 +619,14 @@ Deno.serve(async (req: Request) => {
               answerText: decided.answerText,
               answerVerified: decided.verified,
               answerReason: decided.reason,
+              usedMode,
+              degraded,
             },
           });
         } catch (e) {
-          send({ type: "error", message: e instanceof Error ? e.message : String(e) });
+          fail(e);
         } finally {
-          try { controller.close(); } catch { /* noop */ }
+          close();
         }
       },
     });

@@ -24,6 +24,7 @@ import { BatchQuickConfirm } from "@/components/batch-quick-confirm";
 import { openBatch } from "@/lib/batch-nav";
 import { BatchJobList } from "@/components/batch-job-list";
 import { streamAnalyze } from "@/lib/stream-analyze";
+import { clampAnalyzeTimeout, shouldAutoRetryDeep } from "@/lib/analyze-timeout";
 import { confirmQuotaBeforeImport } from "@/lib/quota-guard";
 import { putImage } from "@/lib/storage";
 import { inferSubjectFromName } from "@/lib/knowledge-tags";
@@ -104,8 +105,8 @@ function HomeContent() {
     const activeBatches = useActiveBatches();
     const hasActiveBatchHint = activeBatches.length > 0;
 
-    // Timeout Config
-    const aiTimeout = config?.timeouts?.analyze || 180000;
+    // Timeout Config：钳制到平台 150s 之下，避免旧配置里的 180s 让我们永远等不到兜底
+    const aiTimeout = clampAnalyzeTimeout(config?.timeouts?.analyze);
     const safetyTimeout = aiTimeout + 10000;
 
     useEffect(() => {
@@ -258,6 +259,12 @@ function HomeContent() {
                             setStreamParsed(parsePartialXml(streamRawRef.current));
                         }
                     },
+                    onReset: () => {
+                        // Edge 深度超时降级快速：丢弃已累积文本，避免两段内容拼接
+                        streamRawRef.current = "";
+                        lastFlushRef.current = 0;
+                        setStreamParsed({});
+                    },
                     onDone: (result) => {
                         data = result;
                         setStreamParsed(parsePartialXml(streamRawRef.current));
@@ -272,9 +279,18 @@ function HomeContent() {
                 // 快速模式（关闭思考）偶发漏输出 <question_text> 等必需标签，重跑同样大概率再漏，
                 // 这里直接改用深度思考重试一次，避免用户白等一场还要自己再点一次。
                 const message = String(streamError?.data?.message || streamError?.message || "");
-                const missingTags = message.includes("Missing critical XML tags");
-                if (!missingTags || thinkingMode !== "fast" || controller.signal.aborted) throw streamError;
-                frontendLogger.warn('[HomeAnalyze]', 'Fast mode returned incomplete tags, retrying with deep thinking');
+                const elapsedMs = Date.now() - apiStartTime;
+                // 关键诊断：把错误码 / 模式 / 耗时上报，线上出问题才有据可查
+                // （脱敏由 logger 负责，这里绝不写图片或 base64）。
+                frontendLogger.error('[HomeAnalyze]', 'analyze stream failed', {
+                    errorCode: message, mode: thinkingMode, elapsedMs
+                });
+                // 除漏标签外，流中断/超时类错误（AI_RESPONSE_ERROR / ANALYZE_TIMEOUT 等）
+                // 也值得用深度重试——11-21 必现 150s 崩溃正是漏了这类兜底。
+                if (!shouldAutoRetryDeep(message) || thinkingMode !== "fast" || controller.signal.aborted) throw streamError;
+                frontendLogger.warn('[HomeAnalyze]', 'Fast mode failed, retrying with deep thinking', {
+                    errorCode: message, elapsedMs
+                });
                 toast.info(
                     language === "zh"
                         ? "快速模式输出不完整，已自动改用深度思考重试"

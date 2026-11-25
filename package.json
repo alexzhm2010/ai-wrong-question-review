@@ -1,6 +1,6 @@
 {
   "name": "ai-wrong-question-review",
-  "version": "1.23.3",
+  "version": "1.28.0",
   "private": true,
   "scripts": {
     "dev": "next dev -H 0.0.0.0",

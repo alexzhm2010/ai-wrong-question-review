@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Search, Filter, ChevronDown, Printer, ListChecks, Trash2, X, ImageIcon, Type } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { toast } from "@/lib/toast";
-import { useRouter } from "next/navigation";
 import { ErrorListSkeleton } from "@/components/page-skeleton";
 import {
     DropdownMenu,
@@ -25,6 +24,7 @@ import { DEFAULT_PAGE_SIZE } from "@/lib/constants/pagination";
 import { QuestionCard } from "@/components/question-card";
 import { peekThumb } from "@/lib/image-cache";
 import { PRINT_PAYLOAD_KEY } from "@/lib/print-preview";
+import { createPaperAndPrint } from "@/lib/paper-print";
 import {
     consumeReturnFocus,
     invalidateListSnapshots,
@@ -111,6 +111,8 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
     const [isSelectMode, setIsSelectMode] = useState(false);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [isDeleting, setIsDeleting] = useState(false);
+    /** 出卷并跳打印页中：按钮防重复点 */
+    const [printing, setPrinting] = useState(false);
     // 从详情页返回时，刚点开的那道题要高亮一下，否则用户还得自己再找
     const [focusId, setFocusId] = useState<string | null>(null);
     /**
@@ -129,7 +131,6 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
     const [photosPending, setPhotosPending] = useState(false);
     const photosLoadedRef = useRef(false);
     const { t } = useLanguage();
-    const router = useRouter();
     // 请求并发控制：筛选条件快速变化时只保留最后一次结果
     const requestSeqRef = useRef(0);
     const abortRef = useRef<AbortController | null>(null);
@@ -321,7 +322,7 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
     }, [scope]);
 
     /** 勾了题才算数：没勾就进多选模式并提示，不再默默按筛选打印整库 */
-    const handleExportPrint = () => {
+    const handleExportPrint = async () => {
         if (selectedIds.size === 0) {
             if (!isSelectMode) setIsSelectMode(true);
             toast.info(t.notebook?.pickBeforePrint || "先勾选要打印的题目");
@@ -337,7 +338,20 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
             toast.error("浏览器存储不可用，无法带过去选题");
             return;
         }
-        router.push("/print-preview?src=list");
+        // 和「今日复习」走同一条出卷→打印链路：先出卷拿凭证，卷首才有二维码和试卷编号。
+        // 用选中题的学科名拼科目（跨页选题时 items 可能只含当前页，取不到就用 subjectName prop）。
+        const chosen = items.filter((it) => selectedIds.has(it.id));
+        const names = chosen
+            .map((it) => it.subject?.name || "")
+            .filter(Boolean)
+            .filter((v, i, a) => a.indexOf(v) === i);
+        const subjects = names.length ? names.join("、") : subjectName || "";
+        setPrinting(true);
+        try {
+            await createPaperAndPrint(ids, chosen, subjects);
+        } finally {
+            setPrinting(false);
+        }
     };
 
     /** 本页全选：跨页靠选择集合累积，翻页不会清掉前面选的 */
@@ -682,9 +696,9 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
                 </DropdownMenu>
                 {/* 这三个是「对当前这一页动手」的操作，手机上也排在同一行，别各占一行 */}
                 <div className="flex flex-wrap gap-2">
-                    <Button variant="outline" onClick={handleExportPrint}>
+                    <Button variant="outline" onClick={handleExportPrint} disabled={printing}>
                         <Printer className="mr-2 h-4 w-4" />
-                        {t.notebook?.exportPrint || "导出打印"}
+                        {printing ? "正在出卷…" : (t.notebook?.exportPrint || "导出打印")}
                     </Button>
                     <Button variant={isSelectMode ? "secondary" : "outline"} onClick={toggleSelectMode}>
                         <ListChecks className="mr-2 h-4 w-4" />
@@ -814,10 +828,10 @@ export function ErrorList({ subjectId, subjectName }: ErrorListProps = {}) {
                                 size="sm"
                                 className="flex-1"
                                 onClick={handleExportPrint}
-                                disabled={selectedIds.size === 0}
+                                disabled={selectedIds.size === 0 || printing}
                             >
                                 <Printer className="mr-1.5 h-4 w-4" />
-                                {t.notebook?.exportPrint || "导出打印"}
+                                {printing ? "正在出卷…" : (t.notebook?.exportPrint || "导出打印")}
                             </Button>
                             <Button
                                 variant="destructive"

@@ -34,24 +34,47 @@ export function PaperQrCode({ code, paperNo }: { code: string; paperNo?: string 
 
     if (!code) return null;
 
+    // 卷号给人看用 paperNo（卷号），没有时退回凭证前 12 位
+    const displayNo = paperNo || code.slice(0, 12);
+
     return (
-        <div className="mb-5 flex items-start justify-end gap-3 print:mb-4">
-            <div className="text-right">
-                <div className="text-[11px] font-semibold text-slate-700 print:text-[9pt]">
-                    扫码批改
+        <div
+            className="wq-paper-header relative border-b border-slate-300 pb-2 print:border-b print:border-slate-400 print:pb-2"
+        >
+            {/*
+             * 二维码留在文档流里（flex justify-end）——它比编号区高，由它撑起容器高度，
+             * 「扫码批改」文字下方还有 pb-2 内边距，绝不会压到容器底部的分隔线。
+             * 之前用 absolute 脱离文档流，容器被编号撑矮，文字就溢出压线了。
+             */}
+            <div className="flex justify-end">
+                <div className="flex flex-col items-center">
+                    {svg ? (
+                        <div
+                            className="[&>svg]:h-[68px] [&>svg]:w-[68px] print:[&>svg]:h-[20mm] print:[&>svg]:w-[20mm]"
+                            dangerouslySetInnerHTML={{ __html: svg }}
+                        />
+                    ) : (
+                        <div className="h-[68px] w-[68px] border border-dashed border-slate-300 print:h-[20mm] print:w-[20mm]" />
+                    )}
+                    <div className="mt-0.5 text-[10px] font-medium text-slate-600 print:text-[8pt]">
+                        扫码批改
+                    </div>
                 </div>
-                <div className="text-[10px] text-slate-500 print:text-[8pt]">
-                    做完扫描二维码
+            </div>
+
+            {/* 编号相对整个容器居中（两侧留白避开右侧二维码），高度由二维码块撑起 */}
+            <div className="absolute inset-0 flex items-center justify-center px-20 text-center print:px-24">
+                <div>
+                    <div className="text-[15px] font-bold tracking-wide text-slate-800 print:text-[13pt]">
+                        试卷编号
+                    </div>
+                    <div className="mt-0.5 break-all font-mono text-xl font-bold tracking-wider text-black print:text-[18pt]">
+                        {displayNo}
+                    </div>
+                    <div className="mt-0.5 text-[10px] text-slate-500 print:text-[8pt]">
+                        做完扫描右侧二维码即可批改 · 无需登录
+                    </div>
                 </div>
-                <div className="mt-0.5 font-mono text-[10px] tracking-tight text-slate-500 print:text-[8pt]">
-                    {paperNo || code.slice(0, 12)}
-                </div>
-              {svg && (
-                <div
-                    className="mt-1 [&>svg]:h-[76px] [&>svg]:w-[76px] print:[&>svg]:h-[22mm] print:[&>svg]:w-[22mm]"
-                    dangerouslySetInnerHTML={{ __html: svg }}
-                />
-              )}
             </div>
         </div>
     );

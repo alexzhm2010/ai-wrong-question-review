@@ -30,6 +30,8 @@ import { toast } from "@/lib/toast";
 import { ImageReplaceDialog } from "@/components/image-replace-dialog";
 import { ImageEditor } from "@/components/image-editor";
 import { dropImages, imageSrc, putImage } from "@/lib/storage";
+import { hardNavigate, PAPERS_HOME } from "@/lib/navigation";
+import { isPaperBackPath } from "@/lib/paper-archive";
 
 interface KnowledgeTag {
     id: string;
@@ -98,8 +100,13 @@ export default function ErrorDetailPage() {
     const [showOwnImage, setShowOwnImage] = useState(false);
     const [showFloatingQuestion, setShowFloatingQuestion] = useState(false);
     const questionRef = useRef<HTMLDivElement>(null);
+    /** 从练习试卷的题目点进来时，返回按钮要回到那张卷，而不是错题本列表 */
+    const [fromPaper, setFromPaper] = useState(false);
 
     useEffect(() => {
+        if (typeof window !== "undefined") {
+            setFromPaper(new URLSearchParams(window.location.search).get("from") === "paper");
+        }
         // Fetch user info for education stage
         apiClient.get<UserProfile>("/api/user")
             .then(user => {
@@ -131,6 +138,15 @@ export default function ErrorDetailPage() {
         } catch (error) {
             console.error(error);
             toast.error(t.common?.messages?.loadFailed || 'Failed to load item');
+            // 试卷里的题目若已被删除，回来源试卷；不要无故把人扔到错题本列表
+            if (typeof window !== "undefined") {
+                const q = new URLSearchParams(window.location.search);
+                if (q.get("from") === "paper") {
+                    const back = q.get("back");
+                    hardNavigate(isPaperBackPath(back) ? back! : PAPERS_HOME);
+                    return;
+                }
+            }
             router.push("/notebooks");
         } finally {
             setLoading(false);
@@ -228,6 +244,16 @@ export default function ErrorDetailPage() {
      * 直接打开链接或刷新进来的（没有来源标记）才 push 一个列表地址。
      */
     const goBackToList = () => {
+        // 从试卷题目进来的：按 URL 里的 back 整页跳回来源试卷（精确到哪份卷 / 批改还是查看）。
+        // back 走白名单校验，非法值兜底回练习试卷，绝不跳去错题本列表。
+        if (typeof window !== "undefined") {
+            const q = new URLSearchParams(window.location.search);
+            if (q.get("from") === "paper") {
+                const back = q.get("back");
+                hardNavigate(isPaperBackPath(back) ? back! : PAPERS_HOME);
+                return;
+            }
+        }
         const fallback = item?.subjectId ? `/notebook?id=${item.subjectId}` : "/notebooks";
         const origin = readListOrigin();
         const fromThisList =
@@ -546,10 +572,10 @@ export default function ErrorDetailPage() {
             <div className="container mx-auto p-4 space-y-6 pb-20">
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                     <div className="flex items-center gap-4">
-                        <Button variant="ghost" size="icon" onClick={goBackToList} title="返回错题本">
+                        <Button variant="ghost" size="icon" onClick={goBackToList} title={fromPaper ? "返回试卷" : "返回错题本"}>
                             <ArrowLeft className="w-4 h-4" />
                         </Button>
-                        <h1 className="text-2xl font-bold">{t.detail.title}</h1>
+                        <h1 className="text-2xl font-bold">{fromPaper ? "题目解析" : t.detail.title}</h1>
                     </div>
 
                     <div className="flex gap-2">

@@ -3,22 +3,13 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { BackButton } from "@/components/ui/back-button";
-import { ReferenceAnswer } from "@/components/reference-answer";
+import { PaperQuestionCard, type PaperQuestionItem } from "@/components/paper-question-card";
 import { useRouter } from "next/navigation";
 import { apiClient } from "@/lib/api-client";
-import { imageSrc } from "@/lib/storage";
 import { scoreMood } from "@/lib/paper-score";
-import { MARK_HOME } from "@/lib/navigation";
+import { errorItemDetailHref, isSubmitted } from "@/lib/paper-archive";
+import { PAPERS_HOME } from "@/lib/navigation";
 
-type PaperItem = {
-    errorItemId: string;
-    orderIndex: number;
-    shortCode: string;
-    answer: string;
-    imageUrl: string;
-    questionText: string;
-    verdict: string | null;
-};
 type Paper = {
     code: string;
     paperNo: string;
@@ -27,9 +18,9 @@ type Paper = {
     score: number | null;
     correctCount: number | null;
     submittedAt: string | null;
-    items: PaperItem[];
+    items: PaperQuestionItem[];
 };
-type Verdict = "correct" | "wrong" | "blank";
+type Verdict = "correct" | "wrong" | "blank" | "mastered";
 
 const VERDICTS: { key: Verdict; label: string; active: string }[] = [
     { key: "correct", label: "对", active: "bg-emerald-600 border-emerald-600 text-white" },
@@ -37,13 +28,25 @@ const VERDICTS: { key: Verdict; label: string; active: string }[] = [
     { key: "blank", label: "未做", active: "bg-slate-700 border-slate-700 text-white" },
 ];
 
+/** 完全掌握：等同于「对」，但会手动归档该题，之后不再出现在任何复习卷 */
+const MASTERED: { key: Verdict; label: string; active: string } = {
+    key: "mastered",
+    label: "✓ 完全掌握（不再出现）",
+    active: "bg-violet-600 border-violet-600 text-white",
+};
+
 function MarkContent() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const code = (searchParams.get("c") || "").trim();
+    /** 来源：从「练习试卷」列表点进来时是「看对错」，扫码进来是「新批改」，两者文案不同 */
+    const fromPapers = searchParams.get("from") === "papers";
+    // 批改中心已并入练习试卷，无论扫码还是列表进入，出口一律回练习试卷
+    const backHome = PAPERS_HOME;
+    const backLabel = "返回练习试卷";
 
-    /** 批改流程的统一出口：返回箭头、出错态、结果页都回批改中心 */
-    const backToCenter = () => router.push(MARK_HOME);
+    /** 批改流程的统一出口：返回箭头、出错态、结果页都回练习试卷 */
+    const backToCenter = () => router.push(backHome);
 
     const [paper, setPaper] = useState<Paper | null>(null);
     const [loading, setLoading] = useState(true);
@@ -69,12 +72,14 @@ function MarkContent() {
                 // 若之前提交过，用上次的判定预填，方便二次批改只改错的
                 const prefilled: Record<string, Verdict> = {};
                 for (const it of p.items || []) {
-                    if (it.verdict === "correct" || it.verdict === "wrong" || it.verdict === "blank") {
+                    if (it.verdict === "correct" || it.verdict === "wrong" || it.verdict === "blank" || it.verdict === "mastered") {
                         prefilled[it.errorItemId] = it.verdict as Verdict;
                     }
                 }
                 setChoices(prefilled);
-                if (p.score !== null && p.score !== undefined) {
+                // 从练习试卷进来是「看哪条做错了」，不弹分数层遮挡题目；
+                // 扫码批改进来仍保留原有的已批改结果展示。
+                if (!fromPapers && p.score !== null && p.score !== undefined) {
                     setResult({ score: p.score, correctCount: p.correctCount || 0, total: p.itemCount });
                 }
             })
@@ -93,19 +98,22 @@ function MarkContent() {
         return () => {
             cancelled = true;
         };
-    }, [code]);
+    }, [code, fromPapers]);
 
     const items = paper?.items || [];
     const judgedCount = items.filter((it) => choices[it.errorItemId]).length;
     const allJudged = items.length > 0 && judgedCount === items.length;
+    /** 已批改的卷子判定明细用于计算熟悉度，只读锁定：不可改判、不可再次提交 */
+    const locked = !!paper && isSubmitted(paper);
 
     const pick = (id: string, v: Verdict) => {
+        if (locked) return;
         setSubmitError("");
         setChoices((prev) => ({ ...prev, [id]: v }));
     };
 
     const submit = async () => {
-        if (!allJudged || submitting || !paper) return;
+        if (locked || !allJudged || submitting || !paper) return;
         setSubmitting(true);
         setSubmitError("");
         try {
@@ -146,7 +154,7 @@ function MarkContent() {
                     onClick={backToCenter}
                     className="rounded-lg border bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
                 >
-                    返回批改中心
+                    {backLabel}
                 </button>
             </div>
         );
@@ -161,118 +169,131 @@ function MarkContent() {
             {/* 顶栏 */}
             <div className="sticky top-0 z-20 border-b bg-white/95 backdrop-blur">
                 <div className="max-w-2xl mx-auto px-3 py-2.5 flex items-center gap-2.5">
-                    <BackButton fallbackUrl={MARK_HOME} />
+                    <BackButton fallbackUrl={backHome} />
                     <div className="min-w-0 flex-1">
-                        <div className="text-sm font-bold leading-tight">扫码批改</div>
+                        <div className="text-sm font-bold leading-tight">
+                            {fromPapers ? "试卷批改结果" : "扫码批改"}
+                        </div>
                         <div className="text-[11px] text-muted-foreground leading-tight truncate">
                             卷号 {paper.paperNo || paper.code.slice(0, 12)}
                             {paper.subjectNames ? ` · ${paper.subjectNames}` : ""}
                         </div>
                     </div>
-                    <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
-                        {judgedCount}/{items.length}
+                    <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${
+                        locked ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"
+                    }`}>
+                        {locked ? "已批改 · 只读" : `${judgedCount}/${items.length}`}
                     </span>
                 </div>
             </div>
 
             <div className="max-w-2xl mx-auto px-3 py-4 space-y-3">
                 <div className="rounded-lg border bg-white px-3 py-2 text-[11px] leading-relaxed text-slate-600">
-                    对照纸上的作答，逐题判断<span className="font-semibold">对 / 错 / 未做</span>
-                    ，全部判完点底部提交。结果会自动记入错题本并更新掌握度。
+                    {locked ? (
+                        <>
+                            这张卷<span className="font-semibold">已经批改过了</span>
+                            ，下方是当时的对错判定（绿色为对、红色为错）。
+                            <span className="font-semibold text-emerald-700">批改结果已锁定，不能再修改</span>
+                            ——判定明细已用于更新掌握度。点击任意题目可查看完整解析。
+                        </>
+                    ) : fromPapers ? (
+                        <>
+                            这里是你上次批改的<span className="font-semibold">对错判定</span>
+                            ，绿色为对、红色为错。需要更正可重新点选并提交。
+                        </>
+                    ) : (
+                        <>
+                            对照纸上的作答，逐题判断<span className="font-semibold">对 / 错 / 未做</span>
+                            ，全部判完点底部提交。若某题已彻底掌握，可点
+                            <span className="font-semibold text-violet-700">「完全掌握」</span>
+                            ——等同答对，并手动归档，之后不再出现在复习卷。
+                        </>
+                    )}
                 </div>
 
                 {items.map((it, i) => {
                     const chosen = choices[it.errorItemId];
                     return (
-                        <div key={it.errorItemId} className="rounded-xl border bg-white p-3 space-y-2.5">
-                            <div className="flex items-center gap-2">
-                                <span className="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-bold text-white">
-                                    第 {i + 1} 题
-                                </span>
-                                <span className="font-mono text-[11px] tracking-wide text-slate-500">
-                                    #{it.shortCode || it.errorItemId.slice(-8)}
-                                </span>
-                                {chosen && (
-                                    <span
-                                        className={`ml-auto shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold ${
-                                            chosen === "correct"
-                                                ? "bg-emerald-50 text-emerald-700"
-                                                : chosen === "wrong"
-                                                    ? "bg-rose-50 text-rose-700"
-                                                    : "bg-slate-100 text-slate-600"
-                                        }`}
-                                    >
-                                        {VERDICTS.find((v) => v.key === chosen)?.label}
-                                    </span>
-                                )}
-                            </div>
-
-                            {/* 题目截图 */}
-                            {it.imageUrl ? (
-                                <img
-                                    src={imageSrc(it.imageUrl)}
-                                    alt={`第 ${i + 1} 题`}
-                                    className="w-full rounded border bg-white"
-                                    loading="lazy"
-                                />
-                            ) : it.questionText ? (
-                                <div className="rounded bg-slate-50 p-2 text-xs leading-relaxed whitespace-pre-wrap">
-                                    {it.questionText}
-                                </div>
-                            ) : (
-                                <div className="rounded bg-slate-50 p-3 text-center text-xs text-slate-400">
-                                    该题无截图
-                                </div>
+                        <PaperQuestionCard
+                            key={it.errorItemId}
+                            item={it}
+                            index={i}
+                            verdict={chosen}
+                            detailHref={errorItemDetailHref(
+                                it.errorItemId,
+                                `/mark?c=${encodeURIComponent(code)}${fromPapers ? "&from=papers" : ""}`,
                             )}
-
-                            {/* 标准答案 */}
-                            <div className="rounded-lg bg-amber-50/70 px-2.5 py-2">
-                                <div className="mb-0.5 text-[10px] font-semibold text-amber-700">参考答案</div>
-                                <div className="text-sm text-slate-800">
-                                    <ReferenceAnswer text={it.answer || "（暂无答案）"} />
+                        >
+                            {/* 批改页专属判定按钮（已批改卷禁用）。
+                                「完全掌握」在最前：等同答对，但会手动归档，之后不再出现在复习卷 */}
+                            <div className="space-y-2">
+                                <button
+                                    type="button"
+                                    disabled={locked}
+                                    onClick={() => pick(it.errorItemId, MASTERED.key)}
+                                    title="等同答对，并把这道题标记为已完全掌握、手动归档，之后不再出现在任何复习卷"
+                                    className={`w-full rounded-lg border py-2 text-sm font-semibold transition-colors ${
+                                        chosen === MASTERED.key
+                                            ? MASTERED.active
+                                            : "border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100"
+                                    } ${locked ? "cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent" : ""}`}
+                                >
+                                    {MASTERED.label}
+                                </button>
+                                <div className="grid grid-cols-3 gap-2">
+                                    {VERDICTS.map((v) => (
+                                        <button
+                                            key={v.key}
+                                            type="button"
+                                            disabled={locked}
+                                            onClick={() => pick(it.errorItemId, v.key)}
+                                            className={`rounded-lg border py-2 text-sm font-semibold transition-colors ${
+                                                chosen === v.key
+                                                    ? v.active
+                                                    : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                                            } ${locked ? "cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent" : ""}`}
+                                        >
+                                            {v.label}
+                                        </button>
+                                    ))}
                                 </div>
                             </div>
-
-                            {/* 判定按钮 */}
-                            <div className="grid grid-cols-3 gap-2">
-                                {VERDICTS.map((v) => (
-                                    <button
-                                        key={v.key}
-                                        type="button"
-                                        onClick={() => pick(it.errorItemId, v.key)}
-                                        className={`rounded-lg border py-2 text-sm font-semibold transition-colors ${
-                                            chosen === v.key
-                                                ? v.active
-                                                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                                        }`}
-                                    >
-                                        {v.label}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
+                        </PaperQuestionCard>
                     );
                 })}
 
                 {submitError && <p className="text-xs text-red-600 px-1">{submitError}</p>}
             </div>
 
-            {/* 底部提交栏 */}
-            <div className="fixed bottom-0 left-0 right-0 z-20 border-t bg-white/95 backdrop-blur">
-                <div className="max-w-2xl mx-auto px-3 py-2.5 flex items-center gap-3">
-                    <div className="flex-1 text-xs text-muted-foreground">
-                        已判 {judgedCount}/{items.length}
-                        {allJudged ? " · 可以提交了" : " · 还有题没判"}
+            {/* 底部栏：已批改卷只读，隐去提交按钮，只留返回；未批改卷保留批改提交 */}
+            {locked ? (
+                <div className="fixed bottom-0 left-0 right-0 z-20 border-t bg-white/95 backdrop-blur">
+                    <div className="max-w-2xl mx-auto px-3 py-2.5">
+                        <button
+                            onClick={backToCenter}
+                            className="w-full rounded-lg border border-slate-300 bg-white py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                            {backLabel}
+                        </button>
                     </div>
-                    <button
-                        onClick={submit}
-                        disabled={!allJudged || submitting}
-                        className="rounded-lg bg-slate-900 text-white px-6 py-2.5 text-sm font-semibold disabled:opacity-40"
-                    >
-                        {submitting ? "提交中…" : result ? "重新提交" : "提交批改"}
-                    </button>
                 </div>
-            </div>
+            ) : (
+                <div className="fixed bottom-0 left-0 right-0 z-20 border-t bg-white/95 backdrop-blur">
+                    <div className="max-w-2xl mx-auto px-3 py-2.5 flex items-center gap-3">
+                        <div className="flex-1 text-xs text-muted-foreground">
+                            已判 {judgedCount}/{items.length}
+                            {allJudged ? " · 可以提交了" : " · 还有题没判"}
+                        </div>
+                        <button
+                            onClick={submit}
+                            disabled={!allJudged || submitting}
+                            className="rounded-lg bg-slate-900 text-white px-6 py-2.5 text-sm font-semibold disabled:opacity-40"
+                        >
+                            {submitting ? "提交中…" : result ? "重新提交" : "提交批改"}
+                        </button>
+                    </div>
+                </div>
+            )}
 
             {/* 结果弹层：分数 + 评语 + 轻量撒花 */}
             {result && mood && (
@@ -280,6 +301,8 @@ function MarkContent() {
                     score={result.score}
                     correctCount={result.correctCount}
                     total={result.total}
+                    backLabel={backLabel}
+                    stayLabel={locked ? "留在本页查看试卷" : "留在本页重新批改"}
                     onBack={backToCenter}
                     onStay={() => setResult(null)}
                 />
@@ -292,12 +315,16 @@ function ResultOverlay({
     score,
     correctCount,
     total,
+    backLabel,
+    stayLabel = "留在本页重新批改",
     onBack,
     onStay,
 }: {
     score: number;
     correctCount: number;
     total: number;
+    backLabel: string;
+    stayLabel?: string;
     onBack: () => void;
     onStay: () => void;
 }) {
@@ -344,13 +371,13 @@ function ResultOverlay({
                     onClick={onBack}
                     className="mt-5 w-full rounded-lg bg-slate-900 py-2.5 text-sm font-semibold text-white"
                 >
-                    返回批改中心
+                    {backLabel}
                 </button>
                 <button
                     onClick={onStay}
                     className="mt-2 w-full py-1.5 text-xs text-slate-500 hover:text-slate-700"
                 >
-                    留在本页重新批改
+                    {stayLabel}
                 </button>
             </div>
         </div>

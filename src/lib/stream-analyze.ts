@@ -1,6 +1,7 @@
 // 前端流式消费 /api/analyze 的 SSE 响应。
 // 后端逐段推送 {type:'delta',content} / {type:'done',result} / {type:'error',message}。
 import type { ParsedQuestion } from "@/lib/ai/types";
+import { CLIENT_ANALYZE_TIMEOUT_MS } from "@/lib/analyze-timeout";
 
 export interface StreamAnalyzeOptions {
     imageBase64: string;
@@ -8,17 +9,19 @@ export interface StreamAnalyzeOptions {
     subjectId?: string;
     /** 本题的思考深度：deep=深度思考（默认），fast=关闭思考 */
     reasoningMode?: "deep" | "fast";
-    /** 超时（毫秒），默认 180000 */
+    /** 超时（毫秒），默认 140000（必须小于平台 150s，留出兜底重试衔接时间） */
     timeout?: number;
     /** 外部取消信号（如用户点击取消） */
     signal?: AbortSignal;
     onDelta: (text: string) => void;
+    /** Edge 端降级前发 reset，要求前端丢弃已累积的流式文本，避免两段内容拼接 */
+    onReset?: () => void;
     onDone: (result: ParsedQuestion) => void;
     onError: (message: string) => void;
 }
 
 interface SSEPayload {
-    type: "delta" | "done" | "error";
+    type: "delta" | "reset" | "done" | "error";
     content?: string;
     result?: ParsedQuestion;
     message?: string;
@@ -34,9 +37,10 @@ export async function streamAnalyze(opts: StreamAnalyzeOptions): Promise<void> {
         language,
         subjectId,
         reasoningMode,
-        timeout = 180000,
+        timeout = CLIENT_ANALYZE_TIMEOUT_MS,
         signal,
         onDelta,
+        onReset,
         onDone,
         onError,
     } = opts;
@@ -102,6 +106,9 @@ export async function streamAnalyze(opts: StreamAnalyzeOptions): Promise<void> {
                 }
                 if (payload.type === "delta" && payload.content) {
                     onDelta(payload.content);
+                } else if (payload.type === "reset") {
+                    // Edge 端深度超时降级快速前发来：丢弃已累积文本，避免拼接
+                    onReset?.();
                 } else if (payload.type === "done" && payload.result) {
                     completed = true;
                     onDone(payload.result);
@@ -130,8 +137,14 @@ export async function streamAnalyze(opts: StreamAnalyzeOptions): Promise<void> {
         }
     } catch (error) {
         if (controller.signal.aborted && !completed) {
-            // 被取消（用户主动或超时），原样抛出，由调用方按取消处理
-            throw error;
+            // 区分「外部主动取消」与「前端自身超时」：
+            // 外部 signal.aborted（用户点取消）原样抛；否则是 timeout 触发，归一成
+            // ANALYZE_TIMEOUT，让上层 fast→deep 兜底能识别并自动重试。
+            const externallyAborted = signal?.aborted === true;
+            if (externallyAborted) throw error;
+            const err: any = new Error("Analysis timed out");
+            err.data = { message: "ANALYZE_TIMEOUT" };
+            throw err;
         }
         throw error;
     } finally {

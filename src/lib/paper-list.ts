@@ -1,5 +1,5 @@
 /**
- * 批改中心列表的展示逻辑（纯函数，便于回归测试）。
+ * 试卷列表的展示逻辑（纯函数，便于回归测试）。
  * 只负责把试卷摘要翻译成状态文案/配色，以及拼进入批改页的地址。
  */
 import type { PaperListRow } from "@/lib/supabase/routes/paper";

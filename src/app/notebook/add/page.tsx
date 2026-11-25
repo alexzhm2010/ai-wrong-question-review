@@ -23,6 +23,7 @@ import { frontendLogger } from "@/lib/frontend-logger";
 import { toast } from "@/lib/toast";
 import { TextInputZone } from "@/components/text-input-zone";
 import { streamAnalyze } from "@/lib/stream-analyze";
+import { clampAnalyzeTimeout } from "@/lib/analyze-timeout";
 import { confirmQuotaBeforeImport } from "@/lib/quota-guard";
 
 export default function AddErrorPage() {
@@ -56,8 +57,8 @@ export default function AddErrorPage() {
     // 编辑器状态：选中图后先进编辑器（裁剪/抹除/搬移），完成才送去解析
     const [editingImage, setEditingImage] = useState<string | null>(null);
 
-    // Timeout Config
-    const aiTimeout = config?.timeouts?.analyze || 180000;
+    // Timeout Config：钳制到平台 150s 之下
+    const aiTimeout = clampAnalyzeTimeout(config?.timeouts?.analyze);
     const safetyTimeout = aiTimeout + 10000;
 
     useEffect(() => {
@@ -224,6 +225,11 @@ export default function AddErrorPage() {
                         lastFlushRef.current = now;
                         setStreamParsed(parsePartialXml(streamRawRef.current));
                     }
+                },
+                onReset: () => {
+                    streamRawRef.current = "";
+                    lastFlushRef.current = 0;
+                    setStreamParsed({});
                 },
                 onDone: (result) => {
                     data = result;

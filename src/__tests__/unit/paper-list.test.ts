@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { paperStatus, markHref, formatPaperTime, parseScannedCode } from "@/lib/paper-list";
 
-describe("paperStatus：批改中心试卷状态", () => {
+describe("paperStatus：试卷列表状态", () => {
     it("未提交 → 待批改", () => {
         expect(paperStatus({ score: null, correctCount: null, itemCount: 12 })).toEqual({
             label: "待批改",

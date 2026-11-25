@@ -2,19 +2,58 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { BackButton } from "@/components/ui/back-button";
 import { AutoCropImage } from "@/components/auto-crop-image";
 import { apiClient } from "@/lib/api-client";
 import { ErrorItem, PaginatedResponse } from "@/types/api";
-import { estimateMinutes, pickReview } from "@/lib/review-plan";
+import { estimateMinutes, pickReview, isWrongRedoCoolingDown, isCorrectRedoCoolingDown } from "@/lib/review-plan";
 import { knowledgeNames } from "@/lib/mastery";
 import { imageSrc } from "@/lib/storage";
-import { hardNavigate } from "@/lib/navigation";
+import { hardNavigate, printPreviewHref } from "@/lib/navigation";
+import { createPaper } from "@/lib/paper-print";
 
 const SIZE_KEY = "wq:review-size";
 const PAPER_KEY = "wq:today-paper";
 const SUBJECT_KEY = "wq:review-subjects";
+/** 安排日志：题 id → 最近一次被排进今日卷的时间戳（毫秒）。用于避免刚出过卷的题连日出现 */
+const SCHEDULE_KEY = "wq:review-schedule";
+
+/** 读安排日志；缺失/老数据/损坏都退化为空 map，不影响挑题 */
+export function readScheduleMap(raw: string | null): Map<string, number> {
+    const map = new Map<string, number>();
+    if (!raw) return map;
+    try {
+        const obj = JSON.parse(raw);
+        if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+            for (const [k, v] of Object.entries(obj)) {
+                if (typeof v === "number" && Number.isFinite(v)) map.set(k, v);
+            }
+        }
+    } catch {
+        /* 忽略坏数据 */
+    }
+    return map;
+}
+
+/** 出卷后把这一批 id 的安排时间刷新到 now；返回新的 map（不可变，便于 setState） */
+export function markScheduled(prev: Map<string, number>, ids: string[], at: number): Map<string, number> {
+    const next = new Map(prev);
+    for (const id of ids) next.set(id, at);
+    return next;
+}
+
+/**
+ * 今天生成的那份卷子，连同二维码凭证一起存本地。
+ * code/paperNo 是扫码批改的凭证：出卷时写库生成，之后「继续打印那份」要原样带回到
+ * 打印页 URL，卷首二维码才会渲染。老数据可能没有 code（数组或对象缺字段），要兼容。
+ */
+type TodayPaper = {
+    date: string;
+    ids: string[];
+    code?: string;
+    paperNo?: string;
+    at?: number;
+};
 
 const SIZES = [6, 12, 20];
 
@@ -32,16 +71,39 @@ function todayKey(): string {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+/**
+ * 分页拉全量错题，供今日卷挑题用。
+ * 后端单页上限 1000 条；以前只取第一页，题库超过 1000 道时后面入库的题
+ * 永远进不了候选池。这里先取第一页拿到 totalPages，再并发补齐其余页。
+ * getPage 注入以便单测。
+ */
+export async function loadAllErrorItems(
+    getPage: (page: number) => Promise<PaginatedResponse<ErrorItem>>,
+): Promise<ErrorItem[]> {
+    const first = await getPage(1);
+    const all: ErrorItem[] = [...(first.items || [])];
+    const totalPages = Math.max(1, first.totalPages || 1);
+    if (totalPages > 1) {
+        const rest = await Promise.all(
+            Array.from({ length: totalPages - 1 }, (_, i) => getPage(i + 2)),
+        );
+        for (const res of rest) all.push(...(res.items || []));
+    }
+    return all;
+}
+
 
 export default function ReviewPage() {
-    const router = useRouter();
     const [items, setItems] = useState<ErrorItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
     const [size, setSize] = useState(12);
     const [seed, setSeed] = useState(0);
-    const [doneToday, setDoneToday] = useState<string[] | null>(null);
+    const [doneToday, setDoneToday] = useState<TodayPaper | null>(null);
     const [generating, setGenerating] = useState(false);
+    const [reprinting, setReprinting] = useState(false);
+    // 安排日志：题 id → 最近被排进卷的时间。用于让刚出过卷、还没批改的题连日不出现
+    const [scheduleMap, setScheduleMap] = useState<Map<string, number>>(new Map());
     // null = 还没从存储里恢复（此时等价于全选）；[] = 用户主动清空
     const [selectedSubjects, setSelectedSubjects] = useState<string[] | null>(null);
 
@@ -49,8 +111,18 @@ export default function ReviewPage() {
         try {
             const s = Number(localStorage.getItem(SIZE_KEY));
             if (SIZES.includes(s)) setSize(s);
+            setScheduleMap(readScheduleMap(localStorage.getItem(SCHEDULE_KEY)));
             const paper = JSON.parse(localStorage.getItem(PAPER_KEY) || "null");
-            if (paper?.date === todayKey() && Array.isArray(paper.ids)) setDoneToday(paper.ids);
+            if (paper?.date === todayKey() && Array.isArray(paper.ids)) {
+                // 老版本只存了 {date, ids, at}，没有 code；读进来后用 ids 兜底显示
+                setDoneToday({
+                    date: paper.date,
+                    ids: paper.ids,
+                    code: typeof paper.code === "string" ? paper.code : "",
+                    paperNo: typeof paper.paperNo === "string" ? paper.paperNo : "",
+                    at: paper.at,
+                });
+            }
         } catch {
             /* 隐私模式读不到就用默认 */
         }
@@ -59,10 +131,12 @@ export default function ReviewPage() {
     useEffect(() => {
         (async () => {
             try {
-                const res = await apiClient.get<PaginatedResponse<ErrorItem>>(
-                    "/api/error-items/list?pageSize=1000",
+                const all = await loadAllErrorItems((page) =>
+                    apiClient.get<PaginatedResponse<ErrorItem>>(
+                        `/api/error-items/list?page=${page}&pageSize=1000`,
+                    ),
                 );
-                setItems(res.items || []);
+                setItems(all);
             } catch {
                 setError("读取错题失败，请检查网络后重试");
             } finally {
@@ -106,8 +180,8 @@ export default function ReviewPage() {
     }, [items, selectedSubjects]);
 
     const picks = useMemo(
-        () => pickReview<ErrorItem>(filteredItems, size, { seed }),
-        [filteredItems, size, seed],
+        () => pickReview<ErrorItem>(filteredItems, size, { seed, scheduledAt: scheduleMap }),
+        [filteredItems, size, seed, scheduleMap],
     );
 
     /** 缩略图：按 8 张一片补，加载失败就留文字版，不影响挑题 */
@@ -171,38 +245,69 @@ export default function ReviewPage() {
         const ids = picks.map((p) => p.item.id);
         if (!ids.length) return;
         setGenerating(true);
+
+        // 把题目快照写库，换一个凭证 code 供卷面二维码扫码批改。
+        // 与错题本「导出打印」共用同一套出卷逻辑，保证两条路的打印页一致。
+        const subjectNames = picks.map((p) => subjectNameOf(p.item)).filter((v, i, a) => a.indexOf(v) === i).join("、");
+        const { code, paperNo } = await createPaper(ids, picks.map((p) => p.item), subjectNames);
+
+        // 凭证和题目一起存：之后「继续打印那份」要靠它把二维码带回卷首。
+        const at = Date.now();
         try {
-            const payload = JSON.stringify({ date: todayKey(), ids, at: Date.now() });
-            localStorage.setItem(PAPER_KEY, payload);
-            localStorage.setItem("wq:last-print", JSON.stringify({ ids, at: Date.now() }));
+            const payload: TodayPaper = { date: todayKey(), ids, code, paperNo, at };
+            localStorage.setItem(PAPER_KEY, JSON.stringify(payload));
+            localStorage.setItem("wq:last-print", JSON.stringify({ ids, at }));
         } catch {
             /* 写不进也能继续，打印页只是需要重新选 */
         }
 
-        // 把题目快照写库，换一个凭证 code 供卷面二维码扫码批改。
-        // 失败不阻断打印：老用户仍可打印卷子，只是这次没有二维码。
-        let code = "";
-        let paperNo = "";
+        // 记下这批题的安排时间：批改后 lastAttemptAt 会被刷新到更晚，pending 自动解除；
+        // 没批改的话，这批题下次挑题会被压到最后兜底，不会连日霸占推荐。
+        const nextSchedule = markScheduled(scheduleMap, ids, at);
+        setScheduleMap(nextSchedule);
         try {
-            const res = await apiClient.post<{ code: string; paperNo: string }>("/api/paper/create", {
-                subjectNames: picks.map((p) => subjectNameOf(p.item)).filter((v, i, a) => a.indexOf(v) === i).join("、"),
-                items: ids.map((id, i) => ({
-                    id,
-                    orderIndex: i,
-                    shortCode: picks[i].item.shortCode || "",
-                })),
-            });
-            code = res?.code || "";
-            paperNo = res?.paperNo || "";
+            localStorage.setItem(SCHEDULE_KEY, JSON.stringify(Object.fromEntries(nextSchedule)));
         } catch {
-            /* 出卷失败降级为无二维码打印 */
+            /* 存不下只是失去「不连日出现」的优化，不影响出卷 */
         }
 
-        const paperParams = code
-            ? `&paper=${encodeURIComponent(code)}&paperNo=${encodeURIComponent(paperNo)}`
-            : "";
-        const q = ids.length ? `?ids=${ids.join(",")}${paperParams}` : "";
-        router.push(`/print-preview${q}`);
+        // 整页导航：静态导出下客户端导航进打印页会丢 query，连带 paper 凭证一起丢，
+        // 二维码就没了。hardNavigate 保证渲染时 URL 已经就绪。
+        hardNavigate(printPreviewHref(ids, code, paperNo));
+    };
+
+    /**
+     * 「继续打印那份」：优先用出卷时存的凭证直接跳；老数据没存凭证（code 为空）时，
+     * 现场按同一批 ids 补出一次卷拿到新凭证，保证重新打印的卷子卷首也有二维码。
+     * 补出卷失败仍照常打印（无二维码），不阻断用户。
+     */
+    const reprintToday = async () => {
+        if (!doneToday || !doneToday.ids.length) return;
+        const ids = doneToday.ids;
+        let code = doneToday.code || "";
+        let paperNo = doneToday.paperNo || "";
+        if (!code) {
+            setReprinting(true);
+            try {
+                const made = await createPaper(ids, [], "");
+                code = made.code;
+                paperNo = made.paperNo;
+            } finally {
+                setReprinting(false);
+            }
+            // 把补出来的凭证写回本地，下次继续打印就不用再出卷
+            if (code) {
+                try {
+                    localStorage.setItem(
+                        PAPER_KEY,
+                        JSON.stringify({ ...doneToday, code, paperNo, at: Date.now() }),
+                    );
+                } catch {
+                    /* 忽略 */
+                }
+            }
+        }
+        hardNavigate(printPreviewHref(ids, code, paperNo));
     };
 
     if (loading) {
@@ -218,6 +323,9 @@ export default function ReviewPage() {
     const hasAttempts = filteredItems.some(
         (i) => (Number(i.wrongCount) || 0) + (Number(i.correctCount) || 0) > 0,
     );
+    // 处于冷却期的题——用于解释「为什么今天题变少/空了」
+    const coolingDownCount = filteredItems.filter((i) => isWrongRedoCoolingDown(i)).length;
+    const correctCoolingCount = filteredItems.filter((i) => isCorrectRedoCoolingDown(i)).length;
 
     return (
         <div className="min-h-screen pb-28">
@@ -227,7 +335,7 @@ export default function ReviewPage() {
                     <div className="flex-1 min-w-0">
                         <h1 className="text-base sm:text-lg font-bold leading-tight">今日复习卷</h1>
                         <p className="text-[11px] text-muted-foreground">
-                            {picks.length} 道 · 约 {minutes} 分钟 · 按「错得多、放得久」挑的
+                            {picks.length} 道 · 约 {minutes} 分钟 · 新题与错题优先 · 做错隔一周、做对隔两周以上
                         </p>
                     </div>
                     <button
@@ -246,15 +354,14 @@ export default function ReviewPage() {
 
                 {doneToday && (
                     <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] text-blue-800 flex items-center gap-2">
-                        <span>今天已经生成过一份 {doneToday.length} 道的卷子。</span>
+                        <span>今天已经生成过一份 {doneToday.ids.length} 道的卷子。</span>
                         <button
                             type="button"
-                            onClick={() =>
-                                hardNavigate(`/print-preview?ids=${encodeURIComponent(doneToday.join(","))}`)
-                            }
-                            className="underline font-medium"
+                            onClick={reprintToday}
+                            disabled={reprinting}
+                            className="underline font-medium disabled:opacity-60"
                         >
-                            继续打印那份
+                            {reprinting ? "正在补卷…" : "继续打印那份"}
                         </button>
                     </div>
                 )}
@@ -331,12 +438,23 @@ export default function ReviewPage() {
                                 </button>
                             </>
                         ) : filteredItems.length > 0 ? (
-                            <>
-                                <p className="text-sm text-foreground/80">这些科目的题都连续答对 2 次，暂时不用练了</p>
-                                <p className="mt-2 text-[11px] text-muted-foreground">
-                                    想再练某道题，去错题详情把它标回“未掌握”即可；答错后也会自动重新加入。
-                                </p>
-                            </>
+                            coolingDownCount > 0 || correctCoolingCount > 0 ? (
+                                <>
+                                    <p className="text-sm text-foreground/80">今天没有安排新的复习题</p>
+                                    <p className="mt-2 text-[11px] text-muted-foreground">
+                                        {coolingDownCount > 0 && <>有 {coolingDownCount} 道上次做错的题，按「隔一周再重做」的规则还没到期；</>}
+                                        {correctCoolingCount > 0 && <>另有 {correctCoolingCount} 道上次做对的题，按「隔两周以上再巩固」的规则还在冷却。</>}
+                                        到期后会自动安排进来。
+                                    </p>
+                                </>
+                            ) : (
+                                <>
+                                    <p className="text-sm text-foreground/80">这些科目的题都连续答对 2 次，暂时不用练了</p>
+                                    <p className="mt-2 text-[11px] text-muted-foreground">
+                                        想再练某道题，去错题详情把它标回“未掌握”即可；答错后也会自动重新加入。
+                                    </p>
+                                </>
+                            )
                         ) : (
                             <>
                                 <p className="text-sm text-foreground/80">这些科目里还没有可复习的题</p>
