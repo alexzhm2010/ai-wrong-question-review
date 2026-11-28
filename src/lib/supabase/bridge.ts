@@ -10,7 +10,11 @@ import { BASE_PATH } from "./config";
 import { ApiBridgeError, getSession } from "./core";
 import { apiError, json, type RouteContext } from "./http";
 import { ROUTE_HANDLERS } from "./routes";
-import { handleAiRoute } from "./routes/ai";
+import { EDGE_ACTIONS, handleAiRoute } from "./routes/ai";
+
+// AI 端点白名单从路由表派生：新增 action 时只要在 EDGE_ACTIONS 登记即可生效，
+// 不会再出现「routes/ai.ts 有映射、bridge 却漏登记」导致请求被当成 stub 空响应的事故。
+const AI_EDGE_ROOTS = new Set(Object.keys(EDGE_ACTIONS).map((p) => p.split("/")[2]));
 import { handleAuthRoute } from "./routes/auth";
 
 /** 无需登录即可访问的根路径（与旧版 middleware 的 PUBLIC_API_PREFIXES 对齐） */
@@ -73,12 +77,8 @@ export async function handleApi(pathname: string, init?: RequestInit): Promise<R
     if (result) return result;
   }
 
-  // AI 类端点统一走 Edge Function
-  if (
-    root === "ai" ||
-    root === "ai-quota" ||
-    ["analyze", "reanswer", "geogebra-analyze", "geogebra_analyze", "grade-page"].includes(root)
-  ) {
+  // AI 类端点统一走 Edge Function（白名单自动派生，含 knowledge-detail）
+  if (root === "ai" || root === "ai-quota" || AI_EDGE_ROOTS.has(root)) {
     return handleAiRoute(ctx);
   }
 

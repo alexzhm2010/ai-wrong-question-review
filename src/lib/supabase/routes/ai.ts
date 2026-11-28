@@ -3,7 +3,9 @@ import { aiEdge, nowIso, requireAdmin, restJson, quotaSyncEdge } from "../core";
 import { apiError, json, type RouteContext } from "../http";
 import { buildQuotaView, DEFAULT_QUOTA_SETTINGS, toNumber } from "../../quota-view";
 
-const EDGE_ACTIONS: Record<string, string> = {
+// 导出给 fetch 桥接层用于判定哪些 /api/* 路径要转发到 Edge，
+// 避免两处各维护一份白名单、新增 action 时漏登记而被当成 stub 空响应。
+export const EDGE_ACTIONS: Record<string, string> = {
   "/api/analyze": "analyze",
   "/api/reanswer": "reanswer",
   "/api/geogebra-analyze": "geogebra_analyze",

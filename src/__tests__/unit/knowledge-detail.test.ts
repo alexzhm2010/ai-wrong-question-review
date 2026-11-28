@@ -3,9 +3,17 @@
  * 覆盖：数据库列 / 两套 prompt 标签 / 守卫标签表 / 流式解析 /
  *       Edge 解析写回 / 批量链路 / 前端录入与详情页 / 旧题补生成入口。
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { handleApi } from "@/lib/supabase/bridge";
+import { setSession } from "@/lib/supabase/core";
+
+// 只替换 aiEdge 以观察转发目标；其余 core 行为保持真实。
+vi.mock("@/lib/supabase/core", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("@/lib/supabase/core")>();
+    return { ...actual, aiEdge: vi.fn() };
+});
 
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf-8");
 
@@ -115,5 +123,44 @@ describe("必备知识点精讲 - 前端页面", () => {
     it("前端 AI 路由登记了 knowledge-detail 端点", () => {
         const ai = read("src/lib/supabase/routes/ai.ts");
         expect(ai).toContain('"/api/knowledge-detail": "knowledge_detail"');
+    });
+});
+
+describe("必备知识点精讲 - 桥接层真的转发到 Edge（回归）", () => {
+    it("/api/knowledge-detail 被转发为 knowledge_detail action，而不是 stub 空响应", async () => {
+        setSession({
+            access_token: "t", refresh_token: "r", expires_at: Date.now() + 3_600_000,
+            token_type: "bearer", user: { id: "u1", email: "a@b.test", role: "admin" },
+        });
+        const { aiEdge } = await import("@/lib/supabase/core");
+        const mocked = vi.mocked(aiEdge);
+        mocked.mockResolvedValue(new Response(
+            JSON.stringify({ knowledgeDetail: "精讲正文" }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+        ) as any);
+
+        const res = await handleApi("/api/knowledge-detail", {
+            method: "POST",
+            body: JSON.stringify({ questionText: "题干", answerText: "答案" }),
+        });
+
+        expect(mocked).toHaveBeenCalledWith(
+            "knowledge_detail",
+            expect.objectContaining({ questionText: "题干" }),
+            undefined,
+        );
+        expect((await res.json()).knowledgeDetail).toBe("精讲正文");
+        mocked.mockClear();
+    });
+
+    it("桥接层白名单从 EDGE_ACTIONS 派生，不再手工维护会漏项的列表", () => {
+        const bridge = read("src/lib/supabase/bridge.ts");
+        const ai = read("src/lib/supabase/routes/ai.ts");
+        expect(bridge).toContain("import { EDGE_ACTIONS, handleAiRoute }");
+        expect(bridge).toContain("AI_EDGE_ROOTS.has(root)");
+        expect(ai).toContain("export const EDGE_ACTIONS");
+        // 从路由表算出的 root 必须含 knowledge-detail，保证上一条行为测试成立
+        const keys = Array.from(ai.matchAll(/"\/api\/([a-z-]+)":/g), (m) => m[1]);
+        expect(new Set(keys).has("knowledge-detail")).toBe(true);
     });
 });
