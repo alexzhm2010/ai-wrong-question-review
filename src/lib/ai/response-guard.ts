@@ -13,6 +13,7 @@ import { normalizeMistakeStatus, type MistakeStatus } from '../mistake-status';
 export const AI_TAG_NAMES = [
     'subject',
     'knowledge_points',
+    'knowledge_detail',
     'requires_image',
     'question_text',
     'answer_text',

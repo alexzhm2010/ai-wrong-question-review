@@ -22,6 +22,8 @@ export interface ParsedQuestion {
     mistakeStatus?: MistakeStatus;
     subject: SubjectName;
     knowledgePoints: string[];
+    /** 必备知识点精讲：一段把解题所需知识讲透的详细讲解，学生看完即可掌握 */
+    knowledgeDetail?: string;
     requiresImage?: boolean;
 }
 
@@ -34,6 +36,8 @@ export interface ReanswerQuestionResult {
     answerText: string;
     analysis: string;
     knowledgePoints: string[];
+    /** 必备知识点精讲：重新解题时一并重算 */
+    knowledgeDetail?: string;
     wrongAnswerText: string;
     mistakeAnalysis: string;
     mistakeStatus: MistakeStatus;

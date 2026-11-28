@@ -59,6 +59,8 @@ export interface ErrorItem {
     mistakeAnalysis?: string | null;
     mistakeStatus?: 'not_attempted' | 'wrong_attempt' | 'unknown' | string | null;
     knowledgePoints?: string | null;
+    /** 必备知识点精讲：AI 生成、可人工编辑的详细讲解，旧题可为 null */
+    knowledgeDetail?: string | null;
 
     source?: string | null;
     errorType?: string | null;

@@ -10,6 +10,7 @@ import { AI_TAG_NAMES, containsMetaTalk, sanitizeBodyText, stripLeakedTags } fro
 export interface PartialParsed {
     subject?: string;
     knowledgePoints?: string[];
+    knowledgeDetail?: string;
     requiresImage?: boolean;
     questionText?: string;
     answerText?: string;
@@ -72,6 +73,9 @@ export function parsePartialXml(text: string): PartialParsed {
             .filter(Boolean);
     }
 
+    const knowledgeDetail = extractPartial(text, "knowledge_detail");
+    if (knowledgeDetail !== undefined) result.knowledgeDetail = knowledgeDetail;
+
     const requiresImage = extractPartial(text, "requires_image");
     if (requiresImage !== undefined) {
         result.requiresImage = requiresImage.trim().toLowerCase().startsWith("true");
@@ -104,6 +108,7 @@ export function hasPartialContent(data: PartialParsed): boolean {
         data.questionText ||
         data.answerText ||
         data.analysis ||
+        data.knowledgeDetail ||
         data.mistakeAnalysis ||
         data.wrongAnswerText
     );

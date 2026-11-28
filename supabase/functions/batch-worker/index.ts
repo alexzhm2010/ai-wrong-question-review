@@ -143,6 +143,8 @@ function parseAnalyzeResponse(text: string) {
   const knowledgePoints = pointsRaw
     ? pointsRaw.split(/[,，\n]/).map((k) => k.trim()).filter(Boolean).slice(0, 5)
     : [];
+  const detailRaw = extractTag(text, "knowledge_detail");
+  const knowledgeDetail = detailRaw ? sanitizeBodyText(detailRaw) : "";
   const subjectInfo = resolveSubject(
     extractTag(text, "subject") || "", questionText, analysis, knowledgePoints,
   );
@@ -155,6 +157,7 @@ function parseAnalyzeResponse(text: string) {
     mistakeStatus: mistake.mistakeStatus,
     subject: subjectInfo.subject,
     knowledgePoints,
+    knowledgeDetail,
     answerConflict: derived.conflict === true,
     originalAnswerText: derived.originalAnswerText || null,
   }, true);
@@ -466,6 +469,7 @@ async function runRound(jobId: string): Promise<{ processed: number; remaining: 
         subjectId,
         subjectName: parsed.subject || null,
         knowledgePoints: JSON.stringify(parsed.knowledgePoints || []),
+        knowledgeDetail: parsed.knowledgeDetail || null,
         autoDeepRetry,
         answerConflict: parsed.answerConflict === true,
         originalAnswerText: parsed.originalAnswerText || null,

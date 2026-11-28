@@ -77,6 +77,8 @@ const ITEM_FIELDS = [
   "ocrText", "questionText", "answerText", "analysis", "wrongAnswerText",
   "mistakeAnalysis", "mistakeStatus", "geogebraCommands", "source", "errorType",
   "userNotes", "gradeSemester", "paperLevel", "subjectId",
+  // 必备知识点精讲：与解析同源的一段详细讲解，录入/重解时随题目一起落库
+  "knowledgeDetail",
 ];
 
 export function buildItem(body: any, userId: string): Record<string, any> {

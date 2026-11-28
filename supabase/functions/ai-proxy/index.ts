@@ -3,7 +3,7 @@
  * 百炼 API Key 只存在 EF secrets，浏览器永远拿不到。
  * 提示词、输出清洗与错因判定由本函数的 lib/ 模块独立实现。
  */
-import { generateAnalyzePrompt, generateSimilarQuestionPrompt, generateGeogebraPrompt, generateReanswerPrompt, generateVerifyPrompt } from "./lib/prompts.ts";
+import { generateAnalyzePrompt, generateSimilarQuestionPrompt, generateGeogebraPrompt, generateReanswerPrompt, generateVerifyPrompt, generateKnowledgeDetailPrompt } from "./lib/prompts.ts";
 import {
   sanitizeBodyText, extractTagSafe, parseMistakeFieldsFromResponse,
   withoutMistakeAnalysis, shouldStopGeneration,
@@ -80,6 +80,9 @@ function parseResponse(text: string, fallbackQuestionText?: string) {
   const knowledgePoints = pointsRaw
     ? pointsRaw.split(/[,，\n]/).map(k => k.trim()).filter(Boolean).slice(0, 5)
     : [];
+  // 必备知识点精讲：独立栏目，正文同样过一遍清洗，剥掉可能泄漏的标签/自我纠错
+  const detailRaw = extractTag(text, "knowledge_detail");
+  const knowledgeDetail = detailRaw ? sanitizeBodyText(detailRaw) : "";
   // 学科：模型自报值只作弱提示，用题干+解析+知识点全文证据校正（避免「其他」误归档）
   const subjectInfo = resolveSubject(subjectRaw || "", questionText, analysis, knowledgePoints);
   if (subjectInfo.changed) {
@@ -95,6 +98,7 @@ function parseResponse(text: string, fallbackQuestionText?: string) {
     mistakeStatus: mistake.mistakeStatus,
     subject: subjectInfo.subject,
     knowledgePoints,
+    knowledgeDetail,
     requiresImage: requiresImageRaw?.toLowerCase().trim() === "true",
     answerSource: derived.source,
     answerConflict: derived.conflict,
@@ -801,6 +805,25 @@ ${focusList}
       );
       const text = await chat({ systemPrompt: p, userText: "生成同类题", stream: false });
       return json(parseResponse(text));
+    }
+    // ---------------------------------------------------------------- 旧题补生成精讲
+    // 只产出 <knowledge_detail>，不重写题干/答案/解析；给定它们只为让讲解贴合本题。
+    if (action === "knowledge_detail") {
+      const kp = Array.isArray(payload.knowledgePoints)
+        ? payload.knowledgePoints.map((x: any) => String(x)).slice(0, 8)
+        : [];
+      const p = generateKnowledgeDetailPrompt(
+        String(payload.questionText || ""),
+        String(payload.answerText || ""),
+        String(payload.analysis || ""),
+        kp,
+        payload.gradeSemester ?? null,
+      );
+      const text = await chat({ systemPrompt: p, userText: "撰写必备知识点精讲", stream: false });
+      const raw = extractTagSafe(text, "knowledge_detail");
+      const knowledgeDetail = raw ? sanitizeBodyText(raw).trim() : "";
+      if (!knowledgeDetail) return json({ error: "AI_RESPONSE_ERROR" }, 502);
+      return json({ knowledgeDetail });
     }
     return json({ error: `Unknown action: ${action}` }, 400);
   } catch (e) {

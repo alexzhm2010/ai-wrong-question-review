@@ -382,7 +382,7 @@ const batchHandler: RouteHandler = async (ctx) => {
       if (!job) return apiError(404, "批次不存在");
       // 明确列字段：不返回 imageBase64
       const items = await restJson<any[]>(
-        `/BatchItem?select=id,jobId,idx,status,thumbBase64,questionText,answerText,analysis,subjectId,subjectName,gradeSemester,knowledgePoints,errorItemId,failureReason,attempts,autoDeepRetry,answerConflict,originalAnswerText,userGuidance,createdAt,updatedAt&jobId=eq.${encodeURIComponent(id)}&order=idx.asc`,
+        `/BatchItem?select=id,jobId,idx,status,thumbBase64,questionText,answerText,analysis,subjectId,subjectName,gradeSemester,knowledgePoints,knowledgeDetail,errorItemId,failureReason,attempts,autoDeepRetry,answerConflict,originalAnswerText,userGuidance,createdAt,updatedAt&jobId=eq.${encodeURIComponent(id)}&order=idx.asc`,
       ).catch(() => []);
       return json({ job, items: (items || []).map(publicItem) });
     }
@@ -443,7 +443,7 @@ const batchHandler: RouteHandler = async (ctx) => {
        */
       const rows = await restJson<any[]>(
         `/BatchItem?select=id,idx,status,questionText,answerText,analysis,subjectId,subjectName,`
-        + `gradeSemester,knowledgePoints,userGuidance,thumbBase64`
+        + `gradeSemester,knowledgePoints,knowledgeDetail,userGuidance,thumbBase64`
         + `&jobId=eq.${encodeURIComponent(jobId)}&id=in.(${quoted})`,
       ).catch(() => []);
       // 题干池：既用于同题干去重，也顺带取「最近一次保存的年级」。
@@ -510,6 +510,7 @@ const batchHandler: RouteHandler = async (ctx) => {
           analysis: item.analysis,
           subjectId: item.subjectId || null,
           knowledgePoints: points,
+          knowledgeDetail: item.knowledgeDetail ?? null,
           gradeSemester: finalGrade,
           source: "batch",
         }, user.id);

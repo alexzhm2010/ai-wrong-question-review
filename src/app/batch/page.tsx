@@ -70,6 +70,7 @@ interface BatchItem {
     subjectName?: string | null;
     gradeSemester?: string | null;
     knowledgePoints?: string[];
+    knowledgeDetail?: string | null;
     errorItemId?: string | null;
     failureReason?: string | null;
     autoDeepRetry?: boolean;
@@ -421,6 +422,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
                     subjectId: data.subjectId,
                     gradeSemester: data.gradeSemester,
                     knowledgePoints: data.knowledgePoints,
+                    knowledgeDetail: data.knowledgeDetail || null,
                     userGuidance: data.userGuidance || null,
                 },
             });
@@ -433,6 +435,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
                     analysis: data.analysis,
                     subjectId: data.subjectId,
                     gradeSemester: data.gradeSemester,
+                    knowledgeDetail: data.knowledgeDetail || null,
                 }).catch(() => {
                     /* 同步失败不阻断批次保存，错题详情里仍可再改 */
                 });
@@ -816,6 +819,7 @@ function BatchDetail({ jobId }: { jobId: string }) {
                                 analysis: editing.analysis || "",
                                 subject: (editing.subjectName || "其他") as ParsedQuestion["subject"],
                                 knowledgePoints: editing.knowledgePoints || [],
+                                knowledgeDetail: editing.knowledgeDetail || "",
                                 wrongAnswerText: "",
                                 mistakeAnalysis: "",
                                 mistakeStatus: "unknown",

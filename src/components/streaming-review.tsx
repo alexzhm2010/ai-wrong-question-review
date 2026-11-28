@@ -43,7 +43,7 @@ export function StreamingReview({ data, imagePreview }: StreamingReviewProps) {
     const { t, language } = useLanguage();
 
     // 当前正在生成的字段（按输出顺序判断最后一个已出现的）
-    const active: "question" | "answer" | "analysis" =
+    const active: "question" | "answer" | "analysis" | "detail" =
         data.analysis !== undefined
             ? "analysis"
             : data.answerText !== undefined
@@ -107,6 +107,15 @@ export function StreamingReview({ data, imagePreview }: StreamingReviewProps) {
                         </CardHeader>
                         <CardContent>
                             <StreamText text={data.analysis} caret={active === "analysis"} />
+                        </CardContent>
+                    </Card>
+
+                    <Card>
+                        <CardHeader className="py-3">
+                            <CardTitle className="text-base">必备知识点精讲</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <StreamText text={data.knowledgeDetail} caret={active === "analysis" && data.knowledgeDetail === undefined} />
                         </CardContent>
                     </Card>
 

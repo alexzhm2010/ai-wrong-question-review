@@ -43,6 +43,8 @@ interface ErrorItemDetail {
     questionText: string;
     answerText: string;
     analysis: string;
+    /** 必备知识点精讲：把解题所需知识讲透的详细讲解，旧题可为 null */
+    knowledgeDetail?: string | null;
     wrongAnswerText?: string | null;
     mistakeAnalysis?: string | null;
     mistakeStatus?: string | null;
@@ -356,6 +358,11 @@ export default function ErrorDetailPage() {
     const [isEditingAnalysis, setIsEditingAnalysis] = useState(false);
     const [analysisInput, setAnalysisInput] = useState("");
 
+    const [isEditingDetail, setIsEditingDetail] = useState(false);
+    const [detailInput, setDetailInput] = useState("");
+    /** 正在为旧题单独生成精讲 */
+    const [generatingDetail, setGeneratingDetail] = useState(false);
+
     const [isEditingMistake, setIsEditingMistake] = useState(false);
     const [wrongAnswerInput, setWrongAnswerInput] = useState("");
     const [mistakeAnalysisInput, setMistakeAnalysisInput] = useState("");
@@ -452,6 +459,69 @@ export default function ErrorDetailPage() {
     const cancelEditingAnalysis = () => {
         setIsEditingAnalysis(false);
         setAnalysisInput("");
+    };
+
+    // --- 必备知识点精讲 Handlers ---
+    const startEditingDetail = () => {
+        if (item) {
+            setDetailInput(item.knowledgeDetail || "");
+            setIsEditingDetail(true);
+        }
+    };
+
+    const saveDetailHandler = async () => {
+        try {
+            await apiClient.put(`/api/error-items/${item?.id}`, { knowledgeDetail: detailInput });
+            setIsEditingDetail(false);
+            if (item) setItem({ ...item, knowledgeDetail: detailInput });
+            toast.success(t.common?.messages?.saveSuccess || 'Saved successfully');
+        } catch (error) {
+            console.error(error);
+            toast.error(t.common?.messages?.saveFailed || 'Save failed');
+        }
+    };
+
+    const cancelEditingDetail = () => {
+        setIsEditingDetail(false);
+        setDetailInput("");
+    };
+
+    /** 旧题补生成：只让 AI 产出精讲，不动题干/答案/解析。 */
+    const generateDetail = async () => {
+        if (!item || generatingDetail) return;
+        setGeneratingDetail(true);
+        try {
+            const res = await apiClient.post<{ knowledgeDetail: string }>("/api/knowledge-detail", {
+                questionText: item.questionText,
+                answerText: item.answerText,
+                analysis: item.analysis,
+                knowledgePoints: (() => {
+                    try { return JSON.parse(item.knowledgePoints || "[]"); } catch { return []; }
+                })(),
+                subject: item.subject?.name || undefined,
+                gradeSemester: item.gradeSemester || undefined,
+            });
+            const detail = (res.knowledgeDetail || "").trim();
+            if (!detail) {
+                toast.error("AI 未返回精讲内容，请重试");
+                return;
+            }
+            await apiClient.put(`/api/error-items/${item.id}`, { knowledgeDetail: detail });
+            setItem({ ...item, knowledgeDetail: detail });
+            toast.success("已生成必备知识点精讲");
+        } catch (error: any) {
+            console.error(error);
+            const msg = error?.data?.message || "";
+            if (msg.includes("AI_QUOTA_BLOCKED")) {
+                toast.error("AI 服务已暂停：免费额度已到期且无可用付费余额，请前往设置处理");
+            } else if (msg.includes("AI_AUTH_ERROR") || msg.includes("AI_CONNECTION")) {
+                toast.error("AI 连接或认证失败，请检查设置");
+            } else {
+                toast.error("生成失败，请稍后重试");
+            }
+        } finally {
+            setGeneratingDetail(false);
+        }
     };
 
     // --- Mistake Analysis Handlers ---
@@ -740,6 +810,51 @@ export default function ErrorDetailPage() {
                     </Card>
                     )}
                 </div>
+
+                {/* 必备知识点精讲：把解答这道题所需的知识讲透，学生看完即可掌握 */}
+                <Card className="border-primary/20">
+                    <CardHeader>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                            <CardTitle className="text-primary">必备知识点精讲</CardTitle>
+                            <div className="flex items-center gap-1">
+                                {!isEditingDetail && item.knowledgeDetail && item.knowledgeDetail.trim() && (
+                                    <Button variant="ghost" size="sm" onClick={startEditingDetail}>
+                                        <Edit className="h-4 w-4 mr-1" />{t.common?.edit || "Edit"}
+                                    </Button>
+                                )}
+                                {!isEditingDetail && (
+                                    <Button variant="ghost" size="sm" onClick={generateDetail} disabled={generatingDetail}>
+                                        <RefreshCw className={`h-4 w-4 mr-1 ${generatingDetail ? "animate-spin" : ""}`} />
+                                        {generatingDetail ? "生成中…" : (item.knowledgeDetail?.trim() ? "AI 重新生成" : "AI 生成精讲")}
+                                    </Button>
+                                )}
+                            </div>
+                        </div>
+                    </CardHeader>
+                    <CardContent>
+                        {isEditingDetail ? (
+                            <div className="space-y-3">
+                                <Textarea
+                                    value={detailInput}
+                                    onChange={e => setDetailInput(e.target.value)}
+                                    placeholder="把解答这道题必备的概念、公式、方法与易错点讲清楚，让学生看完就能掌握。支持 Markdown / LaTeX"
+                                    rows={14}
+                                    className="w-full font-mono text-sm"
+                                />
+                                <div className="flex gap-2">
+                                    <Button size="sm" onClick={saveDetailHandler}><Save className="h-4 w-4 mr-1" />{t.common?.save || "Save"}</Button>
+                                    <Button size="sm" variant="outline" onClick={cancelEditingDetail}><X className="h-4 w-4 mr-1" />{t.common?.cancel || "Cancel"}</Button>
+                                </div>
+                            </div>
+                        ) : item.knowledgeDetail && item.knowledgeDetail.trim() ? (
+                            <MarkdownRenderer content={item.knowledgeDetail} />
+                        ) : (
+                            <p className="text-sm text-muted-foreground italic">
+                                这道题还没有精讲。点「AI 生成精讲」让 AI 讲透必备知识点，或手动补充。
+                            </p>
+                        )}
+                    </CardContent>
+                </Card>
 
                 <div className="space-y-6">
                     {item.geogebraCommands ? (

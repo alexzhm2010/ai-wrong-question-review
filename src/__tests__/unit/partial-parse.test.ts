@@ -35,6 +35,19 @@ describe('parsePartialXml', () => {
         expect(data.mistakeStatus).toBe('correct');
     });
 
+    it('必备知识点精讲完整标签可解析', () => {
+        const raw = '<knowledge_points>集合, 不等式</knowledge_points>\n<knowledge_detail>先看定义域：分母不为零。这是解题第一步的关键。</knowledge_detail>';
+        const data = parsePartialXml(raw);
+        expect(data.knowledgeDetail).toBe('先看定义域：分母不为零。这是解题第一步的关键。');
+        expect(hasPartialContent(data)).toBe(true);
+    });
+
+    it('未闭合的精讲在下一个开标签处截断', () => {
+        const data = parsePartialXml('<knowledge_detail>集合的含义尚未写完<requires_image>false</requires_image>');
+        expect(data.knowledgeDetail).toBe('集合的含义尚未写完');
+        expect(data.requiresImage).toBe(false);
+    });
+
     it('未闭合的 analysis 会一直取到末尾', () => {
         const raw = '<analysis>第一步：求解 M';
         const data = parsePartialXml(raw);

@@ -38,6 +38,9 @@ interface ParsedQuestionWithSubject extends ParsedQuestion {
     userGuidance?: string;
 }
 
+/** 可人工编辑的四个正文栏目 */
+type EditableField = "questionText" | "answerText" | "analysis" | "knowledgeDetail";
+
 interface CorrectionEditorProps {
     initialData: ParsedQuestion;
     onSave: (data: ParsedQuestionWithSubject) => Promise<void>;
@@ -91,12 +94,10 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
     const [mistakePreviewExpanded, setMistakePreviewExpanded] = useState(false);
 
     // —— 人工接管：题干 / 答案 / 解析可直接编辑，并保留上一版可撤销 ——
-    const [editingField, setEditingField] = useState<"questionText" | "answerText" | "analysis" | null>(null);
+    const [editingField, setEditingField] = useState<EditableField | null>(null);
     const [fieldDraft, setFieldDraft] = useState("");
-    const [manualFields, setManualFields] = useState<Set<"questionText" | "answerText" | "analysis">>(new Set());
-    const [undoSnapshot, setUndoSnapshot] = useState<
-        { questionText: string; answerText: string; analysis: string } | null
-    >(null);
+    const [manualFields, setManualFields] = useState<Set<EditableField>>(new Set());
+    const [undoSnapshot, setUndoSnapshot] = useState<Record<EditableField, string> | null>(null);
     // —— 给 AI 的纠错说明 / 锁定答案 ——
     const [guidance, setGuidance] = useState(initialGuidance || "");
     const [lockAnswer, setLockAnswer] = useState(false);
@@ -130,18 +131,23 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
         setData(prev => prev.subjectId ? prev : { ...prev, subjectId: initialSubjectId });
     }, [initialSubjectId]);
 
-    // 「人可以直接改」：题干 / 参考答案 / 解析都支持手动编辑，并保留上一版可撤销
-    type EditableField = "questionText" | "answerText" | "analysis";
-
+    // 「人可以直接改」：题干 / 参考答案 / 解析 / 必备知识点精讲都支持手动编辑，并可撤销
     const startEditing = (field: EditableField) => {
         setEditingField(field);
         setFieldDraft(String(data[field] || ""));
     };
 
+    const snapshotOf = (): Record<EditableField, string> => ({
+        questionText: data.questionText || "",
+        answerText: data.answerText || "",
+        analysis: data.analysis || "",
+        knowledgeDetail: data.knowledgeDetail || "",
+    });
+
     const commitEditing = () => {
         if (!editingField) return;
         const field = editingField;
-        setUndoSnapshot({ questionText: data.questionText, answerText: data.answerText, analysis: data.analysis });
+        setUndoSnapshot(snapshotOf());
         setData(prev => ({ ...prev, [field]: fieldDraft }));
         setManualFields(prev => new Set(prev).add(field));
         setEditingField(null);
@@ -162,9 +168,9 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
             toast.info(t.editor.enterQuestionFirst || 'Please enter question text first');
             return;
         }
-        // 重解会覆盖答案/解析；已经人工改过就先确认，避免一句话丢掉手工成果
-        const willOverwrite = manualFields.has("analysis") || (!lockAnswer && manualFields.has("answerText"));
-        if (willOverwrite && !window.confirm(t.editor.overwriteManualConfirm || "重新解题会覆盖你手动修改的答案/解析，继续吗？")) {
+        // 重解会覆盖答案/解析/精讲；已经人工改过就先确认，避免一句话丢掉手工成果
+        const willOverwrite = manualFields.has("analysis") || manualFields.has("knowledgeDetail") || (!lockAnswer && manualFields.has("answerText"));
+        if (willOverwrite && !window.confirm(t.editor.overwriteManualConfirm || "重新解题会覆盖你手动修改的答案/解析/精讲，继续吗？")) {
             return;
         }
 
@@ -193,7 +199,7 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
             const result = await apiClient.post<ReanswerQuestionResult>("/api/reanswer", requestBody, { timeout: aiTimeout || 180000 });
 
             // 覆盖前留一版快照，重解结果不满意时可一键退回
-            setUndoSnapshot({ questionText: data.questionText, answerText: data.answerText, analysis: data.analysis });
+            setUndoSnapshot(snapshotOf());
             setManualFields(new Set());
             setData(prev => {
                 const mistake = reconcileMistakeFields({
@@ -207,6 +213,7 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                     // 锁定答案时只接受解析，答案永远以用户当前值为准
                     answerText: lockAnswer ? prev.answerText : result.answerText,
                     analysis: result.analysis,
+                    knowledgeDetail: result.knowledgeDetail ?? prev.knowledgeDetail ?? "",
                     knowledgePoints: result.knowledgePoints,
                     wrongAnswerText: mistake.wrongAnswerText,
                     mistakeAnalysis: mistake.mistakeAnalysis,
@@ -717,6 +724,51 @@ export function CorrectionEditor({ initialData, onSave, onCancel, imagePreview, 
                                 </div>
                             ) : (
                                 <MarkdownRenderer content={data.analysis} />
+                            )}
+                        </CardContent>
+                    </Card>
+
+                    {/* 必备知识点精讲：独立栏目，把解题所需知识讲透，支持人工编辑/撤销 */}
+                    <Card className={manualFields.has("knowledgeDetail") ? "border-amber-300" : undefined}>
+                        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+                            <CardTitle className="flex items-center gap-2">
+                                <span className="text-base">必备知识点精讲</span>
+                                {manualFields.has("knowledgeDetail") && (
+                                    <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-normal text-amber-800">人工修正</span>
+                                )}
+                            </CardTitle>
+                            {editingField !== "knowledgeDetail" && (
+                                <Button variant="ghost" size="sm" onClick={() => startEditing("knowledgeDetail")}>
+                                    <Pencil className="mr-1 h-4 w-4" />
+                                    {t.common?.edit || "编辑"}
+                                </Button>
+                            )}
+                        </CardHeader>
+                        <CardContent>
+                            {editingField === "knowledgeDetail" ? (
+                                <div className="space-y-2">
+                                    <Textarea
+                                        value={fieldDraft}
+                                        onChange={(e) => setFieldDraft(e.target.value)}
+                                        rows={14}
+                                        className="font-mono text-sm"
+                                        placeholder="把解答这道题必备的概念、公式、方法与易错点讲清楚，让学生看完就能掌握。支持 Markdown / LaTeX"
+                                    />
+                                    <div className="flex gap-2">
+                                        <Button size="sm" onClick={commitEditing}>
+                                            <Check className="mr-1 h-4 w-4" />{t.editor?.applyEdit || "确定"}
+                                        </Button>
+                                        <Button size="sm" variant="outline" onClick={() => setEditingField(null)}>
+                                            {t.common?.cancel || "取消"}
+                                        </Button>
+                                    </div>
+                                </div>
+                            ) : data.knowledgeDetail && data.knowledgeDetail.trim() ? (
+                                <MarkdownRenderer content={data.knowledgeDetail} />
+                            ) : (
+                                <p className="text-sm text-muted-foreground italic">
+                                    {"暂无精讲，可点右上角手动补充，或点「重新解题」让 AI 生成。"}
+                                </p>
                             )}
                         </CardContent>
                     </Card>

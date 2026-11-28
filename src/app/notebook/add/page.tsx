@@ -368,6 +368,7 @@ export default function AddErrorPage() {
                 answerText: string;
                 analysis: string;
                 knowledgePoints: string[];
+                knowledgeDetail?: string;
                 wrongAnswerText: string;
                 mistakeAnalysis: string;
                 mistakeStatus: string;
@@ -385,6 +386,7 @@ export default function AddErrorPage() {
                 answerText: result.answerText,
                 analysis: result.analysis,
                 knowledgePoints: result.knowledgePoints || [],
+                knowledgeDetail: result.knowledgeDetail || "",
                 wrongAnswerText: result.wrongAnswerText || "",
                 mistakeAnalysis: result.mistakeAnalysis || "",
                 mistakeStatus: (result.mistakeStatus as any) || "unknown",

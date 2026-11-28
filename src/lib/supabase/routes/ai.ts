@@ -10,6 +10,7 @@ const EDGE_ACTIONS: Record<string, string> = {
   "/api/geogebra_analyze": "geogebra_analyze",
   "/api/ai/test": "test",
   "/api/grade-page": "grade_page",
+  "/api/knowledge-detail": "knowledge_detail",
 };
 
 async function readRawConfig(): Promise<Record<string, any>> {
